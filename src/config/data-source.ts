@@ -37,7 +37,7 @@ const entityList = isProduction
 const baseOptions: DataSourceOptions = {
   type: "postgres",
   entities: entityList,
-  synchronize: !isProduction,
+  synchronize: true,//!isProduction,
   logging: !isProduction,
   ssl: isProduction ? { rejectUnauthorized: false } : false,
   migrations: [],
