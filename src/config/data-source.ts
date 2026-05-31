@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { DataSource, DataSourceOptions } from "typeorm"; // Changed to DataSourceOptions
+import { DataSource, DataSourceOptions } from "typeorm";
 import { User } from "../entities/User";
 import { Announcement } from "../entities/Announcement";
 import { Task } from "../entities/Task";
@@ -17,20 +17,26 @@ dotenv.config();
 const isProduction = process.env.NODE_ENV === "production";
 
 // 1. Define base configurations common to both local and production environments
+// Entities: use class references while running TS (dev). When running compiled
+// JS (production), use glob patterns to load `.js` entity files from `dist`.
+const entityList = isProduction
+  ? [__dirname + "/../entities/*.js"]
+  : [
+      User,
+      Announcement,
+      Task,
+      LeaveRequest,
+      Project,
+      ProjectFile,
+      ProjectHeading,
+      SubTask,
+      TaskComment,
+      MyTask,
+    ];
+
 const baseOptions: DataSourceOptions = {
   type: "postgres",
-  entities: [
-    User,
-    Announcement,
-    Task,
-    LeaveRequest,
-    Project,
-    ProjectFile,
-    ProjectHeading,
-    SubTask,
-    TaskComment,
-    MyTask,
-  ],
+  entities: entityList,
   synchronize: !isProduction,
   logging: !isProduction,
   ssl: isProduction ? { rejectUnauthorized: false } : false,
@@ -41,10 +47,11 @@ const baseOptions: DataSourceOptions = {
 // 2. Build the exact options block dynamically to appease exactOptionalPropertyTypes
 const getConfiguration = (): DataSourceOptions => {
   if (process.env.DATABASE_URL) {
+    // non-null assertion is safe because of the if-check above
     return {
       ...baseOptions,
-      url: process.env.DATABASE_URL,
-    };
+      url: process.env.DATABASE_URL!,
+    } as DataSourceOptions;
   }
 
   return {
