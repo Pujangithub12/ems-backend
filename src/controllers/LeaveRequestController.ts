@@ -1,0 +1,138 @@
+import { Request, Response } from "express";
+import { AppDataSource } from "../config/data-source";
+import { LeaveRequest } from "../entities/LeaveRequest";
+import { User, UserRole } from "../entities/User";
+import { AuthRequest } from "../middlewares/auth";
+
+export class LeaveRequestController {
+  static createLeaveRequest = async (req: AuthRequest, res: Response) => {
+    const { startDate, endDate, reason } = req.body;
+
+    if (!startDate || !endDate || !reason) {
+      return res
+        .status(400)
+        .json({ message: "startDate, endDate and reason are required" });
+    }
+
+    try {
+      const userId = req.user?.id;
+      const userRepository = AppDataSource.getRepository(User);
+      const lrRepository = AppDataSource.getRepository(LeaveRequest);
+
+      const user = await userRepository.findOne({
+        where: { id: userId as number },
+      });
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const newRequest = lrRepository.create({
+        user,
+        startDate: new Date(startDate),
+        endDate: new Date(endDate),
+        reason,
+      });
+
+      await lrRepository.save(newRequest);
+
+      return res
+        .status(201)
+        .json({ message: "Leave request created", leaveRequest: newRequest });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static getAllLeaveRequests = async (req: AuthRequest, res: Response) => {
+    try {
+      const lrRepository = AppDataSource.getRepository(LeaveRequest);
+
+      if (req.user?.role === UserRole.ADMIN) {
+        const all = await lrRepository.find({ order: { createdAt: "DESC" } });
+        return res.status(200).json(all);
+      }
+
+      const mine = await lrRepository.find({
+        where: { user: { id: req.user?.id } },
+        order: { createdAt: "DESC" },
+      } as any);
+
+      return res.status(200).json(mine);
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static getLeaveRequestById = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    try {
+      const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const lr = await lrRepository.findOne({
+        where: { id: parseInt(id as string) },
+      });
+
+      if (!lr)
+        return res.status(404).json({ message: "Leave request not found" });
+
+      if (req.user?.role !== UserRole.ADMIN && lr.user.id !== req.user?.id) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      return res.status(200).json(lr);
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static updateLeaveRequest = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const { startDate, endDate, reason } = req.body;
+
+    try {
+      const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const lr = await lrRepository.findOne({
+        where: { id: parseInt(id as string) },
+      });
+
+      if (!lr)
+        return res.status(404).json({ message: "Leave request not found" });
+
+      if (req.user?.role !== UserRole.ADMIN && lr.user.id !== req.user?.id) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      if (startDate) lr.startDate = new Date(startDate);
+      if (endDate) lr.endDate = new Date(endDate);
+      if (reason) lr.reason = reason;
+
+      await lrRepository.save(lr);
+
+      return res
+        .status(200)
+        .json({ message: "Leave request updated", leaveRequest: lr });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static deleteLeaveRequest = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    try {
+      if (req.user?.role !== UserRole.ADMIN) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const lr = await lrRepository.findOne({
+        where: { id: parseInt(id as string) },
+      });
+
+      if (!lr)
+        return res.status(404).json({ message: "Leave request not found" });
+
+      await lrRepository.remove(lr);
+
+      return res.status(200).json({ message: "Leave request deleted" });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+}
