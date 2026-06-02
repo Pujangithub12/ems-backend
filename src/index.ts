@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { AppDataSource } from "./config/data-source";
 import routes from "./routes";
@@ -17,6 +18,7 @@ app.use(
     credentials: true,
   }),
 );
+app.use(cookieParser());
 app.use(express.json());
 
 app.use("/api", routes);

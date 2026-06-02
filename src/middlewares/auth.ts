@@ -19,15 +19,14 @@ export const authMiddleware = (
   next: NextFunction,
 ) => {
   const authHeader = req.headers.authorization;
+  let token = req.cookies?.token;
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "No token provided" });
+  if (!token && authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.split(" ")[1];
   }
 
-  const token = authHeader.split(" ")[1];
-
   if (!token) {
-    return res.status(401).json({ message: "Invalid token format" });
+    return res.status(401).json({ message: "No token provided" });
   }
 
   try {

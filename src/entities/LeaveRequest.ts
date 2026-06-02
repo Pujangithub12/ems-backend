@@ -15,6 +15,9 @@ export class LeaveRequest {
   @ManyToOne(() => User, { eager: true })
   user!: User;
 
+  @Column({ default: "Leave Request" })
+  title!: string;
+
   @Column()
   startDate!: Date;
 
@@ -23,6 +26,13 @@ export class LeaveRequest {
 
   @Column("text")
   reason!: string;
+
+  @Column({
+    type: "enum",
+    enum: ["pending", "approved", "rejected"],
+    default: "pending",
+  })
+  status!: string;
 
   @CreateDateColumn()
   createdAt!: Date;

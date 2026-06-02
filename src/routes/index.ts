@@ -13,6 +13,8 @@ const router = Router();
 
 // Auth routes
 router.post("/login", AuthController.login);
+router.post("/logout", AuthController.logout);
+router.get("/me", authMiddleware, AuthController.getMe);
 
 // User routes - Admin only for adding and deleting users
 router.post(
@@ -207,6 +209,13 @@ router.get(
   "/leaverequest/:id",
   authMiddleware,
   LeaveRequestController.getLeaveRequestById,
+);
+
+router.put(
+  "/leaverequest/:id/status",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN]),
+  LeaveRequestController.updateStatus,
 );
 
 router.put(
