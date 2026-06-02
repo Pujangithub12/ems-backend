@@ -1,15 +1,26 @@
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
+import dns from "dns";
 
 dotenv.config();
 
-const transporter = nodemailer.createTransport({
-  service: "gmail", // Use service: 'gmail' for better compatibility
+// 1. Define the SMTP options explicitly to satisfy TypeScript
+const smtpOptions = {
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true, // true for 465, false for other ports
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS?.replace(/\s/g, ""), // Remove spaces from app password
+    pass: process.env.EMAIL_PASS?.replace(/\s+/g, ""),
   },
-});
+  // 2. Use 'as any' here to bypass the strict type check for dnsLookup
+  dnsLookup: ((hostname: string, options: any, callback: any) => {
+    dns.lookup(hostname, { family: 4 }, callback);
+  }) as any,
+};
+
+// 3. Create the transporter using the defined options
+const transporter = nodemailer.createTransport(smtpOptions);
 
 // Verify connection configuration
 transporter.verify((error, success) => {
@@ -30,7 +41,7 @@ export const sendEmail = async (
 
   try {
     const info = await transporter.sendMail({
-      from: `"EMS Management" <${process.env.EMAIL_FROM}>`,
+      from: `"EMS Management" <${process.env.EMAIL_USER}>`, // Ensure FROM matches USER
       to: to.join(", "),
       subject,
       text,
