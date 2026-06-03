@@ -19,12 +19,22 @@ export class AnnouncementController {
             let recipientEmails: string[] = [];
 
             if (targetType === "all") {
-                const users = await userRepository.find({ select: ["email"] });
-                recipientEmails = users.map(u => u.email);
-            } else if (targetType === "specific" && Array.isArray(targetEmails)) {
-                recipientEmails = targetEmails;
+              const users = await userRepository.find({ select: ["email"] });
+              // Filter out users who don't have an email address
+              recipientEmails = users
+                .map((u) => u.email)
+                .filter((email) => email);
+            } else if (
+              targetType === "specific" &&
+              Array.isArray(targetEmails)
+            ) {
+              recipientEmails = targetEmails;
             } else {
-                return res.status(400).json({ message: "Invalid targetType or missing targetEmails" });
+              return res
+                .status(400)
+                .json({
+                  message: "Invalid targetType or missing targetEmails",
+                });
             }
 
             if (recipientEmails.length === 0) {

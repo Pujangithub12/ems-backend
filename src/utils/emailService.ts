@@ -6,7 +6,7 @@ dotenv.config();
 
 // 1. Define the SMTP options explicitly to satisfy TypeScript
 const smtpOptions = {
-  host: "smtp.gmail.com",
+  host: process.env.EMAIL_HOST,
   port: 465,
   secure: true, // true for 465, false for other ports
   auth: {
@@ -36,13 +36,22 @@ export const sendEmail = async (
   subject: string,
   text: string,
 ) => {
-  console.log(`Attempting to send email to: ${to.join(", ")}`);
+  // FIX: Define validEmails by filtering out empty/null/undefined values
+  const validEmails = to.filter((email) => email && email.trim() !== "");
+
+  if (validEmails.length === 0) {
+    console.log("No valid email addresses provided. Skipping email send.");
+    return false;
+  }
+
+  console.log(`Attempting to send email to ${validEmails.length} recipients.`);
   console.log(`Using EMAIL_USER: ${process.env.EMAIL_USER}`);
 
   try {
     const info = await transporter.sendMail({
-      from: `"EMS Management" <${process.env.EMAIL_USER}>`, // Ensure FROM matches USER
-      to: to.join(", "),
+      from: `"EMS Management" <${process.env.EMAIL_FROM}>`,
+      to: process.env.EMAIL_USER, // Send a copy to yourself so you can verify it sent
+      bcc: validEmails.join(", "), // Hide the actual recipients for privacy
       subject,
       text,
     });
