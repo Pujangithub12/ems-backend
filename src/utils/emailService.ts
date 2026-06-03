@@ -1,49 +1,15 @@
-import nodemailer from "nodemailer";
-import dns from "dns";
+import { Resend } from "resend";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-// Force IPv4 lookup to avoid ENETUNREACH/Timeout issues on Render
-const ipv4DnsLookup = (hostname: string, options: any, callback: any) => {
-  // Explicitly request only IPv4 addresses
-  dns.lookup(hostname, { family: 4 }, (err, address) => {
-    if (err) return callback(err);
-    callback(null, address, 4);
-  });
-};
-
-// Use Port 465 with secure: true for a direct SSL connection
-const smtpOptions: any = {
-  host: process.env.EMAIL_HOST,
-  port: 465,
-  secure: true, // true for 465
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS?.replace(/\s+/g, ""),
-  },
-  // Apply the IPv4 lookup fix
-  dnsLookup: ipv4DnsLookup,
-  // Add a timeout to fail faster if it's still blocked
-  connectionTimeout: 10000,
-};
-
-const transporter = nodemailer.createTransport(smtpOptions);
-
-// Verify connection configuration
-transporter.verify((error, success) => {
-  if (error) {
-    console.error("SMTP Connection Error:", error);
-  } else {
-    console.log("SMTP Server is ready to take our messages");
-  }
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 export const sendEmail = async (
   to: string[],
   subject: string,
   text: string,
-) => {
+): Promise<boolean> => {
   const validEmails = to.filter((email) => email && email.trim() !== "");
 
   if (validEmails.length === 0) {
@@ -52,18 +18,35 @@ export const sendEmail = async (
   }
 
   console.log(`Attempting to send email to ${validEmails.length} recipients.`);
-  console.log(`Using EMAIL_USER: ${process.env.EMAIL_USER}`);
+
+  // Resend allows max 100 recipients per email (to + cc + bcc combined)
+  const BATCH_SIZE = 100;
+  let successCount = 0;
 
   try {
-    const info = await transporter.sendMail({
-      from: `"EMS Management" <${process.env.EMAIL_FROM}>`,
-      to: process.env.EMAIL_USER,
-      bcc: validEmails.join(", "),
-      subject,
-      text,
-    });
-    console.log("Email sent successfully! Message ID: %s", info.messageId);
-    return true;
+    for (let i = 0; i < validEmails.length; i += BATCH_SIZE) {
+      const batch = validEmails.slice(i, i + BATCH_SIZE);
+
+      const { data, error } = await resend.emails.send({
+        from: `EMS Management <${process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev"}>`,
+        to: [process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev"], // Required by Resend
+        bcc: batch,
+        subject,
+        text,
+      });
+
+      if (error) {
+        console.error(`Resend batch error (${i}-${i + batch.length}):`, error);
+      } else {
+        console.log(`Batch sent successfully! Email ID: ${data?.id}`);
+        successCount += batch.length;
+      }
+    }
+
+    console.log(
+      `Email sent to ${successCount}/${validEmails.length} recipients.`,
+    );
+    return successCount > 0;
   } catch (error) {
     console.error("Detailed Email Error:", error);
     return false;
