@@ -4,24 +4,28 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Force IPv4 lookup to avoid ENETUNREACH errors on Render/Vercel
+// Force IPv4 lookup to avoid ENETUNREACH/Timeout issues on Render
 const ipv4DnsLookup = (hostname: string, options: any, callback: any) => {
+  // Explicitly request only IPv4 addresses
   dns.lookup(hostname, { family: 4 }, (err, address) => {
     if (err) return callback(err);
     callback(null, address, 4);
   });
 };
 
-// Use 'as any' to bypass strict TypeScript checks for SMTP options
+// Use Port 465 with secure: true for a direct SSL connection
 const smtpOptions: any = {
   host: process.env.EMAIL_HOST,
-  port: 587,
-  secure: false, // false for 587 (STARTTLS)
+  port: 465,
+  secure: true, // true for 465
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS?.replace(/\s+/g, ""),
   },
+  // Apply the IPv4 lookup fix
   dnsLookup: ipv4DnsLookup,
+  // Add a timeout to fail faster if it's still blocked
+  connectionTimeout: 10000,
 };
 
 const transporter = nodemailer.createTransport(smtpOptions);
@@ -40,7 +44,6 @@ export const sendEmail = async (
   subject: string,
   text: string,
 ) => {
-  // Filter out empty/null emails
   const validEmails = to.filter((email) => email && email.trim() !== "");
 
   if (validEmails.length === 0) {
@@ -54,8 +57,8 @@ export const sendEmail = async (
   try {
     const info = await transporter.sendMail({
       from: `"EMS Management" <${process.env.EMAIL_FROM}>`,
-      to: process.env.EMAIL_USER, // Send a copy to yourself
-      bcc: validEmails.join(", "), // Hide actual recipients
+      to: process.env.EMAIL_USER,
+      bcc: validEmails.join(", "),
       subject,
       text,
     });
