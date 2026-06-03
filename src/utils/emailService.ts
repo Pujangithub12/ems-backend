@@ -1,25 +1,29 @@
 import nodemailer from "nodemailer";
-import dotenv from "dotenv";
 import dns from "dns";
+import dotenv from "dotenv";
 
 dotenv.config();
 
-// 1. Define the SMTP options explicitly to satisfy TypeScript
-const smtpOptions = {
+// Force IPv4 lookup to avoid ENETUNREACH errors on Render/Vercel
+const ipv4DnsLookup = (hostname: string, options: any, callback: any) => {
+  dns.lookup(hostname, { family: 4 }, (err, address) => {
+    if (err) return callback(err);
+    callback(null, address, 4);
+  });
+};
+
+// Use 'as any' to bypass strict TypeScript checks for SMTP options
+const smtpOptions: any = {
   host: process.env.EMAIL_HOST,
-  port: 465,
-  secure: true, // true for 465, false for other ports
+  port: 587,
+  secure: false, // false for 587 (STARTTLS)
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS?.replace(/\s+/g, ""),
   },
-  // 2. Use 'as any' here to bypass the strict type check for dnsLookup
-  dnsLookup: ((hostname: string, options: any, callback: any) => {
-    dns.lookup(hostname, { family: 4 }, callback);
-  }) as any,
+  dnsLookup: ipv4DnsLookup,
 };
 
-// 3. Create the transporter using the defined options
 const transporter = nodemailer.createTransport(smtpOptions);
 
 // Verify connection configuration
@@ -36,7 +40,7 @@ export const sendEmail = async (
   subject: string,
   text: string,
 ) => {
-  // FIX: Define validEmails by filtering out empty/null/undefined values
+  // Filter out empty/null emails
   const validEmails = to.filter((email) => email && email.trim() !== "");
 
   if (validEmails.length === 0) {
@@ -50,8 +54,8 @@ export const sendEmail = async (
   try {
     const info = await transporter.sendMail({
       from: `"EMS Management" <${process.env.EMAIL_FROM}>`,
-      to: process.env.EMAIL_USER, // Send a copy to yourself so you can verify it sent
-      bcc: validEmails.join(", "), // Hide the actual recipients for privacy
+      to: process.env.EMAIL_USER, // Send a copy to yourself
+      bcc: validEmails.join(", "), // Hide actual recipients
       subject,
       text,
     });
