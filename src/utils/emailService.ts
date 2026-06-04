@@ -19,28 +19,50 @@ export const sendEmail = async (
 
   console.log(`Attempting to send email to ${validEmails.length} recipients.`);
 
-  // Resend allows max 100 recipients per email (to + cc + bcc combined)
-  const BATCH_SIZE = 100;
+  const BATCH_SIZE = 50; // Reduced to avoid spam triggers
   let successCount = 0;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <h2 style="color: #333;">${subject}</h2>
+      <div style="color: #555; line-height: 1.6; white-space: pre-wrap;">${text}</div>
+      <hr style="margin-top: 30px; border: none; border-top: 1px solid #eee;" />
+      <p style="color: #999; font-size: 12px;">
+        This email was sent by EMS Management. If you have questions, please contact your administrator.
+      </p>
+    </div>
+  `;
 
   try {
     for (let i = 0; i < validEmails.length; i += BATCH_SIZE) {
       const batch = validEmails.slice(i, i + BATCH_SIZE);
 
-      const { data, error } = await resend.emails.send({
-        from: `EMS Management <${process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev"}>`,
-        to: [process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev"], // Required by Resend
-        bcc: batch,
-        subject,
-        text,
-      });
+      // Send individually so each recipient sees their own email in the "to" field
+      const sends = batch.map((email) =>
+        resend.emails.send({
+          from: `EMS Management <${process.env.RESEND_FROM_EMAIL}>`,
+          to: [email],
+          subject,
+          text,
+          html,
+          headers: {
+            "X-Entity-Ref-ID": `ems-announcement-${Date.now()}`,
+          },
+        }),
+      );
 
-      if (error) {
-        console.error(`Resend batch error (${i}-${i + batch.length}):`, error);
-      } else {
-        console.log(`Batch sent successfully! Email ID: ${data?.id}`);
-        successCount += batch.length;
-      }
+      const results = await Promise.allSettled(sends);
+
+      results.forEach((result, idx) => {
+        if (result.status === "fulfilled" && !result.value.error) {
+          successCount++;
+        } else {
+          console.error(
+            `Failed to send to ${batch[idx]}:`,
+            result.status === "rejected" ? result.reason : result.value.error,
+          );
+        }
+      });
     }
 
     console.log(
