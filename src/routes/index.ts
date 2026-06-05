@@ -6,7 +6,9 @@ import { ProjectController } from "../controllers/ProjectController";
 import { TaskController } from "../controllers/TaskController";
 import { MyTaskController } from "../controllers/MyTaskController";
 import { LeaveRequestController } from "../controllers/LeaveRequestController";
+import { CalendarEventController } from "../controllers/CalendarEventController";
 import { authMiddleware, roleMiddleware } from "../middlewares/auth";
+import { upload } from "../middlewares/upload";
 import { UserRole } from "../entities/User";
 
 const router = Router();
@@ -137,6 +139,7 @@ router.post(
   "/tasks",
   authMiddleware,
   roleMiddleware([UserRole.ADMIN]),
+  upload.array("files"),
   TaskController.createTask,
 );
 router.get("/tasks", authMiddleware, TaskController.getAllTasks);
@@ -146,6 +149,7 @@ router.put(
   "/tasks/:id",
   authMiddleware,
   roleMiddleware([UserRole.ADMIN]),
+  upload.array("files"),
   TaskController.updateTask,
 );
 router.put(
@@ -229,6 +233,21 @@ router.delete(
   authMiddleware,
   roleMiddleware([UserRole.ADMIN]),
   LeaveRequestController.deleteLeaveRequest,
+);
+
+// Calendar Event routes
+router.get("/events", authMiddleware, CalendarEventController.getAllEvents);
+router.post(
+  "/events",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN]),
+  CalendarEventController.createEvent,
+);
+router.delete(
+  "/events/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN]),
+  CalendarEventController.deleteEvent,
 );
 
 // Date conversion is now handled on the frontend; server routes removed.

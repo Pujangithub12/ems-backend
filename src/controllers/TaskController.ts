@@ -22,6 +22,8 @@ export class TaskController {
       projectId,
     } = req.body;
 
+    const files = req.files as Express.Multer.File[];
+
     if (!companyName || !title || !description || !priority || !dueDate) {
       return res
         .status(400)
@@ -36,10 +38,23 @@ export class TaskController {
       let assignedUsers: User[] = [];
       let project: Project | null = null;
 
-      if (assignAll) {
+      // Parse userIds if it comes as a string or array of strings (from FormData)
+      let parsedUserIds: number[] = [];
+      if (userIds) {
+        if (Array.isArray(userIds)) {
+          parsedUserIds = userIds.map((id) => parseInt(id.toString()));
+        } else if (typeof userIds === "string") {
+          parsedUserIds = userIds
+            .split(",")
+            .map((id) => parseInt(id.trim()))
+            .filter((id) => !isNaN(id));
+        }
+      }
+
+      if (assignAll === "true" || assignAll === true) {
         assignedUsers = await userRepository.find();
-      } else if (userIds && Array.isArray(userIds) && userIds.length > 0) {
-        assignedUsers = await userRepository.findBy({ id: In(userIds) });
+      } else if (parsedUserIds.length > 0) {
+        assignedUsers = await userRepository.findBy({ id: In(parsedUserIds) });
       }
 
       if (projectId) {
@@ -51,6 +66,8 @@ export class TaskController {
         }
       }
 
+      const filePaths = files ? files.map((file) => file.path) : [];
+
       const taskPayload: Partial<Task> = {
         companyName,
         title,
@@ -59,6 +76,7 @@ export class TaskController {
         status: TaskStatus.PENDING,
         dueDate: new Date(dueDate),
         assignedUsers,
+        files: filePaths,
       };
 
       if (project) {
@@ -152,6 +170,8 @@ export class TaskController {
       projectId,
     } = req.body;
 
+    const files = req.files as Express.Multer.File[];
+
     try {
       const taskRepository = AppDataSource.getRepository(Task);
       const userRepository = AppDataSource.getRepository(User);
@@ -184,10 +204,28 @@ export class TaskController {
         task.project = project;
       }
 
-      if (assignAll) {
+      // Parse userIds if it comes as a string or array of strings (from FormData)
+      let parsedUserIds: number[] = [];
+      if (userIds) {
+        if (Array.isArray(userIds)) {
+          parsedUserIds = userIds.map((id) => parseInt(id.toString()));
+        } else if (typeof userIds === "string") {
+          parsedUserIds = userIds
+            .split(",")
+            .map((id) => parseInt(id.trim()))
+            .filter((id) => !isNaN(id));
+        }
+      }
+
+      if (assignAll === "true" || assignAll === true) {
         task.assignedUsers = await userRepository.find();
-      } else if (userIds && Array.isArray(userIds)) {
-        task.assignedUsers = await userRepository.findBy({ id: In(userIds) });
+      } else if (parsedUserIds.length > 0) {
+        task.assignedUsers = await userRepository.findBy({ id: In(parsedUserIds) });
+      }
+
+      if (files && files.length > 0) {
+        const newFilePaths = files.map((file) => file.path);
+        task.files = [...(task.files || []), ...newFilePaths];
       }
 
       await taskRepository.save(task);

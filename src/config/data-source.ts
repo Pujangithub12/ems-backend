@@ -10,6 +10,7 @@ import { ProjectHeading } from "../entities/ProjectHeading";
 import { SubTask } from "../entities/SubTask";
 import { TaskComment } from "../entities/TaskComment";
 import { MyTask } from "../entities/MyTask";
+import { CalendarEvent } from "../entities/CalendarEvent";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -34,12 +35,13 @@ const entityList = isProduction
       SubTask,
       TaskComment,
       MyTask,
+      CalendarEvent,
     ];
 
 const baseOptions: DataSourceOptions = {
   type: "postgres",
   entities: entityList,
-  synchronize: true,//!isProduction,
+  synchronize: true, //!isProduction,
   logging: !isProduction,
   ssl: isProduction ? { rejectUnauthorized: false } : false,
   migrations: [],

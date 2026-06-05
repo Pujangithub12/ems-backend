@@ -71,6 +71,9 @@ export class Task {
   })
   comments!: TaskComment[];
 
+  @Column("simple-array", { nullable: true })
+  files!: string[];
+
   @CreateDateColumn()
   createdAt!: Date;
 }
