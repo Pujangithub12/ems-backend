@@ -17,6 +17,9 @@ const router = Router();
 router.post("/login", AuthController.login);
 router.post("/logout", AuthController.logout);
 router.get("/me", authMiddleware, AuthController.getMe);
+router.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+});
 
 // User routes - Admin only for adding and deleting users
 router.post(
