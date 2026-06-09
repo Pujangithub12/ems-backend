@@ -49,7 +49,6 @@ router.post(
 router.get(
   "/announcements",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
   AnnouncementController.getHistory,
 );
 router.delete(
