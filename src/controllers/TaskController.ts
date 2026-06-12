@@ -11,6 +11,36 @@ import { AuthRequest } from "../middlewares/auth";
 import { ActivityController } from "./ActivityController";
 import { ActivityType } from "../entities/Activity";
 
+// Helper to build subtask tree from flat list (Bypasses TypeORM relation depth limits)
+const buildSubTaskTree = (subTasks: any[]): any[] => {
+  const map = new Map<string, any>();
+  const roots: any[] = [];
+
+  subTasks.forEach((st) => {
+    map.set(String(st.id), { ...st, children: [] });
+  });
+
+  subTasks.forEach((st) => {
+    const node = map.get(String(st.id));
+    let parentId = null;
+
+    if (st.parentId !== undefined && st.parentId !== null) {
+      parentId = String(st.parentId);
+    } else if (st.parent) {
+      const pId = typeof st.parent === "object" ? st.parent.id : st.parent;
+      if (pId !== null && pId !== undefined) parentId = String(pId);
+    }
+
+    if (parentId && map.has(parentId)) {
+      map.get(parentId).children.push(node);
+    } else if (!parentId) {
+      roots.push(node);
+    }
+  });
+
+  return roots;
+};
+
 // Helper to recursively save subtasks with optional parent
 const saveSubTasks = async (
   parsedSubTasks: any[],
@@ -95,9 +125,8 @@ export class TaskController {
         project = await projectRepository.findOneBy({
           id: parseInt(projectId as string),
         });
-        if (!project) {
+        if (!project)
           return res.status(404).json({ message: "Project not found" });
-        }
       }
 
       const filePaths = files ? files.map((file) => file.path) : [];
@@ -115,9 +144,7 @@ export class TaskController {
         projectName: projectName || null,
       };
 
-      if (project) {
-        taskPayload.project = project;
-      }
+      if (project) taskPayload.project = project;
 
       const newTask = taskRepository.create(taskPayload);
       await taskRepository.save(newTask);
@@ -131,15 +158,21 @@ export class TaskController {
         }
       }
 
+      // Fetch all subtasks to return the complete tree with real DB IDs
+      const allSubTasks = await subTaskRepository.find({
+        where: { task: { id: newTask.id } },
+        relations: ["parent"],
+      });
+      newTask.subTasks = buildSubTaskTree(allSubTasks);
+
       // Log activity for task creation
       await ActivityController.logActivity(
         ActivityType.TASK_CREATED,
-        `Created task "${newTask.title}`,
+        `Created task "${newTask.title}"`,
         newTask.id,
         req.user?.id,
       );
 
-      // Log activity if users were assigned
       if (assignedUsers.length > 0) {
         const assignedNames = assignedUsers.map((u) => u.fullName).join(", ");
         await ActivityController.logActivity(
@@ -150,10 +183,12 @@ export class TaskController {
         );
       }
 
-      return res.status(201).json({
-        message: "Task created and assigned successfully",
-        task: newTask,
-      });
+      return res
+        .status(201)
+        .json({
+          message: "Task created and assigned successfully",
+          task: newTask,
+        });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -162,16 +197,12 @@ export class TaskController {
   static getAllTasks = async (req: AuthRequest, res: Response) => {
     try {
       const taskRepository = AppDataSource.getRepository(Task);
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
       let tasks;
+
       if (req.user?.role === "admin") {
         tasks = await taskRepository.find({
-          relations: [
-            "assignedUsers",
-            "project",
-            "subTasks",
-            "subTasks.children",
-            "comments",
-          ],
+          relations: ["assignedUsers", "project", "comments"],
           order: { createdAt: "DESC" },
         });
       } else {
@@ -179,13 +210,31 @@ export class TaskController {
           .createQueryBuilder("task")
           .leftJoinAndSelect("task.assignedUsers", "user")
           .leftJoinAndSelect("task.project", "project")
-          .leftJoinAndSelect("task.subTasks", "subTask")
-          .leftJoinAndSelect("subTask.children", "subTaskChildren")
           .leftJoinAndSelect("task.comments", "comment")
           .where("user.id = :userId", { userId: req.user?.id })
           .orderBy("task.createdAt", "DESC")
           .getMany();
       }
+
+      if (tasks.length > 0) {
+        const taskIds = tasks.map((t) => t.id);
+        const allSubTasks = await subTaskRepository.find({
+          where: { task: { id: In(taskIds) } },
+          relations: ["parent"],
+        });
+
+        const subTasksByTask = new Map<number, any[]>();
+        allSubTasks.forEach((st) => {
+          const taskId = typeof st.task === "object" ? st.task.id : st.task;
+          if (!subTasksByTask.has(taskId)) subTasksByTask.set(taskId, []);
+          subTasksByTask.get(taskId)!.push(st);
+        });
+
+        tasks.forEach((task) => {
+          task.subTasks = buildSubTaskTree(subTasksByTask.get(task.id) || []);
+        });
+      }
+
       return res.status(200).json(tasks);
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -196,30 +245,27 @@ export class TaskController {
     const { id } = req.params;
     try {
       const taskRepository = AppDataSource.getRepository(Task);
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
       const task = await taskRepository.findOne({
         where: { id: parseInt(id as string) },
-        relations: [
-          "assignedUsers",
-          "project",
-          "subTasks",
-          "subTasks.children",
-          "comments",
-          "comments.author",
-        ],
+        relations: ["assignedUsers", "project", "comments", "comments.author"],
       });
 
-      if (!task) {
-        return res.status(404).json({ message: "Task not found" });
-      }
+      if (!task) return res.status(404).json({ message: "Task not found" });
 
       if (req.user?.role !== "admin") {
         const assignedToUser = task.assignedUsers.some(
           (user) => user.id === req.user?.id,
         );
-        if (!assignedToUser) {
+        if (!assignedToUser)
           return res.status(403).json({ message: "Forbidden" });
-        }
       }
+
+      const allSubTasks = await subTaskRepository.find({
+        where: { task: { id: task.id } },
+        relations: ["parent"],
+      });
+      task.subTasks = buildSubTaskTree(allSubTasks);
 
       return res.status(200).json(task);
     } catch (error) {
@@ -251,14 +297,13 @@ export class TaskController {
       const userRepository = AppDataSource.getRepository(User);
       const projectRepository = AppDataSource.getRepository(Project);
       const subTaskRepository = AppDataSource.getRepository(SubTask);
+
       const task = await taskRepository.findOne({
         where: { id: parseInt(id as string) },
-        relations: ["assignedUsers", "project", "subTasks"],
+        relations: ["assignedUsers", "project"],
       });
 
-      if (!task) {
-        return res.status(404).json({ message: "Task not found" });
-      }
+      if (!task) return res.status(404).json({ message: "Task not found" });
 
       const oldStatus = task.status;
 
@@ -266,9 +311,8 @@ export class TaskController {
       if (title) task.title = title;
       if (description !== undefined) task.description = description;
       if (priority) task.priority = priority as TaskPriority;
-      if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
+      if (status && Object.values(TaskStatus).includes(status as TaskStatus))
         task.status = status as TaskStatus;
-      }
       if (dueDate) task.dueDate = new Date(dueDate);
       if (progress !== undefined) task.progress = parseInt(progress);
       if (projectName !== undefined) task.projectName = projectName;
@@ -277,9 +321,8 @@ export class TaskController {
         const project = await projectRepository.findOneBy({
           id: parseInt(projectId as string),
         });
-        if (!project) {
+        if (!project)
           return res.status(404).json({ message: "Project not found" });
-        }
         task.project = project;
       }
 
@@ -311,35 +354,66 @@ export class TaskController {
         task.files = [...(task.files || []), ...newFilePaths];
       }
 
-      // Handle subTasks (supports nested) — delete all existing then re-save
+      // Handle subTasks (supports nested) — safely delete all existing then re-save
       if (subTasks) {
         const parsedSubTasks =
           typeof subTasks === "string" ? JSON.parse(subTasks) : subTasks;
         if (Array.isArray(parsedSubTasks)) {
-          // Delete children first (self-referencing FK), then top-level subtasks
-          await subTaskRepository.delete({
-            task: { id: task.id },
-            parent: Not(IsNull()),
+          // 1. Fetch all existing subtasks for this task
+          const existingSubTasks = await subTaskRepository.find({
+            where: { task: { id: task.id } },
+            relations: ["parent"],
           });
-          await subTaskRepository.delete({ task: { id: task.id } });
+
+          // 2. Safe deletion: Delete leaf nodes first to avoid Foreign Key violations
+          let subTasksToDelete = [...existingSubTasks];
+          while (subTasksToDelete.length > 0) {
+            const leafNodes = subTasksToDelete.filter((st) => {
+              const stId = st.id;
+              const hasChildrenInList = subTasksToDelete.some((other) => {
+                const otherParentId = other.parent
+                  ? typeof other.parent === "object"
+                    ? other.parent.id
+                    : other.parent
+                  : null;
+                return otherParentId === stId;
+              });
+              return !hasChildrenInList;
+            });
+
+            if (leafNodes.length === 0) {
+              await subTaskRepository.remove(subTasksToDelete);
+              break;
+            }
+
+            await subTaskRepository.remove(leafNodes);
+            subTasksToDelete = subTasksToDelete.filter(
+              (st) => !leafNodes.includes(st),
+            );
+          }
+
+          // 3. Save the new subtasks
           await saveSubTasks(parsedSubTasks, task, subTaskRepository);
         }
       }
 
       await taskRepository.save(task);
 
-      // Refetch the task with all relations to include updated sub-tasks and assigned users
+      // 4. Refetch task WITHOUT subTasks relations (we will build it manually)
       const updatedTask = await taskRepository.findOne({
         where: { id: task.id },
-        relations: [
-          "assignedUsers",
-          "project",
-          "subTasks",
-          "subTasks.children",
-          "comments",
-          "comments.author",
-        ],
+        relations: ["assignedUsers", "project", "comments", "comments.author"],
       });
+
+      // 5. Fetch ALL subtasks and build the complete tree
+      const allSubTasks = await subTaskRepository.find({
+        where: { task: { id: task.id } },
+        relations: ["parent"],
+      });
+
+      if (updatedTask) {
+        updatedTask.subTasks = buildSubTaskTree(allSubTasks);
+      }
 
       // Log activity if status changed
       if (status && status !== oldStatus) {
@@ -368,10 +442,9 @@ export class TaskController {
         );
       }
 
-      return res.status(200).json({
-        message: "Task updated successfully",
-        task: updatedTask,
-      });
+      return res
+        .status(200)
+        .json({ message: "Task updated successfully", task: updatedTask });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -381,9 +454,7 @@ export class TaskController {
     const { id } = req.params;
     const { status } = req.body;
 
-    if (!status) {
-      return res.status(400).json({ message: "Status is required" });
-    }
+    if (!status) return res.status(400).json({ message: "Status is required" });
 
     const normalized = String(status).toLowerCase().replace(/\s+/g, "_");
     if (!Object.values(TaskStatus).includes(normalized as TaskStatus)) {
@@ -397,20 +468,16 @@ export class TaskController {
         relations: ["assignedUsers"],
       });
 
-      if (!task) {
-        return res.status(404).json({ message: "Task not found" });
-      }
+      if (!task) return res.status(404).json({ message: "Task not found" });
 
       const userId = req.user?.id;
       const isAssigned = task.assignedUsers.some((user) => user.id === userId);
-      if (!isAssigned && req.user?.role !== "admin") {
+      if (!isAssigned && req.user?.role !== "admin")
         return res.status(403).json({ message: "Forbidden" });
-      }
 
       task.status = normalized as TaskStatus;
       await taskRepository.save(task);
 
-      // Log activity for status change
       const statusLabel = normalized.replace(/_/g, " ");
       await ActivityController.logActivity(
         ActivityType.STATUS_CHANGED,
@@ -429,27 +496,41 @@ export class TaskController {
     const { projectId } = req.params;
     try {
       const taskRepository = AppDataSource.getRepository(Task);
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
       const projectIdInt = parseInt(projectId as string);
       const projectTasks = await taskRepository.find({
         where: { project: { id: projectIdInt } },
-        relations: [
-          "assignedUsers",
-          "project",
-          "subTasks",
-          "subTasks.children",
-          "comments",
-        ],
+        relations: ["assignedUsers", "project", "comments"],
         order: { createdAt: "DESC" },
       });
 
+      let tasksToReturn = projectTasks;
       if (req.user?.role !== "admin") {
-        const filteredTasks = projectTasks.filter((task) =>
+        tasksToReturn = projectTasks.filter((task) =>
           task.assignedUsers.some((user) => user.id === req.user?.id),
         );
-        return res.status(200).json(filteredTasks);
       }
 
-      return res.status(200).json(projectTasks);
+      if (tasksToReturn.length > 0) {
+        const taskIds = tasksToReturn.map((t) => t.id);
+        const allSubTasks = await subTaskRepository.find({
+          where: { task: { id: In(taskIds) } },
+          relations: ["parent"],
+        });
+
+        const subTasksByTask = new Map<number, any[]>();
+        allSubTasks.forEach((st) => {
+          const taskId = typeof st.task === "object" ? st.task.id : st.task;
+          if (!subTasksByTask.has(taskId)) subTasksByTask.set(taskId, []);
+          subTasksByTask.get(taskId)!.push(st);
+        });
+
+        tasksToReturn.forEach((task) => {
+          task.subTasks = buildSubTaskTree(subTasksByTask.get(task.id) || []);
+        });
+      }
+
+      return res.status(200).json(tasksToReturn);
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -459,9 +540,8 @@ export class TaskController {
     const { taskId } = req.params;
     const { title, parentSubTaskId } = req.body;
 
-    if (!title) {
+    if (!title)
       return res.status(400).json({ message: "Subtask title is required" });
-    }
 
     try {
       const taskRepository = AppDataSource.getRepository(Task);
@@ -470,9 +550,7 @@ export class TaskController {
         id: parseInt(taskId as string),
       });
 
-      if (!task) {
-        return res.status(404).json({ message: "Task not found" });
-      }
+      if (!task) return res.status(404).json({ message: "Task not found" });
 
       const subTaskPayload: Partial<SubTask> = { title, task };
 
@@ -480,9 +558,8 @@ export class TaskController {
         const parentSubTask = await subTaskRepository.findOneBy({
           id: parseInt(parentSubTaskId as string),
         });
-        if (!parentSubTask) {
+        if (!parentSubTask)
           return res.status(404).json({ message: "Parent subtask not found" });
-        }
         subTaskPayload.parent = parentSubTask;
       }
 
@@ -546,12 +623,14 @@ export class TaskController {
     const { taskId } = req.params;
     try {
       const subTaskRepository = AppDataSource.getRepository(SubTask);
-      const subTasks = await subTaskRepository.find({
-        where: { task: { id: parseInt(taskId as string) }, parent: IsNull() },
-        relations: ["children"],
+      const allSubTasks = await subTaskRepository.find({
+        where: { task: { id: parseInt(taskId as string) } },
+        relations: ["parent"],
         order: { createdAt: "ASC" },
       });
-      return res.status(200).json(subTasks);
+
+      const tree = buildSubTaskTree(allSubTasks);
+      return res.status(200).json(tree);
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -561,9 +640,8 @@ export class TaskController {
     const { taskId } = req.params;
     const { commentText } = req.body;
 
-    if (!commentText) {
+    if (!commentText)
       return res.status(400).json({ message: "Comment text is required" });
-    }
 
     try {
       const taskRepository = AppDataSource.getRepository(Task);
@@ -574,21 +652,16 @@ export class TaskController {
         relations: ["assignedUsers"],
       });
 
-      if (!task) {
-        return res.status(404).json({ message: "Task not found" });
-      }
+      if (!task) return res.status(404).json({ message: "Task not found" });
 
       const user = await userRepository.findOneBy({ id: req.user!.id });
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
+      if (!user) return res.status(404).json({ message: "User not found" });
 
       const isAssigned = task.assignedUsers.some(
         (assigned) => assigned.id === user.id,
       );
-      if (!isAssigned && req.user?.role !== "admin") {
+      if (!isAssigned && req.user?.role !== "admin")
         return res.status(403).json({ message: "Forbidden" });
-      }
 
       const comment = commentRepository.create({
         commentText,
@@ -613,17 +686,13 @@ export class TaskController {
         relations: ["assignedUsers"],
       });
 
-      if (!task) {
-        return res.status(404).json({ message: "Task not found" });
-      }
+      if (!task) return res.status(404).json({ message: "Task not found" });
 
       if (req.user?.role !== "admin") {
         const isAssigned = task.assignedUsers.some(
           (assigned) => assigned.id === req.user?.id,
         );
-        if (!isAssigned) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
+        if (!isAssigned) return res.status(403).json({ message: "Forbidden" });
       }
 
       const commentRepository = AppDataSource.getRepository(TaskComment);
@@ -643,9 +712,8 @@ export class TaskController {
     const { taskId, commentId } = req.params;
     const { feedback } = req.body;
 
-    if (!feedback) {
+    if (!feedback)
       return res.status(400).json({ message: "Feedback is required" });
-    }
 
     try {
       const commentRepository = AppDataSource.getRepository(TaskComment);
@@ -690,13 +758,9 @@ export class TaskController {
           order: { createdAt: "DESC" },
         });
 
-        return res.status(200).json({
-          total,
-          pending,
-          inProgress,
-          completed,
-          highPriorityTasks,
-        });
+        return res
+          .status(200)
+          .json({ total, pending, inProgress, completed, highPriorityTasks });
       }
 
       const total = await taskRepository
@@ -704,28 +768,24 @@ export class TaskController {
         .leftJoin("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
         .getCount();
-
       const pending = await taskRepository
         .createQueryBuilder("task")
         .leftJoin("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
         .andWhere("task.status = :status", { status: TaskStatus.PENDING })
         .getCount();
-
       const inProgress = await taskRepository
         .createQueryBuilder("task")
         .leftJoin("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
         .andWhere("task.status = :status", { status: TaskStatus.IN_PROGRESS })
         .getCount();
-
       const completed = await taskRepository
         .createQueryBuilder("task")
         .leftJoin("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
         .andWhere("task.status = :status", { status: TaskStatus.COMPLETED })
         .getCount();
-
       const highPriorityTasks = await taskRepository
         .createQueryBuilder("task")
         .leftJoinAndSelect("task.assignedUsers", "user")
@@ -734,13 +794,9 @@ export class TaskController {
         .orderBy("task.createdAt", "DESC")
         .getMany();
 
-      return res.status(200).json({
-        total,
-        pending,
-        inProgress,
-        completed,
-        highPriorityTasks,
-      });
+      return res
+        .status(200)
+        .json({ total, pending, inProgress, completed, highPriorityTasks });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -754,9 +810,7 @@ export class TaskController {
         where: { id: parseInt(id as string) },
       });
 
-      if (!task) {
-        return res.status(404).json({ message: "Task not found" });
-      }
+      if (!task) return res.status(404).json({ message: "Task not found" });
 
       await taskRepository.remove(task);
       return res.status(200).json({ message: "Task deleted successfully" });
