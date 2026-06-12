@@ -6,11 +6,42 @@ import { User } from "../entities/User";
 import { Project } from "../entities/Project";
 import { SubTask } from "../entities/SubTask";
 import { TaskComment } from "../entities/TaskComment";
-import { In } from "typeorm";
+import { In, IsNull, Not } from "typeorm";
 import { AuthRequest } from "../middlewares/auth";
+import { ActivityController } from "./ActivityController";
+import { ActivityType } from "../entities/Activity";
+
+// Helper to recursively save subtasks with optional parent
+const saveSubTasks = async (
+  parsedSubTasks: any[],
+  parentTask: Task,
+  subTaskRepository: any,
+  parentSubTask?: SubTask,
+): Promise<void> => {
+  for (const subTaskData of parsedSubTasks) {
+    if (!subTaskData.title) continue;
+    const subTask = subTaskRepository.create({
+      title: subTaskData.title,
+      task: parentTask,
+      ...(parentSubTask ? { parent: parentSubTask } : {}),
+    });
+    await subTaskRepository.save(subTask);
+    if (
+      Array.isArray(subTaskData.subTasks) &&
+      subTaskData.subTasks.length > 0
+    ) {
+      await saveSubTasks(
+        subTaskData.subTasks,
+        parentTask,
+        subTaskRepository,
+        subTask,
+      );
+    }
+  }
+};
 
 export class TaskController {
-  static createTask = async (req: Request, res: Response) => {
+  static createTask = async (req: AuthRequest, res: Response) => {
     const {
       companyName,
       title,
@@ -20,11 +51,14 @@ export class TaskController {
       userIds,
       assignAll,
       projectId,
+      progress,
+      subTasks,
+      projectName,
     } = req.body;
 
     const files = req.files as Express.Multer.File[];
 
-    if (!companyName || !title || !description || !priority || !dueDate) {
+    if (!companyName || !title || !priority || !dueDate) {
       return res
         .status(400)
         .json({ message: "All fields except assignments are required" });
@@ -34,11 +68,11 @@ export class TaskController {
       const userRepository = AppDataSource.getRepository(User);
       const taskRepository = AppDataSource.getRepository(Task);
       const projectRepository = AppDataSource.getRepository(Project);
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
 
       let assignedUsers: User[] = [];
       let project: Project | null = null;
 
-      // Parse userIds if it comes as a string or array of strings (from FormData)
       let parsedUserIds: number[] = [];
       if (userIds) {
         if (Array.isArray(userIds)) {
@@ -77,6 +111,8 @@ export class TaskController {
         dueDate: new Date(dueDate),
         assignedUsers,
         files: filePaths,
+        progress: progress ? parseInt(progress) : 0,
+        projectName: projectName || null,
       };
 
       if (project) {
@@ -84,8 +120,35 @@ export class TaskController {
       }
 
       const newTask = taskRepository.create(taskPayload);
-
       await taskRepository.save(newTask);
+
+      // Handle subTasks (supports nested)
+      if (subTasks) {
+        const parsedSubTasks =
+          typeof subTasks === "string" ? JSON.parse(subTasks) : subTasks;
+        if (Array.isArray(parsedSubTasks)) {
+          await saveSubTasks(parsedSubTasks, newTask, subTaskRepository);
+        }
+      }
+
+      // Log activity for task creation
+      await ActivityController.logActivity(
+        ActivityType.TASK_CREATED,
+        `Created task "${newTask.title}`,
+        newTask.id,
+        req.user?.id,
+      );
+
+      // Log activity if users were assigned
+      if (assignedUsers.length > 0) {
+        const assignedNames = assignedUsers.map((u) => u.fullName).join(", ");
+        await ActivityController.logActivity(
+          ActivityType.TASK_ASSIGNED,
+          `Assigned task "${newTask.title}" to ${assignedNames}`,
+          newTask.id,
+          req.user?.id,
+        );
+      }
 
       return res.status(201).json({
         message: "Task created and assigned successfully",
@@ -102,7 +165,13 @@ export class TaskController {
       let tasks;
       if (req.user?.role === "admin") {
         tasks = await taskRepository.find({
-          relations: ["assignedUsers", "project", "subTasks", "comments"],
+          relations: [
+            "assignedUsers",
+            "project",
+            "subTasks",
+            "subTasks.children",
+            "comments",
+          ],
           order: { createdAt: "DESC" },
         });
       } else {
@@ -111,6 +180,7 @@ export class TaskController {
           .leftJoinAndSelect("task.assignedUsers", "user")
           .leftJoinAndSelect("task.project", "project")
           .leftJoinAndSelect("task.subTasks", "subTask")
+          .leftJoinAndSelect("subTask.children", "subTaskChildren")
           .leftJoinAndSelect("task.comments", "comment")
           .where("user.id = :userId", { userId: req.user?.id })
           .orderBy("task.createdAt", "DESC")
@@ -132,6 +202,7 @@ export class TaskController {
           "assignedUsers",
           "project",
           "subTasks",
+          "subTasks.children",
           "comments",
           "comments.author",
         ],
@@ -156,7 +227,7 @@ export class TaskController {
     }
   };
 
-  static updateTask = async (req: Request, res: Response) => {
+  static updateTask = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const {
       companyName,
@@ -168,6 +239,9 @@ export class TaskController {
       userIds,
       assignAll,
       projectId,
+      progress,
+      subTasks,
+      projectName,
     } = req.body;
 
     const files = req.files as Express.Multer.File[];
@@ -176,23 +250,28 @@ export class TaskController {
       const taskRepository = AppDataSource.getRepository(Task);
       const userRepository = AppDataSource.getRepository(User);
       const projectRepository = AppDataSource.getRepository(Project);
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
       const task = await taskRepository.findOne({
         where: { id: parseInt(id as string) },
-        relations: ["assignedUsers", "project"],
+        relations: ["assignedUsers", "project", "subTasks"],
       });
 
       if (!task) {
         return res.status(404).json({ message: "Task not found" });
       }
 
+      const oldStatus = task.status;
+
       if (companyName) task.companyName = companyName;
       if (title) task.title = title;
-      if (description) task.description = description;
+      if (description !== undefined) task.description = description;
       if (priority) task.priority = priority as TaskPriority;
       if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
         task.status = status as TaskStatus;
       }
       if (dueDate) task.dueDate = new Date(dueDate);
+      if (progress !== undefined) task.progress = parseInt(progress);
+      if (projectName !== undefined) task.projectName = projectName;
 
       if (projectId) {
         const project = await projectRepository.findOneBy({
@@ -204,7 +283,6 @@ export class TaskController {
         task.project = project;
       }
 
-      // Parse userIds if it comes as a string or array of strings (from FormData)
       let parsedUserIds: number[] = [];
       if (userIds) {
         if (Array.isArray(userIds)) {
@@ -217,10 +295,15 @@ export class TaskController {
         }
       }
 
+      let newAssignedUsers: User[] = [...task.assignedUsers];
       if (assignAll === "true" || assignAll === true) {
-        task.assignedUsers = await userRepository.find();
+        newAssignedUsers = await userRepository.find();
+        task.assignedUsers = newAssignedUsers;
       } else if (parsedUserIds.length > 0) {
-        task.assignedUsers = await userRepository.findBy({ id: In(parsedUserIds) });
+        newAssignedUsers = await userRepository.findBy({
+          id: In(parsedUserIds),
+        });
+        task.assignedUsers = newAssignedUsers;
       }
 
       if (files && files.length > 0) {
@@ -228,11 +311,66 @@ export class TaskController {
         task.files = [...(task.files || []), ...newFilePaths];
       }
 
+      // Handle subTasks (supports nested) — delete all existing then re-save
+      if (subTasks) {
+        const parsedSubTasks =
+          typeof subTasks === "string" ? JSON.parse(subTasks) : subTasks;
+        if (Array.isArray(parsedSubTasks)) {
+          // Delete children first (self-referencing FK), then top-level subtasks
+          await subTaskRepository.delete({
+            task: { id: task.id },
+            parent: Not(IsNull()),
+          });
+          await subTaskRepository.delete({ task: { id: task.id } });
+          await saveSubTasks(parsedSubTasks, task, subTaskRepository);
+        }
+      }
+
       await taskRepository.save(task);
+
+      // Refetch the task with all relations to include updated sub-tasks and assigned users
+      const updatedTask = await taskRepository.findOne({
+        where: { id: task.id },
+        relations: [
+          "assignedUsers",
+          "project",
+          "subTasks",
+          "subTasks.children",
+          "comments",
+          "comments.author",
+        ],
+      });
+
+      // Log activity if status changed
+      if (status && status !== oldStatus) {
+        const statusLabel = (status as string).replace(/_/g, " ");
+        await ActivityController.logActivity(
+          ActivityType.STATUS_CHANGED,
+          `Changed status of "${task.title}" to ${statusLabel}`,
+          task.id,
+          req.user?.id,
+        );
+      }
+
+      // Log activity if assigned users changed
+      if (
+        (assignAll !== undefined && assignAll !== null) ||
+        (userIds && parsedUserIds.length > 0)
+      ) {
+        const assignedNames = newAssignedUsers
+          .map((u) => u.fullName)
+          .join(", ");
+        await ActivityController.logActivity(
+          ActivityType.TASK_ASSIGNED,
+          `Assigned task "${task.title}" to ${assignedNames}`,
+          task.id,
+          req.user?.id,
+        );
+      }
 
       return res.status(200).json({
         message: "Task updated successfully",
-        task,
+        task: updatedTask,
       });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -272,6 +410,15 @@ export class TaskController {
       task.status = normalized as TaskStatus;
       await taskRepository.save(task);
 
+      // Log activity for status change
+      const statusLabel = normalized.replace(/_/g, " ");
+      await ActivityController.logActivity(
+        ActivityType.STATUS_CHANGED,
+        `Changed status of "${task.title}" to ${statusLabel}`,
+        task.id,
+        userId,
+      );
+
       return res.status(200).json({ message: "Task status updated", task });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -285,7 +432,13 @@ export class TaskController {
       const projectIdInt = parseInt(projectId as string);
       const projectTasks = await taskRepository.find({
         where: { project: { id: projectIdInt } },
-        relations: ["assignedUsers", "project", "subTasks", "comments"],
+        relations: [
+          "assignedUsers",
+          "project",
+          "subTasks",
+          "subTasks.children",
+          "comments",
+        ],
         order: { createdAt: "DESC" },
       });
 
@@ -304,7 +457,7 @@ export class TaskController {
 
   static addSubTask = async (req: Request, res: Response) => {
     const { taskId } = req.params;
-    const { title } = req.body;
+    const { title, parentSubTaskId } = req.body;
 
     if (!title) {
       return res.status(400).json({ message: "Subtask title is required" });
@@ -321,10 +474,19 @@ export class TaskController {
         return res.status(404).json({ message: "Task not found" });
       }
 
-      const subTask = subTaskRepository.create({
-        title,
-        task,
-      });
+      const subTaskPayload: Partial<SubTask> = { title, task };
+
+      if (parentSubTaskId) {
+        const parentSubTask = await subTaskRepository.findOneBy({
+          id: parseInt(parentSubTaskId as string),
+        });
+        if (!parentSubTask) {
+          return res.status(404).json({ message: "Parent subtask not found" });
+        }
+        subTaskPayload.parent = parentSubTask;
+      }
+
+      const subTask = subTaskRepository.create(subTaskPayload);
       await subTaskRepository.save(subTask);
 
       return res.status(201).json({ message: "Subtask added", subTask });
@@ -355,6 +517,41 @@ export class TaskController {
 
       await subTaskRepository.save(subTask);
       return res.status(200).json({ message: "Subtask updated", subTask });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static deleteSubTask = async (req: Request, res: Response) => {
+    const { taskId, subtaskId } = req.params;
+    try {
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
+      const subTask = await subTaskRepository.findOne({
+        where: { id: parseInt(subtaskId as string) },
+        relations: ["task"],
+      });
+
+      if (!subTask || subTask.task.id !== parseInt(taskId as string)) {
+        return res.status(404).json({ message: "Subtask not found" });
+      }
+
+      await subTaskRepository.remove(subTask);
+      return res.status(200).json({ message: "Subtask deleted successfully" });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static getSubTasks = async (req: Request, res: Response) => {
+    const { taskId } = req.params;
+    try {
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
+      const subTasks = await subTaskRepository.find({
+        where: { task: { id: parseInt(taskId as string) }, parent: IsNull() },
+        relations: ["children"],
+        order: { createdAt: "ASC" },
+      });
+      return res.status(200).json(subTasks);
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }

@@ -7,6 +7,7 @@ import { TaskController } from "../controllers/TaskController";
 import { MyTaskController } from "../controllers/MyTaskController";
 import { LeaveRequestController } from "../controllers/LeaveRequestController";
 import { CalendarEventController } from "../controllers/CalendarEventController";
+import { ActivityController } from "../controllers/ActivityController";
 import { authMiddleware, roleMiddleware } from "../middlewares/auth";
 import { upload } from "../middlewares/upload";
 import { UserRole } from "../entities/User";
@@ -49,11 +50,7 @@ router.post(
   roleMiddleware([UserRole.ADMIN]),
   AnnouncementController.createAnnouncement,
 );
-router.get(
-  "/announcements",
-  authMiddleware,
-  AnnouncementController.getHistory,
-);
+router.get("/announcements", authMiddleware, AnnouncementController.getHistory);
 router.delete(
   "/announcements/:id",
   authMiddleware,
@@ -167,10 +164,17 @@ router.delete(
 );
 
 // Subtask routes
+
+router.get(
+  "/tasks/:taskId/subtasks",
+  authMiddleware,
+  TaskController.getSubTasks,
+);
+
 router.post(
   "/tasks/:taskId/subtasks",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  // roleMiddleware([UserRole.ADMIN]),
   TaskController.addSubTask,
 );
 router.put(
@@ -251,6 +255,9 @@ router.delete(
   roleMiddleware([UserRole.ADMIN]),
   CalendarEventController.deleteEvent,
 );
+
+// Activity routes
+router.get("/activities", authMiddleware, ActivityController.getAllActivities);
 
 // Date conversion is now handled on the frontend; server routes removed.
 

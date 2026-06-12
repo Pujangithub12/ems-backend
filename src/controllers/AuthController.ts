@@ -36,10 +36,11 @@ export class AuthController {
         expiresIn: "30d",
       });
 
+      const isProduction = process.env.NODE_ENV === "production";
       res.cookie("token", token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "none",
+        secure: isProduction,
+        sameSite: isProduction ? "none" : "lax",
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
       });
 
@@ -58,10 +59,11 @@ export class AuthController {
   };
 
   static logout = async (req: Request, res: Response) => {
+    const isProduction = process.env.NODE_ENV === "production";
     res.clearCookie("token", {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "none",
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
     });
     return res.status(200).json({ message: "Logged out successfully" });
   };
