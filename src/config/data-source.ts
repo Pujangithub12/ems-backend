@@ -11,6 +11,7 @@ import { SubTask } from "../entities/SubTask";
 import { TaskComment } from "../entities/TaskComment";
 import { MyTask } from "../entities/MyTask";
 import { CalendarEvent } from "../entities/CalendarEvent";
+import { Activity } from "../entities/Activity";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -36,6 +37,7 @@ const entityList = isProduction
       TaskComment,
       MyTask,
       CalendarEvent,
+      Activity,
     ];
 
 const baseOptions: DataSourceOptions = {

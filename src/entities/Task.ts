@@ -26,8 +26,11 @@ export class Task {
   @Column()
   title!: string;
 
-  @Column("text")
-  description!: string;
+  @Column("text", { nullable: true })
+  description?: string;
+
+  @Column({ nullable: true })
+  projectName?: string;
 
   @Column({
     type: "varchar",
