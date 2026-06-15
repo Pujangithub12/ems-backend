@@ -6,7 +6,7 @@ import { User } from "../entities/User";
 import { Project } from "../entities/Project";
 import { SubTask } from "../entities/SubTask";
 import { TaskComment } from "../entities/TaskComment";
-import { In, IsNull, Not } from "typeorm";
+import { In } from "typeorm";
 import { AuthRequest } from "../middlewares/auth";
 import { ActivityController } from "./ActivityController";
 import { ActivityType } from "../entities/Activity";
@@ -159,10 +159,13 @@ export class TaskController {
       }
 
       // Fetch all subtasks to return the complete tree with real DB IDs
-      const allSubTasks = await subTaskRepository.find({
-        where: { task: { id: newTask.id } },
-        relations: ["parent"],
-      });
+      const allSubTasks = await subTaskRepository
+        .createQueryBuilder("subTask")
+        .leftJoinAndSelect("subTask.parent", "parent")
+        .leftJoin("subTask.task", "task")
+        .where("task.id = :taskId", { taskId: newTask.id })
+        .getMany();
+
       newTask.subTasks = buildSubTaskTree(allSubTasks);
 
       // Log activity for task creation
@@ -183,12 +186,10 @@ export class TaskController {
         );
       }
 
-      return res
-        .status(201)
-        .json({
-          message: "Task created and assigned successfully",
-          task: newTask,
-        });
+      return res.status(201).json({
+        message: "Task created and assigned successfully",
+        task: newTask,
+      });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -218,10 +219,14 @@ export class TaskController {
 
       if (tasks.length > 0) {
         const taskIds = tasks.map((t) => t.id);
-        const allSubTasks = await subTaskRepository.find({
-          where: { task: { id: In(taskIds) } },
-          relations: ["parent"],
-        });
+
+        // FIXED: Using createQueryBuilder to ensure subtasks load for non-admins
+        const allSubTasks = await subTaskRepository
+          .createQueryBuilder("subTask")
+          .leftJoinAndSelect("subTask.parent", "parent")
+          .leftJoin("subTask.task", "task")
+          .where("task.id IN (:...taskIds)", { taskIds })
+          .getMany();
 
         const subTasksByTask = new Map<number, any[]>();
         allSubTasks.forEach((st) => {
@@ -236,6 +241,44 @@ export class TaskController {
       }
 
       return res.status(200).json(tasks);
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static updateTaskProgress = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const { progress } = req.body;
+
+    if (progress === undefined || progress === null) {
+      return res.status(400).json({ message: "Progress is required" });
+    }
+
+    try {
+      const taskRepository = AppDataSource.getRepository(Task);
+      const task = await taskRepository.findOne({
+        where: { id: parseInt(id as string) },
+        relations: ["assignedUsers"],
+      });
+
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      const userId = req.user?.id;
+      const isAssigned = task.assignedUsers.some((user) => user.id === userId);
+
+      // Only allow assigned users or admins to update progress
+      if (!isAssigned && req.user?.role !== "admin") {
+        return res
+          .status(403)
+          .json({ message: "Forbidden: You are not assigned to this task." });
+      }
+
+      task.progress = parseInt(progress);
+      await taskRepository.save(task);
+
+      return res
+        .status(200)
+        .json({ message: "Task progress updated successfully", task });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -261,10 +304,14 @@ export class TaskController {
           return res.status(403).json({ message: "Forbidden" });
       }
 
-      const allSubTasks = await subTaskRepository.find({
-        where: { task: { id: task.id } },
-        relations: ["parent"],
-      });
+      // FIXED: Using createQueryBuilder
+      const allSubTasks = await subTaskRepository
+        .createQueryBuilder("subTask")
+        .leftJoinAndSelect("subTask.parent", "parent")
+        .leftJoin("subTask.task", "task")
+        .where("task.id = :taskId", { taskId: task.id })
+        .getMany();
+
       task.subTasks = buildSubTaskTree(allSubTasks);
 
       return res.status(200).json(task);
@@ -359,11 +406,13 @@ export class TaskController {
         const parsedSubTasks =
           typeof subTasks === "string" ? JSON.parse(subTasks) : subTasks;
         if (Array.isArray(parsedSubTasks)) {
-          // 1. Fetch all existing subtasks for this task
-          const existingSubTasks = await subTaskRepository.find({
-            where: { task: { id: task.id } },
-            relations: ["parent"],
-          });
+          // 1. Fetch all existing subtasks for this task (FIXED: QueryBuilder)
+          const existingSubTasks = await subTaskRepository
+            .createQueryBuilder("subTask")
+            .leftJoinAndSelect("subTask.parent", "parent")
+            .leftJoin("subTask.task", "task")
+            .where("task.id = :taskId", { taskId: task.id })
+            .getMany();
 
           // 2. Safe deletion: Delete leaf nodes first to avoid Foreign Key violations
           let subTasksToDelete = [...existingSubTasks];
@@ -405,11 +454,13 @@ export class TaskController {
         relations: ["assignedUsers", "project", "comments", "comments.author"],
       });
 
-      // 5. Fetch ALL subtasks and build the complete tree
-      const allSubTasks = await subTaskRepository.find({
-        where: { task: { id: task.id } },
-        relations: ["parent"],
-      });
+      // 5. Fetch ALL subtasks and build the complete tree (FIXED: QueryBuilder)
+      const allSubTasks = await subTaskRepository
+        .createQueryBuilder("subTask")
+        .leftJoinAndSelect("subTask.parent", "parent")
+        .leftJoin("subTask.task", "task")
+        .where("task.id = :taskId", { taskId: task.id })
+        .getMany();
 
       if (updatedTask) {
         updatedTask.subTasks = buildSubTaskTree(allSubTasks);
@@ -513,10 +564,14 @@ export class TaskController {
 
       if (tasksToReturn.length > 0) {
         const taskIds = tasksToReturn.map((t) => t.id);
-        const allSubTasks = await subTaskRepository.find({
-          where: { task: { id: In(taskIds) } },
-          relations: ["parent"],
-        });
+
+        // FIXED: Using createQueryBuilder
+        const allSubTasks = await subTaskRepository
+          .createQueryBuilder("subTask")
+          .leftJoinAndSelect("subTask.parent", "parent")
+          .leftJoin("subTask.task", "task")
+          .where("task.id IN (:...taskIds)", { taskIds })
+          .getMany();
 
         const subTasksByTask = new Map<number, any[]>();
         allSubTasks.forEach((st) => {
@@ -536,7 +591,7 @@ export class TaskController {
     }
   };
 
-  static addSubTask = async (req: Request, res: Response) => {
+  static addSubTask = async (req: AuthRequest, res: Response) => {
     const { taskId } = req.params;
     const { title, parentSubTaskId } = req.body;
 
@@ -546,11 +601,24 @@ export class TaskController {
     try {
       const taskRepository = AppDataSource.getRepository(Task);
       const subTaskRepository = AppDataSource.getRepository(SubTask);
-      const task = await taskRepository.findOneBy({
-        id: parseInt(taskId as string),
+
+      // 1. Fetch task WITH assignedUsers to check permissions
+      const task = await taskRepository.findOne({
+        where: { id: parseInt(taskId as string) },
+        relations: ["assignedUsers"],
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
+
+      // 2. Permission Check: Allow Admins OR Assigned Users
+      const userId = req.user?.id;
+      const isAssigned = task.assignedUsers.some((user) => user.id === userId);
+
+      if (!isAssigned && req.user?.role !== "admin") {
+        return res
+          .status(403)
+          .json({ message: "Forbidden: You are not assigned to this task." });
+      }
 
       const subTaskPayload: Partial<SubTask> = { title, task };
 
@@ -566,8 +634,21 @@ export class TaskController {
       const subTask = subTaskRepository.create(subTaskPayload);
       await subTaskRepository.save(subTask);
 
-      return res.status(201).json({ message: "Subtask added", subTask });
+      // 3. Fetch updated tree to send back to frontend
+      const allSubTasks = await subTaskRepository
+        .createQueryBuilder("subTask")
+        .leftJoinAndSelect("subTask.parent", "parent")
+        .leftJoin("subTask.task", "task")
+        .where("task.id = :taskId", { taskId: task.id })
+        .getMany();
+
+      const tree = buildSubTaskTree(allSubTasks);
+
+      return res
+        .status(201)
+        .json({ message: "Subtask added", subTask, subTasks: tree });
     } catch (error) {
+      console.error("Add SubTask Error:", error);
       return res.status(500).json({ message: "Internal server error", error });
     }
   };
@@ -623,11 +704,15 @@ export class TaskController {
     const { taskId } = req.params;
     try {
       const subTaskRepository = AppDataSource.getRepository(SubTask);
-      const allSubTasks = await subTaskRepository.find({
-        where: { task: { id: parseInt(taskId as string) } },
-        relations: ["parent"],
-        order: { createdAt: "ASC" },
-      });
+
+      // FIXED: Using createQueryBuilder
+      const allSubTasks = await subTaskRepository
+        .createQueryBuilder("subTask")
+        .leftJoinAndSelect("subTask.parent", "parent")
+        .leftJoin("subTask.task", "task")
+        .where("task.id = :taskId", { taskId: parseInt(taskId as string) })
+        .orderBy("subTask.createdAt", "ASC")
+        .getMany();
 
       const tree = buildSubTaskTree(allSubTasks);
       return res.status(200).json(tree);

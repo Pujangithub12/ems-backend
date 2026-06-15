@@ -88,6 +88,19 @@ router.post(
   ProjectController.addProjectTask,
 );
 router.put(
+  "/tasks/:id/progress",
+  authMiddleware,
+  TaskController.updateTaskProgress,
+);
+
+router.put(
+  "/tasks/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN]),
+  upload.array("files"),
+  TaskController.updateTask,
+);
+router.put(
   "/projects/tasks/:taskId",
   authMiddleware,
   roleMiddleware([UserRole.ADMIN]),
@@ -137,7 +150,7 @@ router.delete("/mytasks/:id", authMiddleware, MyTaskController.deleteMyTask);
 router.post(
   "/tasks",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  // roleMiddleware([UserRole.ADMIN]),
   upload.array("files"),
   TaskController.createTask,
 );
