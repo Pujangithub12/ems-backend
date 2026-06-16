@@ -9,6 +9,14 @@ import {
 import { Task } from "./Task";
 import { TaskStatus } from "./TaskEnums";
 
+// Add this type to track updates
+export type SubTaskHistoryItem = {
+  id: string;
+  date: string;
+  title: string;
+  progress: number;
+};
+
 @Entity()
 export class SubTask {
   @PrimaryGeneratedColumn()
@@ -20,10 +28,17 @@ export class SubTask {
   @Column({ type: "varchar", default: TaskStatus.PENDING })
   status!: TaskStatus;
 
+  // NEW: Track progress
+  @Column({ default: 0 })
+  progress!: number;
+
+  // NEW: Track previous updates (stores as JSON in DB)
+  @Column({ type: "simple-json", nullable: true })
+  history?: SubTaskHistoryItem[];
+
   @ManyToOne(() => Task, (task) => task.subTasks, { onDelete: "CASCADE" })
   task!: Task;
 
-  // Self-relation for nesting
   @ManyToOne(() => SubTask, (st) => st.children, {
     nullable: true,
     onDelete: "CASCADE",

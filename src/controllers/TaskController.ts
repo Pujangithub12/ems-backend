@@ -162,7 +162,7 @@ export class TaskController {
       const allSubTasks = await subTaskRepository
         .createQueryBuilder("subTask")
         .leftJoinAndSelect("subTask.parent", "parent")
-        .leftJoin("subTask.task", "task")
+        .leftJoinAndSelect("subTask.task", "task")
         .where("task.id = :taskId", { taskId: newTask.id })
         .getMany();
 
@@ -224,7 +224,7 @@ export class TaskController {
         const allSubTasks = await subTaskRepository
           .createQueryBuilder("subTask")
           .leftJoinAndSelect("subTask.parent", "parent")
-          .leftJoin("subTask.task", "task")
+          .leftJoinAndSelect("subTask.task", "task")
           .where("task.id IN (:...taskIds)", { taskIds })
           .getMany();
 
@@ -569,7 +569,7 @@ export class TaskController {
         const allSubTasks = await subTaskRepository
           .createQueryBuilder("subTask")
           .leftJoinAndSelect("subTask.parent", "parent")
-          .leftJoin("subTask.task", "task")
+          .leftJoinAndSelect("subTask.task", "task")
           .where("task.id IN (:...taskIds)", { taskIds })
           .getMany();
 
@@ -653,9 +653,9 @@ export class TaskController {
     }
   };
 
-  static updateSubTask = async (req: Request, res: Response) => {
+  static updateSubTask = async (req: AuthRequest, res: Response) => {
     const { taskId, subtaskId } = req.params;
-    const { title, status } = req.body;
+    const { title, status, progress } = req.body;
 
     try {
       const subTaskRepository = AppDataSource.getRepository(SubTask);
@@ -668,10 +668,29 @@ export class TaskController {
         return res.status(404).json({ message: "Subtask not found" });
       }
 
+      // Capture old values for history
+      const oldTitle = subTask.title;
+      const oldProgress = subTask.progress;
+
       if (title) subTask.title = title;
       if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
         subTask.status = status as TaskStatus;
       }
+      if (progress !== undefined) {
+        subTask.progress = parseInt(progress);
+      }
+
+      // Add current state to history before overwriting
+      const history = subTask.history || [];
+      history.unshift({
+        id: Date.now().toString(),
+        date: new Date().toISOString(),
+        title: oldTitle,
+        progress: oldProgress,
+      });
+
+      // Keep only the last 5 updates to prevent database bloat
+      subTask.history = history.slice(0, 5);
 
       await subTaskRepository.save(subTask);
       return res.status(200).json({ message: "Subtask updated", subTask });

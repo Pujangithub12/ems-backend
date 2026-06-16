@@ -193,7 +193,7 @@ router.post(
 router.put(
   "/tasks/:taskId/subtasks/:subtaskId",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  // roleMiddleware([UserRole.ADMIN]),
   TaskController.updateSubTask,
 );
 
