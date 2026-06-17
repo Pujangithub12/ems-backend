@@ -15,7 +15,9 @@ class AuthController {
     static login = async (req, res) => {
         const { email, password } = req.body;
         if (!email || !password) {
-            return res.status(400).json({ message: "Email and password are required" });
+            return res
+                .status(400)
+                .json({ message: "Email and password are required" });
         }
         try {
             const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
@@ -27,16 +29,53 @@ class AuthController {
             if (!isPasswordValid) {
                 return res.status(401).json({ message: "Invalid email or password" });
             }
-            const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: "30d" });
+            const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role }, JWT_SECRET, {
+                expiresIn: "30d",
+            });
+            const isProduction = process.env.NODE_ENV === "production";
+            res.cookie("token", token, {
+                httpOnly: true,
+                secure: isProduction,
+                sameSite: isProduction ? "none" : "lax",
+                maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+            });
             return res.status(200).json({
                 message: "Login successful",
-                token,
                 user: {
                     id: user.id,
                     fullName: user.fullName,
                     email: user.email,
-                    role: user.role
-                }
+                    role: user.role,
+                },
+            });
+        }
+        catch (error) {
+            return res.status(500).json({ message: "Internal server error", error });
+        }
+    };
+    static logout = async (req, res) => {
+        const isProduction = process.env.NODE_ENV === "production";
+        res.clearCookie("token", {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax",
+        });
+        return res.status(200).json({ message: "Logged out successfully" });
+    };
+    static getMe = async (req, res) => {
+        try {
+            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
+            const user = await userRepository.findOne({ where: { id: req.user.id } });
+            if (!user) {
+                return res.status(404).json({ message: "User not found" });
+            }
+            return res.status(200).json({
+                user: {
+                    id: user.id,
+                    fullName: user.fullName,
+                    email: user.email,
+                    role: user.role,
+                },
             });
         }
         catch (error) {

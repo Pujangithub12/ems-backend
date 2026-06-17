@@ -17,13 +17,21 @@ class AnnouncementController {
             let recipientEmails = [];
             if (targetType === "all") {
                 const users = await userRepository.find({ select: ["email"] });
-                recipientEmails = users.map(u => u.email);
+                // Filter out users who don't have an email address
+                recipientEmails = users
+                    .map((u) => u.email)
+                    .filter((email) => email);
             }
-            else if (targetType === "specific" && Array.isArray(targetEmails)) {
+            else if (targetType === "specific" &&
+                Array.isArray(targetEmails)) {
                 recipientEmails = targetEmails;
             }
             else {
-                return res.status(400).json({ message: "Invalid targetType or missing targetEmails" });
+                return res
+                    .status(400)
+                    .json({
+                    message: "Invalid targetType or missing targetEmails",
+                });
             }
             if (recipientEmails.length === 0) {
                 return res.status(400).json({ message: "No recipients found" });

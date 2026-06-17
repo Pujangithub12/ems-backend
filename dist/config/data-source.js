@@ -16,8 +16,12 @@ const ProjectHeading_1 = require("../entities/ProjectHeading");
 const SubTask_1 = require("../entities/SubTask");
 const TaskComment_1 = require("../entities/TaskComment");
 const MyTask_1 = require("../entities/MyTask");
+const CalendarEvent_1 = require("../entities/CalendarEvent");
+const Activity_1 = require("../entities/Activity");
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
+console.log("NODE_ENV:", process.env.NODE_ENV);
+console.log("DATABASE_URL:", process.env.DATABASE_URL ?? "NOT SET");
 const isProduction = process.env.NODE_ENV === "production";
 // 1. Define base configurations common to both local and production environments
 // Entities: use class references while running TS (dev). When running compiled
@@ -35,11 +39,13 @@ const entityList = isProduction
         SubTask_1.SubTask,
         TaskComment_1.TaskComment,
         MyTask_1.MyTask,
+        CalendarEvent_1.CalendarEvent,
+        Activity_1.Activity,
     ];
 const baseOptions = {
     type: "postgres",
     entities: entityList,
-    synchronize: !isProduction,
+    synchronize: true, //!isProduction,
     logging: !isProduction,
     ssl: isProduction ? { rejectUnauthorized: false } : false,
     migrations: [],
