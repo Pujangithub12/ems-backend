@@ -6,11 +6,11 @@ const LeaveRequest_1 = require("../entities/LeaveRequest");
 const User_1 = require("../entities/User");
 class LeaveRequestController {
     static createLeaveRequest = async (req, res) => {
-        const { startDate, endDate, reason } = req.body;
-        if (!startDate || !endDate || !reason) {
+        const { title, startDate, endDate, reason } = req.body;
+        if (!title || !startDate || !endDate || !reason) {
             return res
                 .status(400)
-                .json({ message: "startDate, endDate and reason are required" });
+                .json({ message: "title, startDate, endDate and reason are required" });
         }
         try {
             const userId = req.user?.id;
@@ -23,9 +23,11 @@ class LeaveRequestController {
                 return res.status(404).json({ message: "User not found" });
             const newRequest = lrRepository.create({
                 user,
+                title,
                 startDate: new Date(startDate),
                 endDate: new Date(endDate),
                 reason,
+                status: "pending",
             });
             await lrRepository.save(newRequest);
             return res
@@ -40,14 +42,53 @@ class LeaveRequestController {
         try {
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
             if (req.user?.role === User_1.UserRole.ADMIN) {
-                const all = await lrRepository.find({ order: { createdAt: "DESC" } });
-                return res.status(200).json(all);
+                const all = await lrRepository.find({
+                    order: { createdAt: "DESC" },
+                    relations: ["user"],
+                });
+                // Add history count for admin
+                const requestsWithHistory = await Promise.all(all.map(async (lr) => {
+                    const historyCount = await lrRepository.count({
+                        where: {
+                            user: { id: lr.user.id },
+                            status: "approved",
+                        },
+                    });
+                    return { ...lr, historyCount };
+                }));
+                return res.status(200).json(requestsWithHistory);
             }
             const mine = await lrRepository.find({
                 where: { user: { id: req.user?.id } },
                 order: { createdAt: "DESC" },
             });
             return res.status(200).json(mine);
+        }
+        catch (error) {
+            return res.status(500).json({ message: "Internal server error", error });
+        }
+    };
+    static updateStatus = async (req, res) => {
+        const { id } = req.params;
+        const { status } = req.body;
+        if (!["approved", "rejected"].includes(status)) {
+            return res.status(400).json({ message: "Invalid status" });
+        }
+        try {
+            if (req.user?.role !== User_1.UserRole.ADMIN) {
+                return res.status(403).json({ message: "Forbidden" });
+            }
+            const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
+            const lr = await lrRepository.findOne({
+                where: { id: parseInt(id) },
+            });
+            if (!lr)
+                return res.status(404).json({ message: "Leave request not found" });
+            lr.status = status;
+            await lrRepository.save(lr);
+            return res
+                .status(200)
+                .json({ message: `Leave request ${status}`, leaveRequest: lr });
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });

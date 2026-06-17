@@ -9,57 +9,38 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LeaveRequest = void 0;
+exports.CalendarEvent = void 0;
 const typeorm_1 = require("typeorm");
-const User_1 = require("./User");
-let LeaveRequest = class LeaveRequest {
+let CalendarEvent = class CalendarEvent {
     id;
-    user;
     title;
-    startDate;
-    endDate;
-    reason;
-    status;
+    date;
+    type;
     createdAt;
 };
-exports.LeaveRequest = LeaveRequest;
+exports.CalendarEvent = CalendarEvent;
 __decorate([
     (0, typeorm_1.PrimaryGeneratedColumn)(),
     __metadata("design:type", Number)
-], LeaveRequest.prototype, "id", void 0);
+], CalendarEvent.prototype, "id", void 0);
 __decorate([
-    (0, typeorm_1.ManyToOne)(() => User_1.User, { eager: true }),
-    __metadata("design:type", User_1.User)
-], LeaveRequest.prototype, "user", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ default: "Leave Request" }),
+    (0, typeorm_1.Column)(),
     __metadata("design:type", String)
-], LeaveRequest.prototype, "title", void 0);
+], CalendarEvent.prototype, "title", void 0);
 __decorate([
     (0, typeorm_1.Column)(),
     __metadata("design:type", Date)
-], LeaveRequest.prototype, "startDate", void 0);
+], CalendarEvent.prototype, "date", void 0);
 __decorate([
-    (0, typeorm_1.Column)(),
-    __metadata("design:type", Date)
-], LeaveRequest.prototype, "endDate", void 0);
-__decorate([
-    (0, typeorm_1.Column)("text"),
+    (0, typeorm_1.Column)({ default: "holiday" }) // e.g., holiday, event, deadline
+    ,
     __metadata("design:type", String)
-], LeaveRequest.prototype, "reason", void 0);
-__decorate([
-    (0, typeorm_1.Column)({
-        type: "enum",
-        enum: ["pending", "approved", "rejected"],
-        default: "pending",
-    }),
-    __metadata("design:type", String)
-], LeaveRequest.prototype, "status", void 0);
+], CalendarEvent.prototype, "type", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)
-], LeaveRequest.prototype, "createdAt", void 0);
-exports.LeaveRequest = LeaveRequest = __decorate([
+], CalendarEvent.prototype, "createdAt", void 0);
+exports.CalendarEvent = CalendarEvent = __decorate([
     (0, typeorm_1.Entity)()
-], LeaveRequest);
-//# sourceMappingURL=LeaveRequest.js.map
+], CalendarEvent);
+//# sourceMappingURL=CalendarEvent.js.map

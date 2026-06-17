@@ -17,7 +17,13 @@ let SubTask = class SubTask {
     id;
     title;
     status;
+    // NEW: Track progress
+    progress;
+    // NEW: Track previous updates (stores as JSON in DB)
+    history;
     task;
+    parent;
+    children;
     createdAt;
 };
 exports.SubTask = SubTask;
@@ -30,16 +36,32 @@ __decorate([
     __metadata("design:type", String)
 ], SubTask.prototype, "title", void 0);
 __decorate([
-    (0, typeorm_1.Column)({
-        type: "varchar",
-        default: TaskEnums_1.TaskStatus.PENDING,
-    }),
+    (0, typeorm_1.Column)({ type: "varchar", default: TaskEnums_1.TaskStatus.PENDING }),
     __metadata("design:type", String)
 ], SubTask.prototype, "status", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ default: 0 }),
+    __metadata("design:type", Number)
+], SubTask.prototype, "progress", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: "simple-json", nullable: true }),
+    __metadata("design:type", Array)
+], SubTask.prototype, "history", void 0);
 __decorate([
     (0, typeorm_1.ManyToOne)(() => Task_1.Task, (task) => task.subTasks, { onDelete: "CASCADE" }),
     __metadata("design:type", Task_1.Task)
 ], SubTask.prototype, "task", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => SubTask, (st) => st.children, {
+        nullable: true,
+        onDelete: "CASCADE",
+    }),
+    __metadata("design:type", SubTask)
+], SubTask.prototype, "parent", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => SubTask, (st) => st.parent, { cascade: true }),
+    __metadata("design:type", Array)
+], SubTask.prototype, "children", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

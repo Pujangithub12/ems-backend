@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const cookie_parser_1 = __importDefault(require("cookie-parser"));
+const path_1 = __importDefault(require("path"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const data_source_1 = require("./config/data-source");
 const routes_1 = __importDefault(require("./routes"));
@@ -13,8 +15,18 @@ const bcrypt_1 = __importDefault(require("bcrypt"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
-app.use((0, cors_1.default)());
+app.use((0, cors_1.default)({
+    origin: [
+        "https://emsjandaenergy.vercel.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    credentials: true,
+}));
+app.use((0, cookie_parser_1.default)());
 app.use(express_1.default.json());
+// Serve static files from uploads directory
+app.use("/uploads", express_1.default.static(path_1.default.join(__dirname, "../uploads")));
 app.use("/api", routes_1.default);
 const seedAdmin = async () => {
     const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);

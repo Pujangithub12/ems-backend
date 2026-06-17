@@ -22,6 +22,7 @@ let Task = class Task {
     companyName;
     title;
     description;
+    projectName;
     priority;
     status;
     progress;
@@ -31,6 +32,7 @@ let Task = class Task {
     projectHeading;
     subTasks;
     comments;
+    files;
     createdAt;
 };
 exports.Task = Task;
@@ -47,9 +49,13 @@ __decorate([
     __metadata("design:type", String)
 ], Task.prototype, "title", void 0);
 __decorate([
-    (0, typeorm_1.Column)("text"),
+    (0, typeorm_1.Column)("text", { nullable: true }),
     __metadata("design:type", String)
 ], Task.prototype, "description", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ nullable: true }),
+    __metadata("design:type", String)
+], Task.prototype, "projectName", void 0);
 __decorate([
     (0, typeorm_1.Column)({
         type: "varchar",
@@ -101,6 +107,10 @@ __decorate([
     }),
     __metadata("design:type", Array)
 ], Task.prototype, "comments", void 0);
+__decorate([
+    (0, typeorm_1.Column)("simple-array", { nullable: true }),
+    __metadata("design:type", Array)
+], Task.prototype, "files", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)
