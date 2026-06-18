@@ -75,6 +75,10 @@ TaskController_1.TaskController.updateSubTask);
 router.post("/tasks/:taskId/comments", auth_1.authMiddleware, TaskController_1.TaskController.addComment);
 router.get("/tasks/:taskId/comments", auth_1.authMiddleware, TaskController_1.TaskController.getTaskComments);
 router.put("/tasks/:taskId/comments/:commentId/feedback", auth_1.authMiddleware, (0, auth_1.roleMiddleware)([User_1.UserRole.ADMIN]), TaskController_1.TaskController.addFeedback);
+// Subtask comment routes
+router.post("/tasks/:taskId/subtasks/:subtaskId/comments", auth_1.authMiddleware, TaskController_1.TaskController.addSubTaskComment);
+router.get("/tasks/:taskId/subtasks/:subtaskId/comments", auth_1.authMiddleware, TaskController_1.TaskController.getSubTaskComments);
+router.put("/tasks/:taskId/subtasks/:subtaskId/comments/:commentId/feedback", auth_1.authMiddleware, TaskController_1.TaskController.addSubTaskFeedback);
 // Leave request routes
 router.post("/leaverequest", auth_1.authMiddleware, LeaveRequestController_1.LeaveRequestController.createLeaveRequest);
 router.get("/leaverequest", auth_1.authMiddleware, LeaveRequestController_1.LeaveRequestController.getAllLeaveRequests);

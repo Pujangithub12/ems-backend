@@ -13,6 +13,7 @@ exports.SubTask = void 0;
 const typeorm_1 = require("typeorm");
 const Task_1 = require("./Task");
 const TaskEnums_1 = require("./TaskEnums");
+const SubTaskComment_1 = require("./SubTaskComment");
 let SubTask = class SubTask {
     id;
     title;
@@ -24,6 +25,7 @@ let SubTask = class SubTask {
     task;
     parent;
     children;
+    comments;
     createdAt;
 };
 exports.SubTask = SubTask;
@@ -62,6 +64,12 @@ __decorate([
     (0, typeorm_1.OneToMany)(() => SubTask, (st) => st.parent, { cascade: true }),
     __metadata("design:type", Array)
 ], SubTask.prototype, "children", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => SubTaskComment_1.SubTaskComment, (comment) => comment.subTask, {
+        cascade: true,
+    }),
+    __metadata("design:type", Array)
+], SubTask.prototype, "comments", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

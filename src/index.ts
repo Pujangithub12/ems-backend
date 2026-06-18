@@ -26,6 +26,12 @@ app.use(
 app.use(cookieParser());
 app.use(express.json());
 
+// Log all incoming requests for debugging
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.url}`);
+  next();
+});
+
 // Serve static files from uploads directory
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 

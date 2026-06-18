@@ -9,6 +9,7 @@ import { ProjectFile } from "../entities/ProjectFile";
 import { ProjectHeading } from "../entities/ProjectHeading";
 import { SubTask } from "../entities/SubTask";
 import { TaskComment } from "../entities/TaskComment";
+import { SubTaskComment } from "../entities/SubTaskComment";
 import { MyTask } from "../entities/MyTask";
 import { CalendarEvent } from "../entities/CalendarEvent";
 import { Activity } from "../entities/Activity";
@@ -35,6 +36,7 @@ const entityList = isProduction
       ProjectHeading,
       SubTask,
       TaskComment,
+      SubTaskComment,
       MyTask,
       CalendarEvent,
       Activity,

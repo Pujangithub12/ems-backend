@@ -6,6 +6,7 @@ import { User } from "../entities/User";
 import { Project } from "../entities/Project";
 import { SubTask } from "../entities/SubTask";
 import { TaskComment } from "../entities/TaskComment";
+import { SubTaskComment } from "../entities/SubTaskComment";
 import { In } from "typeorm";
 import { AuthRequest } from "../middlewares/auth";
 import { ActivityController } from "./ActivityController";
@@ -709,14 +710,12 @@ export class TaskController {
       const avg = computeAverageLeafProgress(tree);
       await taskRepository.update(task.id, { progress: avg });
 
-      return res
-        .status(201)
-        .json({
-          message: "Subtask added",
-          subTask,
-          subTasks: tree,
-          taskProgress: avg,
-        });
+      return res.status(201).json({
+        message: "Subtask added",
+        subTask,
+        subTasks: tree,
+        taskProgress: avg,
+      });
     } catch (error) {
       console.error("Add SubTask Error:", error);
       return res.status(500).json({ message: "Internal server error", error });
@@ -782,14 +781,12 @@ export class TaskController {
         progress: avg,
       });
 
-      return res
-        .status(200)
-        .json({
-          message: "Subtask updated",
-          subTask,
-          subTasks: tree,
-          taskProgress: avg,
-        });
+      return res.status(200).json({
+        message: "Subtask updated",
+        subTask,
+        subTasks: tree,
+        taskProgress: avg,
+      });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -820,13 +817,11 @@ export class TaskController {
         progress: avg,
       });
 
-      return res
-        .status(200)
-        .json({
-          message: "Subtask deleted successfully",
-          subTasks: tree,
-          taskProgress: avg,
-        });
+      return res.status(200).json({
+        message: "Subtask deleted successfully",
+        subTasks: tree,
+        taskProgress: avg,
+      });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -1033,6 +1028,143 @@ export class TaskController {
 
       await taskRepository.remove(task);
       return res.status(200).json({ message: "Task deleted successfully" });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static addSubTaskComment = async (req: AuthRequest, res: Response) => {
+    console.log("=== addSubTaskComment CALLED ===");
+    console.log("Params:", req.params);
+    const { taskId, subtaskId } = req.params;
+    const { commentText } = req.body;
+
+    if (!commentText)
+      return res.status(400).json({ message: "Comment text is required" });
+
+    try {
+      const taskRepository = AppDataSource.getRepository(Task);
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
+      const commentRepository = AppDataSource.getRepository(SubTaskComment);
+      const userRepository = AppDataSource.getRepository(User);
+
+      const task = await taskRepository.findOne({
+        where: { id: parseInt(taskId as string) },
+        relations: ["assignedUsers"],
+      });
+
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      const subTask = await subTaskRepository.findOne({
+        where: {
+          id: parseInt(subtaskId as string),
+          task: { id: parseInt(taskId as string) },
+        },
+      });
+
+      if (!subTask)
+        return res.status(404).json({ message: "Subtask not found" });
+
+      const user = await userRepository.findOneBy({ id: req.user!.id });
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const isAssigned = task.assignedUsers.some(
+        (assigned) => assigned.id === user.id,
+      );
+      if (!isAssigned && req.user?.role !== "admin")
+        return res.status(403).json({ message: "Forbidden" });
+
+      const comment = commentRepository.create({
+        commentText,
+        author: user,
+        subTask,
+      });
+      await commentRepository.save(comment);
+
+      return res.status(201).json({ message: "Comment added", comment });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static getSubTaskComments = async (req: AuthRequest, res: Response) => {
+    console.log("=== getSubTaskComments CALLED ===");
+    console.log("Params:", req.params);
+    const { taskId, subtaskId } = req.params;
+
+    try {
+      const taskRepository = AppDataSource.getRepository(Task);
+      const subTaskRepository = AppDataSource.getRepository(SubTask);
+      const commentRepository = AppDataSource.getRepository(SubTaskComment);
+
+      const task = await taskRepository.findOne({
+        where: { id: parseInt(taskId as string) },
+        relations: ["assignedUsers"],
+      });
+
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      const subTask = await subTaskRepository.findOne({
+        where: {
+          id: parseInt(subtaskId as string),
+          task: { id: parseInt(taskId as string) },
+        },
+      });
+
+      if (!subTask)
+        return res.status(404).json({ message: "Subtask not found" });
+
+      if (req.user?.role !== "admin") {
+        const isAssigned = task.assignedUsers.some(
+          (assigned) => assigned.id === req.user?.id,
+        );
+        if (!isAssigned) return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const comments = await commentRepository.find({
+        where: { subTask: { id: subTask.id } },
+        relations: ["author"],
+        order: { createdAt: "ASC" },
+      });
+
+      return res.status(200).json(comments);
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static addSubTaskFeedback = async (req: AuthRequest, res: Response) => {
+    const { taskId, subtaskId, commentId } = req.params;
+    const { feedback } = req.body;
+
+    if (!feedback)
+      return res.status(400).json({ message: "Feedback is required" });
+
+    try {
+      const commentRepository = AppDataSource.getRepository(SubTaskComment);
+      const comment = await commentRepository.findOne({
+        where: { id: parseInt(commentId as string) },
+        relations: ["subTask", "subTask.task", "subTask.task.assignedUsers"],
+      });
+
+      if (
+        !comment ||
+        comment.subTask.id !== parseInt(subtaskId as string) ||
+        comment.subTask.task.id !== parseInt(taskId as string)
+      ) {
+        return res.status(404).json({ message: "Comment not found" });
+      }
+
+      const isAssigned = comment.subTask.task.assignedUsers.some(
+        (assigned) => assigned.id === req.user?.id,
+      );
+      if (!isAssigned && req.user?.role !== "admin")
+        return res.status(403).json({ message: "Forbidden" });
+
+      comment.feedback = feedback;
+      await commentRepository.save(comment);
+
+      return res.status(200).json({ message: "Feedback added", comment });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
