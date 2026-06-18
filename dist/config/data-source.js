@@ -15,6 +15,7 @@ const ProjectFile_1 = require("../entities/ProjectFile");
 const ProjectHeading_1 = require("../entities/ProjectHeading");
 const SubTask_1 = require("../entities/SubTask");
 const TaskComment_1 = require("../entities/TaskComment");
+const SubTaskComment_1 = require("../entities/SubTaskComment");
 const MyTask_1 = require("../entities/MyTask");
 const CalendarEvent_1 = require("../entities/CalendarEvent");
 const Activity_1 = require("../entities/Activity");
@@ -38,6 +39,7 @@ const entityList = isProduction
         ProjectHeading_1.ProjectHeading,
         SubTask_1.SubTask,
         TaskComment_1.TaskComment,
+        SubTaskComment_1.SubTaskComment,
         MyTask_1.MyTask,
         CalendarEvent_1.CalendarEvent,
         Activity_1.Activity,

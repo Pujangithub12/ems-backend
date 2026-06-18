@@ -8,6 +8,7 @@ import {
 } from "typeorm";
 import { Task } from "./Task";
 import { TaskStatus } from "./TaskEnums";
+import { SubTaskComment } from "./SubTaskComment";
 
 // Add this type to track updates
 export type SubTaskHistoryItem = {
@@ -47,6 +48,11 @@ export class SubTask {
 
   @OneToMany(() => SubTask, (st) => st.parent, { cascade: true })
   children!: SubTask[];
+
+  @OneToMany(() => SubTaskComment, (comment) => comment.subTask, {
+    cascade: true,
+  })
+  comments!: SubTaskComment[];
 
   @CreateDateColumn()
   createdAt!: Date;

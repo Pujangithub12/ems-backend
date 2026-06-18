@@ -215,6 +215,23 @@ router.put(
   TaskController.addFeedback,
 );
 
+// Subtask comment routes
+router.post(
+  "/tasks/:taskId/subtasks/:subtaskId/comments",
+  authMiddleware,
+  TaskController.addSubTaskComment,
+);
+router.get(
+  "/tasks/:taskId/subtasks/:subtaskId/comments",
+  authMiddleware,
+  TaskController.getSubTaskComments,
+);
+router.put(
+  "/tasks/:taskId/subtasks/:subtaskId/comments/:commentId/feedback",
+  authMiddleware,
+  TaskController.addSubTaskFeedback,
+);
+
 // Leave request routes
 router.post(
   "/leaverequest",
