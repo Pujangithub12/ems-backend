@@ -50,7 +50,7 @@ export class AnnouncementController {
             });
             await announcementRepository.save(newAnnouncement);
 
-            // Send emails (in background, don't block response)
+            
             sendEmail(recipientEmails, subject, message).catch(err => {
                 console.error("Failed to send announcement emails:", err);
             });

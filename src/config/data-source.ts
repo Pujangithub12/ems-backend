@@ -21,7 +21,7 @@ console.log("DATABASE_URL:", process.env.DATABASE_URL ?? "NOT SET");
 
 const isProduction = process.env.NODE_ENV === "production";
 
-// 1. Define base configurations common to both local and production environments
+
 const entityList = isProduction
   ? [__dirname + "/../entities/*.js"]
   : [
@@ -50,10 +50,10 @@ const baseOptions: DataSourceOptions = {
   subscribers: [],
 };
 
-// 2. Build the exact options block dynamically to appease exactOptionalPropertyTypes
+
 const getConfiguration = (): DataSourceOptions => {
   if (process.env.DATABASE_URL) {
-    // non-null assertion is safe because of the if-check above
+    
     return {
       ...baseOptions,
       url: process.env.DATABASE_URL!,
