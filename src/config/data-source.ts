@@ -22,8 +22,6 @@ console.log("DATABASE_URL:", process.env.DATABASE_URL ?? "NOT SET");
 const isProduction = process.env.NODE_ENV === "production";
 
 // 1. Define base configurations common to both local and production environments
-// Entities: use class references while running TS (dev). When running compiled
-// JS (production), use glob patterns to load `.js` entity files from `dist`.
 const entityList = isProduction
   ? [__dirname + "/../entities/*.js"]
   : [
@@ -62,12 +60,19 @@ const getConfiguration = (): DataSourceOptions => {
     } as DataSourceOptions;
   }
 
+  const dbPassword = process.env.DB_PASSWORD;
+  if (!dbPassword) {
+    throw new Error(
+      "DB_PASSWORD environment variable is not set. Refusing to start without an explicit database password.",
+    );
+  }
+
   return {
     ...baseOptions,
     host: process.env.DB_HOST || "localhost",
     port: parseInt(process.env.DB_PORT || "5432"),
     username: process.env.DB_USERNAME || "postgres",
-    password: process.env.DB_PASSWORD || "pujan12",
+    password: dbPassword,
     database: process.env.DB_DATABASE || "ems",
   };
 };
