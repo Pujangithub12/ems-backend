@@ -44,7 +44,6 @@ class AnnouncementController {
                 targetEmails: targetType === "specific" ? recipientEmails : []
             });
             await announcementRepository.save(newAnnouncement);
-            // Send emails (in background, don't block response)
             (0, emailService_1.sendEmail)(recipientEmails, subject, message).catch(err => {
                 console.error("Failed to send announcement emails:", err);
             });

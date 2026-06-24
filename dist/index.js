@@ -13,6 +13,14 @@ const routes_1 = __importDefault(require("./routes"));
 const User_1 = require("./entities/User");
 const bcrypt_1 = __importDefault(require("bcrypt"));
 dotenv_1.default.config();
+console.log("RESEND_API_KEY present?", !!process.env.RESEND_API_KEY);
+console.log("RESEND_FROM_EMAIL:", process.env.RESEND_FROM_EMAIL);
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
 app.use((0, cors_1.default)({
@@ -25,6 +33,11 @@ app.use((0, cors_1.default)({
 }));
 app.use((0, cookie_parser_1.default)());
 app.use(express_1.default.json());
+// Log all incoming requests for debugging
+app.use((req, res, next) => {
+    console.log(`[REQUEST] ${req.method} ${req.url}`);
+    next();
+});
 // Serve static files from uploads directory
 app.use("/uploads", express_1.default.static(path_1.default.join(__dirname, "../uploads")));
 app.use("/api", routes_1.default);

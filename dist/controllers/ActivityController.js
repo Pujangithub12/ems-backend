@@ -4,8 +4,6 @@ exports.ActivityController = void 0;
 const data_source_1 = require("../config/data-source");
 const Activity_1 = require("../entities/Activity");
 class ActivityController {
-    // Get all activities (admin can see all, users see their own or related to tasks they're assigned to?)
-    // For now, let's fetch all and handle filtering later
     static getAllActivities = async (req, res) => {
         try {
             const activityRepository = data_source_1.AppDataSource.getRepository(Activity_1.Activity);

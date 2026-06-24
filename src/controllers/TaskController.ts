@@ -11,6 +11,7 @@ import { In } from "typeorm";
 import { AuthRequest } from "../middlewares/auth";
 import { ActivityController } from "./ActivityController";
 import { ActivityType } from "../entities/Activity";
+import { sendEmail } from "../utils/emailService";
 
 // Helper to build subtask tree from flat list (Bypasses TypeORM relation depth limits)
 const buildSubTaskTree = (subTasks: any[]): any[] => {
@@ -195,6 +196,58 @@ export class TaskController {
 
       const newTask = taskRepository.create(taskPayload);
       await taskRepository.save(newTask);
+
+      // Send email notifications to assigned users
+      console.log(
+        "[Task Create] Checking assigned users:",
+        assignedUsers.length,
+      );
+      if (assignedUsers.length > 0) {
+        const recipientEmails = assignedUsers
+          .map((u) => u.email)
+          .filter((email) => email);
+        console.log("[Task Create] Recipient emails:", recipientEmails);
+        console.log(
+          "[Task Create] RESEND_API_KEY present?",
+          !!process.env.RESEND_API_KEY,
+        );
+        console.log(
+          "[Task Create] RESEND_FROM_EMAIL:",
+          process.env.RESEND_FROM_EMAIL,
+        );
+        const emailSubject = `New Task Assigned: ${title}`;
+        const emailText = `
+Hello,
+
+You have been assigned a new task!
+
+Task Details:
+- Title: ${title}
+- Priority: ${priority}
+- Due Date: ${new Date(dueDate).toLocaleDateString()}
+${description ? `- Description: ${description}` : ""}
+${projectName ? `- Project: ${projectName}` : ""}
+
+Please log in to view and complete the task.
+
+Best regards,
+EMS Management
+        `.trim();
+
+        console.log("[Task Create] Calling sendEmail...");
+        sendEmail(recipientEmails, emailSubject, emailText)
+          .then((success) => {
+            console.log("[Task Create] sendEmail returned success:", success);
+          })
+          .catch((err) => {
+            console.error(
+              "[Task Create] Failed to send task assignment emails:",
+              err,
+            );
+          });
+      } else {
+        console.log("[Task Create] No assigned users, skipping emails");
+      }
 
       // Handle subTasks (supports nested)
       if (subTasks) {
@@ -1170,4 +1223,3 @@ export class TaskController {
     }
   };
 }
-

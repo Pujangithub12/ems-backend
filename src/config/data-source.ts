@@ -21,7 +21,6 @@ console.log("DATABASE_URL:", process.env.DATABASE_URL ?? "NOT SET");
 
 const isProduction = process.env.NODE_ENV === "production";
 
-
 const entityList = isProduction
   ? [__dirname + "/../entities/*.js"]
   : [
@@ -50,10 +49,8 @@ const baseOptions: DataSourceOptions = {
   subscribers: [],
 };
 
-
 const getConfiguration = (): DataSourceOptions => {
   if (process.env.DATABASE_URL) {
-    
     return {
       ...baseOptions,
       url: process.env.DATABASE_URL!,
@@ -61,18 +58,13 @@ const getConfiguration = (): DataSourceOptions => {
   }
 
   const dbPassword = process.env.DB_PASSWORD;
-  if (!dbPassword) {
-    throw new Error(
-      "DB_PASSWORD environment variable is not set. Refusing to start without an explicit database password.",
-    );
-  }
 
   return {
     ...baseOptions,
     host: process.env.DB_HOST || "localhost",
     port: parseInt(process.env.DB_PORT || "5432"),
     username: process.env.DB_USERNAME || "postgres",
-    password: dbPassword,
+    password: dbPassword || "",
     database: process.env.DB_DATABASE || "ems",
   };
 };
