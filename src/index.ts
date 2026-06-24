@@ -10,6 +10,16 @@ import bcrypt from "bcrypt";
 
 dotenv.config();
 
+console.log("RESEND_API_KEY present?", !!process.env.RESEND_API_KEY);
+console.log("RESEND_FROM_EMAIL:", process.env.RESEND_FROM_EMAIL);
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 

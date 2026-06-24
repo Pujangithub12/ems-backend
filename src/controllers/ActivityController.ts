@@ -4,8 +4,7 @@ import { Activity, ActivityType } from "../entities/Activity";
 import { AuthRequest } from "../middlewares/auth";
 
 export class ActivityController {
-  // Get all activities (admin can see all, users see their own or related to tasks they're assigned to?)
-  // For now, let's fetch all and handle filtering later
+  
   static getAllActivities = async (req: AuthRequest, res: Response) => {
     try {
       const activityRepository = AppDataSource.getRepository(Activity);

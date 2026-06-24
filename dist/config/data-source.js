@@ -24,9 +24,6 @@ dotenv_1.default.config();
 console.log("NODE_ENV:", process.env.NODE_ENV);
 console.log("DATABASE_URL:", process.env.DATABASE_URL ?? "NOT SET");
 const isProduction = process.env.NODE_ENV === "production";
-// 1. Define base configurations common to both local and production environments
-// Entities: use class references while running TS (dev). When running compiled
-// JS (production), use glob patterns to load `.js` entity files from `dist`.
 const entityList = isProduction
     ? [__dirname + "/../entities/*.js"]
     : [
@@ -53,21 +50,20 @@ const baseOptions = {
     migrations: [],
     subscribers: [],
 };
-// 2. Build the exact options block dynamically to appease exactOptionalPropertyTypes
 const getConfiguration = () => {
     if (process.env.DATABASE_URL) {
-        // non-null assertion is safe because of the if-check above
         return {
             ...baseOptions,
             url: process.env.DATABASE_URL,
         };
     }
+    const dbPassword = process.env.DB_PASSWORD;
     return {
         ...baseOptions,
         host: process.env.DB_HOST || "localhost",
         port: parseInt(process.env.DB_PORT || "5432"),
         username: process.env.DB_USERNAME || "postgres",
-        password: process.env.DB_PASSWORD || "pujan12",
+        password: dbPassword || "",
         database: process.env.DB_DATABASE || "ems",
     };
 };

@@ -13,7 +13,7 @@ dotenv_1.default.config();
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
 class AuthController {
     static login = async (req, res) => {
-        const { email, password } = req.body;
+        const { email, password, role } = req.body;
         if (!email || !password) {
             return res
                 .status(400)
@@ -28,6 +28,16 @@ class AuthController {
             const isPasswordValid = await bcrypt_1.default.compare(password, user.password);
             if (!isPasswordValid) {
                 return res.status(401).json({ message: "Invalid email or password" });
+            }
+            // FIX 1: Validate that the user is logging in through the correct portal.
+            // If the frontend sends role: "admin" but the user's DB role is "user",
+            // reject the login instead of silently issuing a token for the wrong role.
+            if (role && role !== user.role) {
+                return res.status(403).json({
+                    message: role === "admin"
+                        ? "Access denied. This account does not have admin privileges."
+                        : "Please use the admin portal to sign in.",
+                });
             }
             const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role }, JWT_SECRET, {
                 expiresIn: "30d",
