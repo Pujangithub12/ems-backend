@@ -28,7 +28,7 @@ __decorate([
     __metadata("design:type", Number)
 ], LeaveRequest.prototype, "id", void 0);
 __decorate([
-    (0, typeorm_1.ManyToOne)(() => User_1.User, { eager: true }),
+    (0, typeorm_1.ManyToOne)(() => User_1.User, { eager: true, onDelete: "CASCADE" }),
     __metadata("design:type", User_1.User)
 ], LeaveRequest.prototype, "user", void 0);
 __decorate([

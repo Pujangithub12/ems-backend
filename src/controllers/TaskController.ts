@@ -179,6 +179,8 @@ export class TaskController {
 
       const filePaths = files ? files.map((file) => file.path) : [];
 
+      const user = await userRepository.findOneBy({ id: req.user!.id });
+
       const taskPayload: Partial<Task> = {
         companyName,
         title,
@@ -190,6 +192,7 @@ export class TaskController {
         files: filePaths,
         progress: progress ? parseInt(progress) : 0,
         projectName: projectName || null,
+        createdBy: user!,
       };
 
       if (project) taskPayload.project = project;
@@ -215,12 +218,22 @@ export class TaskController {
           "[Task Create] RESEND_FROM_EMAIL:",
           process.env.RESEND_FROM_EMAIL,
         );
+        const assignedBy = user?.fullName || "EMS Administrator";
         const emailSubject = `New Task Assigned: ${title}`;
+        const priorityColors = {
+          LOW: "#10b981",
+          MEDIUM: "#f59e0b",
+          HIGH: "#ef4444",
+          URGENT: "#dc2626",
+        };
+        const priorityColor =
+          priorityColors[priority as keyof typeof priorityColors] || "#6366f1";
         const emailText = `
 Hello,
 
 You have been assigned a new task!
 
+Assigned By: ${assignedBy}
 Task Details:
 - Title: ${title}
 - Priority: ${priority}
@@ -234,8 +247,134 @@ Best regards,
 EMS Management
         `.trim();
 
+        const emailHtml = `
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>New Task Assigned</title>
+          </head>
+          <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc;">
+            <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f8fafc; padding: 40px 0;">
+              <tr>
+                <td align="center">
+                  <table role="presentation" style="width: 100%; max-width: 600px; background-color: #ffffff; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); overflow: hidden;">
+                    <!-- Header -->
+                    <tr>
+                      <td style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); padding: 32px 40px;">
+                        <h1 style="color: #ffffff; font-size: 24px; font-weight: 700; margin: 0;">New Task Assigned</h1>
+                        <p style="color: #c7d2fe; font-size: 14px; margin: 8px 0 0 0;">You have a new task waiting for you!</p>
+                      </td>
+                    </tr>
+                    
+                    <!-- Content -->
+                    <tr>
+                      <td style="padding: 40px;">
+                        <!-- Assigned By -->
+                        <table role="presentation" style="width: 100%; margin-bottom: 24px;">
+                          <tr>
+                            <td style="vertical-align: top; width: 48px;">
+                              <div style="width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); display: flex; align-items: center; justify-content: center; color: #ffffff; font-size: 18px; font-weight: 700;">
+                                ${assignedBy.charAt(0).toUpperCase()}
+                              </div>
+                            </td>
+                            <td style="padding-left: 16px;">
+                              <p style="color: #64748b; font-size: 13px; margin: 0 0 4px 0;">Assigned By</p>
+                              <p style="color: #1e293b; font-size: 16px; font-weight: 600; margin: 0;">${assignedBy}</p>
+                            </td>
+                          </tr>
+                        </table>
+
+                        <!-- Task Details Card -->
+                        <table role="presentation" style="width: 100%; background-color: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0; padding: 24px; margin-bottom: 24px;">
+                          <tr>
+                            <td style="padding-bottom: 16px;">
+                              <p style="color: #64748b; font-size: 13px; margin: 0 0 4px 0;">Task Title</p>
+                              <p style="color: #1e293b; font-size: 18px; font-weight: 700; margin: 0;">${title}</p>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 12px 0; border-top: 1px solid #e2e8f0;">
+                              <table role="presentation" style="width: 100%;">
+                                <tr>
+                                  <td style="width: 50%; padding-right: 12px;">
+                                    <p style="color: #64748b; font-size: 12px; margin: 0 0 4px 0;">Priority</p>
+                                    <span style="display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; color: #ffffff; background-color: ${priorityColor};">
+                                      ${priority}
+                                    </span>
+                                  </td>
+                                  <td style="width: 50%; padding-left: 12px;">
+                                    <p style="color: #64748b; font-size: 12px; margin: 0 0 4px 0;">Due Date</p>
+                                    <p style="color: #1e293b; font-size: 14px; font-weight: 600; margin: 0;">${new Date(dueDate).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                          ${
+                            description
+                              ? `
+                          <tr>
+                            <td style="padding-top: 12px; border-top: 1px solid #e2e8f0;">
+                              <p style="color: #64748b; font-size: 12px; margin: 0 0 4px 0;">Description</p>
+                              <p style="color: #475569; font-size: 14px; line-height: 1.6; margin: 0;">${description}</p>
+                            </td>
+                          </tr>
+                          `
+                              : ""
+                          }
+                          ${
+                            projectName
+                              ? `
+                          <tr>
+                            <td style="padding-top: 12px; border-top: 1px solid #e2e8f0;">
+                              <p style="color: #64748b; font-size: 12px; margin: 0 0 4px 0;">Project</p>
+                              <p style="color: #1e293b; font-size: 14px; font-weight: 600; margin: 0;">${projectName}</p>
+                            </td>
+                          </tr>
+                          `
+                              : ""
+                          }
+                        </table>
+
+                        <!-- CTA Button -->
+                        <table role="presentation" style="width: 100%; margin-bottom: 24px;">
+                          <tr>
+                            <td align="center">
+                              <a href="#" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: #ffffff; font-size: 15px; font-weight: 600; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">
+                                View Task in Dashboard
+                              </a>
+                            </td>
+                          </tr>
+                        </table>
+
+                        <!-- Footer Text -->
+                        <p style="color: #64748b; font-size: 13px; line-height: 1.6; margin: 0;">
+                          Please log in to your EMS account to view and complete the task. If you have any questions, contact your administrator.
+                        </p>
+                      </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                      <td style="background-color: #f1f5f9; padding: 24px 40px;">
+                        <p style="color: #94a3b8; font-size: 12px; margin: 0; text-align: center;">
+                          © ${new Date().getFullYear()} EMS Management. All rights reserved.<br>
+                          This email was sent automatically. Please do not reply.
+                        </p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+          </html>
+        `;
+
         console.log("[Task Create] Calling sendEmail...");
-        sendEmail(recipientEmails, emailSubject, emailText)
+        sendEmail(recipientEmails, emailSubject, emailText, emailHtml)
           .then((success) => {
             console.log("[Task Create] sendEmail returned success:", success);
           })
@@ -300,12 +439,21 @@ EMS Management
       const subTaskRepository = AppDataSource.getRepository(SubTask);
       let tasks;
 
-      if (req.user?.role === "admin") {
+      if (req.user?.role === "super_admin") {
+        // Super admin can see all tasks
         tasks = await taskRepository.find({
           relations: ["assignedUsers", "project", "comments"],
           order: { createdAt: "DESC" },
         });
+      } else if (req.user?.role === "admin") {
+        // Regular admin only sees tasks they created
+        tasks = await taskRepository.find({
+          relations: ["assignedUsers", "project", "comments"],
+          where: { createdBy: { id: req.user?.id } },
+          order: { createdAt: "DESC" },
+        });
       } else {
+        // Regular user sees tasks assigned to them
         tasks = await taskRepository
           .createQueryBuilder("task")
           .leftJoinAndSelect("task.assignedUsers", "user")
@@ -367,7 +515,11 @@ EMS Management
       const userId = req.user?.id;
       const isAssigned = task.assignedUsers.some((user) => user.id === userId);
 
-      if (!isAssigned && req.user?.role !== "admin") {
+      if (
+        !isAssigned &&
+        req.user?.role !== "admin" &&
+        req.user?.role !== "super_admin"
+      ) {
         return res
           .status(403)
           .json({ message: "Forbidden: You are not assigned to this task." });
@@ -395,7 +547,7 @@ EMS Management
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      if (req.user?.role !== "admin") {
+      if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
         const assignedToUser = task.assignedUsers.some(
           (user) => user.id === req.user?.id,
         );
@@ -648,7 +800,11 @@ EMS Management
 
       const userId = req.user?.id;
       const isAssigned = task.assignedUsers.some((user) => user.id === userId);
-      if (!isAssigned && req.user?.role !== "admin")
+      if (
+        !isAssigned &&
+        req.user?.role !== "admin" &&
+        req.user?.role !== "super_admin"
+      )
         return res.status(403).json({ message: "Forbidden" });
 
       task.status = normalized as TaskStatus;
@@ -681,7 +837,7 @@ EMS Management
       });
 
       let tasksToReturn = projectTasks;
-      if (req.user?.role !== "admin") {
+      if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
         tasksToReturn = projectTasks.filter((task) =>
           task.assignedUsers.some((user) => user.id === req.user?.id),
         );
@@ -738,7 +894,11 @@ EMS Management
       const userId = req.user?.id;
       const isAssigned = task.assignedUsers.some((user) => user.id === userId);
 
-      if (!isAssigned && req.user?.role !== "admin") {
+      if (
+        !isAssigned &&
+        req.user?.role !== "admin" &&
+        req.user?.role !== "super_admin"
+      ) {
         return res
           .status(403)
           .json({ message: "Forbidden: You are not assigned to this task." });
@@ -788,6 +948,7 @@ EMS Management
 
     try {
       const subTaskRepository = AppDataSource.getRepository(SubTask);
+      const userRepository = AppDataSource.getRepository(User);
       const subTask = await subTaskRepository.findOne({
         where: { id: parseInt(subtaskId as string) },
         relations: ["task"],
@@ -796,6 +957,9 @@ EMS Management
       if (!subTask || subTask.task.id !== parseInt(taskId as string)) {
         return res.status(404).json({ message: "Subtask not found" });
       }
+
+      const user = await userRepository.findOneBy({ id: req.user!.id });
+      if (!user) return res.status(404).json({ message: "User not found" });
 
       // Capture old values for history
       const oldTitle = subTask.title;
@@ -816,6 +980,8 @@ EMS Management
         date: new Date().toISOString(),
         title: oldTitle,
         progress: oldProgress,
+        authorId: user.id,
+        authorName: user.fullName,
       });
 
       // Keep only the last 5 updates to prevent database bloat
@@ -927,7 +1093,11 @@ EMS Management
       const isAssigned = task.assignedUsers.some(
         (assigned) => assigned.id === user.id,
       );
-      if (!isAssigned && req.user?.role !== "admin")
+      if (
+        !isAssigned &&
+        req.user?.role !== "admin" &&
+        req.user?.role !== "super_admin"
+      )
         return res.status(403).json({ message: "Forbidden" });
 
       const comment = commentRepository.create({
@@ -955,7 +1125,7 @@ EMS Management
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      if (req.user?.role !== "admin") {
+      if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
         const isAssigned = task.assignedUsers.some(
           (assigned) => assigned.id === req.user?.id,
         );
@@ -1005,7 +1175,8 @@ EMS Management
   static getDashboard = async (req: AuthRequest, res: Response) => {
     try {
       const taskRepository = AppDataSource.getRepository(Task);
-      const isAdmin = req.user?.role === "admin";
+      const isAdmin =
+        req.user?.role === "admin" || req.user?.role === "super_admin";
       const userId = req.user?.id;
 
       if (isAdmin) {
@@ -1124,7 +1295,11 @@ EMS Management
       const isAssigned = task.assignedUsers.some(
         (assigned) => assigned.id === user.id,
       );
-      if (!isAssigned && req.user?.role !== "admin")
+      if (
+        !isAssigned &&
+        req.user?.role !== "admin" &&
+        req.user?.role !== "super_admin"
+      )
         return res.status(403).json({ message: "Forbidden" });
 
       const comment = commentRepository.create({
@@ -1167,7 +1342,7 @@ EMS Management
       if (!subTask)
         return res.status(404).json({ message: "Subtask not found" });
 
-      if (req.user?.role !== "admin") {
+      if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
         const isAssigned = task.assignedUsers.some(
           (assigned) => assigned.id === req.user?.id,
         );
@@ -1208,10 +1383,8 @@ EMS Management
         return res.status(404).json({ message: "Comment not found" });
       }
 
-      const isAssigned = comment.subTask.task.assignedUsers.some(
-        (assigned) => assigned.id === req.user?.id,
-      );
-      if (!isAssigned && req.user?.role !== "admin")
+      // Only allow admin/super_admin to add feedback
+      if (req.user?.role !== "admin" && req.user?.role !== "super_admin")
         return res.status(403).json({ message: "Forbidden" });
 
       comment.feedback = feedback;

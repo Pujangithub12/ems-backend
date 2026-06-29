@@ -19,7 +19,7 @@ export class SubTaskComment {
   @Column("text", { nullable: true })
   feedback?: string;
 
-  @ManyToOne(() => User, { eager: true })
+  @ManyToOne(() => User, { eager: true, onDelete: "CASCADE" })
   author!: User;
 
   @ManyToOne(() => SubTask, (subTask) => subTask.comments, { onDelete: "CASCADE" })

@@ -28,6 +28,19 @@ class UserController {
                     .status(400)
                     .json({ message: "User with this email already exists" });
             }
+            // Enforce role creation rules
+            const currentUserRole = req.user?.role;
+            let finalRole = role || User_1.UserRole.USER;
+            if (currentUserRole === User_1.UserRole.ADMIN) {
+                // Admin can only create users
+                finalRole = User_1.UserRole.USER;
+            }
+            else if (currentUserRole !== User_1.UserRole.SUPER_ADMIN) {
+                // Users can't create anyone
+                return res
+                    .status(403)
+                    .json({ message: "Not authorized to create users" });
+            }
             const hashedPassword = await bcrypt_1.default.hash(password, 10);
             const newUser = userRepository.create({
                 fullName,
@@ -37,7 +50,7 @@ class UserController {
                 address,
                 jobPosition,
                 joinDate: new Date(joinDate),
-                role: role || User_1.UserRole.USER,
+                role: finalRole,
             });
             await userRepository.save(newUser);
             return res.status(201).json({
@@ -122,8 +135,19 @@ class UserController {
                 user.jobPosition = jobPosition;
             if (joinDate)
                 user.joinDate = new Date(joinDate);
-            if (role)
-                user.role = role;
+            // Enforce role update rules
+            const currentUserRole = req.user?.role;
+            if (role) {
+                if (currentUserRole === User_1.UserRole.ADMIN) {
+                    // Admin can only set role to user
+                    user.role = User_1.UserRole.USER;
+                }
+                else if (currentUserRole === User_1.UserRole.SUPER_ADMIN) {
+                    // Super admin can set any role
+                    user.role = role;
+                }
+                // Regular users can't change roles
+            }
             if (password) {
                 user.password = await bcrypt_1.default.hash(password, 10);
             }

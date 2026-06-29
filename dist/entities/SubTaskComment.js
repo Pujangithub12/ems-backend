@@ -35,7 +35,7 @@ __decorate([
     __metadata("design:type", String)
 ], SubTaskComment.prototype, "feedback", void 0);
 __decorate([
-    (0, typeorm_1.ManyToOne)(() => User_1.User, { eager: true }),
+    (0, typeorm_1.ManyToOne)(() => User_1.User, { eager: true, onDelete: "CASCADE" }),
     __metadata("design:type", User_1.User)
 ], SubTaskComment.prototype, "author", void 0);
 __decorate([

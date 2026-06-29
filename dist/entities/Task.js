@@ -33,6 +33,7 @@ let Task = class Task {
     subTasks;
     comments;
     files;
+    createdBy;
     createdAt;
 };
 exports.Task = Task;
@@ -111,6 +112,10 @@ __decorate([
     (0, typeorm_1.Column)("simple-array", { nullable: true }),
     __metadata("design:type", Array)
 ], Task.prototype, "files", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => User_1.User, { nullable: true, onDelete: "SET NULL" }),
+    __metadata("design:type", User_1.User)
+], Task.prototype, "createdBy", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)
