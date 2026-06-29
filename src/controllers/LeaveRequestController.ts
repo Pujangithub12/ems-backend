@@ -47,7 +47,10 @@ export class LeaveRequestController {
     try {
       const lrRepository = AppDataSource.getRepository(LeaveRequest);
 
-      if (req.user?.role === UserRole.ADMIN) {
+      if (
+        req.user?.role === UserRole.ADMIN ||
+        req.user?.role === UserRole.SUPER_ADMIN
+      ) {
         const all = await lrRepository.find({
           order: { createdAt: "DESC" },
           relations: ["user"],
@@ -89,7 +92,10 @@ export class LeaveRequestController {
     }
 
     try {
-      if (req.user?.role !== UserRole.ADMIN) {
+      if (
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN
+      ) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -123,7 +129,11 @@ export class LeaveRequestController {
       if (!lr)
         return res.status(404).json({ message: "Leave request not found" });
 
-      if (req.user?.role !== UserRole.ADMIN && lr.user.id !== req.user?.id) {
+      if (
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN &&
+        lr.user.id !== req.user?.id
+      ) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -146,7 +156,11 @@ export class LeaveRequestController {
       if (!lr)
         return res.status(404).json({ message: "Leave request not found" });
 
-      if (req.user?.role !== UserRole.ADMIN && lr.user.id !== req.user?.id) {
+      if (
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN &&
+        lr.user.id !== req.user?.id
+      ) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -167,7 +181,10 @@ export class LeaveRequestController {
   static deleteLeaveRequest = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      if (req.user?.role !== UserRole.ADMIN) {
+      if (
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN
+      ) {
         return res.status(403).json({ message: "Forbidden" });
       }
 

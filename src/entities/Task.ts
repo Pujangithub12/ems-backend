@@ -77,6 +77,9 @@ export class Task {
   @Column("simple-array", { nullable: true })
   files!: string[];
 
+  @ManyToOne(() => User, { nullable: true, onDelete: "SET NULL" })
+  createdBy?: User;
+
   @CreateDateColumn()
   createdAt!: Date;
 }

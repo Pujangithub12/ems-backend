@@ -33,11 +33,14 @@ class AuthController {
             // If the frontend sends role: "admin" but the user's DB role is "user",
             // reject the login instead of silently issuing a token for the wrong role.
             if (role && role !== user.role) {
-                return res.status(403).json({
-                    message: role === "admin"
-                        ? "Access denied. This account does not have admin privileges."
-                        : "Please use the admin portal to sign in.",
-                });
+                // Allow super_admin to log in via admin portal too
+                if (!(role === "admin" && user.role === "super_admin")) {
+                    return res.status(403).json({
+                        message: role === "admin" || role === "super_admin"
+                            ? "Access denied. This account does not have admin privileges."
+                            : "Please use the admin portal to sign in.",
+                    });
+                }
             }
             const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role }, JWT_SECRET, {
                 expiresIn: "30d",

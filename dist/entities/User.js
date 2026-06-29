@@ -13,6 +13,7 @@ exports.User = exports.UserRole = void 0;
 const typeorm_1 = require("typeorm");
 var UserRole;
 (function (UserRole) {
+    UserRole["SUPER_ADMIN"] = "super_admin";
     UserRole["ADMIN"] = "admin";
     UserRole["USER"] = "user";
 })(UserRole || (exports.UserRole = UserRole = {}));

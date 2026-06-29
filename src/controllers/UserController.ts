@@ -4,7 +4,7 @@ import { User, UserRole } from "../entities/User";
 import bcrypt from "bcrypt";
 
 export class UserController {
-  static addUser = async (req: Request, res: Response) => {
+  static addUser = async (req: any, res: Response) => {
     const {
       fullName,
       email,
@@ -39,6 +39,20 @@ export class UserController {
           .json({ message: "User with this email already exists" });
       }
 
+      // Enforce role creation rules
+      const currentUserRole = req.user?.role;
+      let finalRole = role || UserRole.USER;
+
+      if (currentUserRole === UserRole.ADMIN) {
+        // Admin can only create users
+        finalRole = UserRole.USER;
+      } else if (currentUserRole !== UserRole.SUPER_ADMIN) {
+        // Users can't create anyone
+        return res
+          .status(403)
+          .json({ message: "Not authorized to create users" });
+      }
+
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const newUser = userRepository.create({
@@ -49,7 +63,7 @@ export class UserController {
         address,
         jobPosition,
         joinDate: new Date(joinDate),
-        role: role || UserRole.USER,
+        role: finalRole,
       });
 
       await userRepository.save(newUser);
@@ -115,7 +129,7 @@ export class UserController {
     }
   };
 
-  static updateUser = async (req: Request, res: Response) => {
+  static updateUser = async (req: any, res: Response) => {
     const { id } = req.params;
     const {
       fullName,
@@ -148,7 +162,20 @@ export class UserController {
       if (address) user.address = address;
       if (jobPosition) user.jobPosition = jobPosition;
       if (joinDate) user.joinDate = new Date(joinDate);
-      if (role) user.role = role;
+
+      // Enforce role update rules
+      const currentUserRole = req.user?.role;
+      if (role) {
+        if (currentUserRole === UserRole.ADMIN) {
+          // Admin can only set role to user
+          user.role = UserRole.USER;
+        } else if (currentUserRole === UserRole.SUPER_ADMIN) {
+          // Super admin can set any role
+          user.role = role;
+        }
+        // Regular users can't change roles
+      }
+
       if (password) {
         user.password = await bcrypt.hash(password, 10);
       }

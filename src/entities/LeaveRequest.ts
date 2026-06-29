@@ -12,7 +12,7 @@ export class LeaveRequest {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @ManyToOne(() => User, { eager: true })
+  @ManyToOne(() => User, { eager: true, onDelete: "CASCADE" })
   user!: User;
 
   @Column({ default: "Leave Request" })

@@ -16,6 +16,8 @@ export type SubTaskHistoryItem = {
   date: string;
   title: string;
   progress: number;
+  authorId: number;
+  authorName: string;
 };
 
 @Entity()

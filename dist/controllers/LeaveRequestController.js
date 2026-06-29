@@ -41,7 +41,8 @@ class LeaveRequestController {
     static getAllLeaveRequests = async (req, res) => {
         try {
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
-            if (req.user?.role === User_1.UserRole.ADMIN) {
+            if (req.user?.role === User_1.UserRole.ADMIN ||
+                req.user?.role === User_1.UserRole.SUPER_ADMIN) {
                 const all = await lrRepository.find({
                     order: { createdAt: "DESC" },
                     relations: ["user"],
@@ -75,7 +76,8 @@ class LeaveRequestController {
             return res.status(400).json({ message: "Invalid status" });
         }
         try {
-            if (req.user?.role !== User_1.UserRole.ADMIN) {
+            if (req.user?.role !== User_1.UserRole.ADMIN &&
+                req.user?.role !== User_1.UserRole.SUPER_ADMIN) {
                 return res.status(403).json({ message: "Forbidden" });
             }
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
@@ -103,7 +105,9 @@ class LeaveRequestController {
             });
             if (!lr)
                 return res.status(404).json({ message: "Leave request not found" });
-            if (req.user?.role !== User_1.UserRole.ADMIN && lr.user.id !== req.user?.id) {
+            if (req.user?.role !== User_1.UserRole.ADMIN &&
+                req.user?.role !== User_1.UserRole.SUPER_ADMIN &&
+                lr.user.id !== req.user?.id) {
                 return res.status(403).json({ message: "Forbidden" });
             }
             return res.status(200).json(lr);
@@ -122,7 +126,9 @@ class LeaveRequestController {
             });
             if (!lr)
                 return res.status(404).json({ message: "Leave request not found" });
-            if (req.user?.role !== User_1.UserRole.ADMIN && lr.user.id !== req.user?.id) {
+            if (req.user?.role !== User_1.UserRole.ADMIN &&
+                req.user?.role !== User_1.UserRole.SUPER_ADMIN &&
+                lr.user.id !== req.user?.id) {
                 return res.status(403).json({ message: "Forbidden" });
             }
             if (startDate)
@@ -143,7 +149,8 @@ class LeaveRequestController {
     static deleteLeaveRequest = async (req, res) => {
         const { id } = req.params;
         try {
-            if (req.user?.role !== User_1.UserRole.ADMIN) {
+            if (req.user?.role !== User_1.UserRole.ADMIN &&
+                req.user?.role !== User_1.UserRole.SUPER_ADMIN) {
                 return res.status(403).json({ message: "Forbidden" });
             }
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
