@@ -16,6 +16,7 @@ const TaskEnums_1 = require("./TaskEnums");
 const ProjectFile_1 = require("./ProjectFile");
 const ProjectHeading_1 = require("./ProjectHeading");
 const Task_1 = require("./Task");
+const Workspace_1 = require("./Workspace");
 let Project = class Project {
     id;
     name;
@@ -27,6 +28,7 @@ let Project = class Project {
     projectTasks;
     headings;
     files;
+    workspace;
     createdAt;
 };
 exports.Project = Project;
@@ -77,6 +79,13 @@ __decorate([
     (0, typeorm_1.OneToMany)(() => ProjectFile_1.ProjectFile, (file) => file.project),
     __metadata("design:type", Array)
 ], Project.prototype, "files", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => Workspace_1.Workspace, (workspace) => workspace.projects, {
+        onDelete: "CASCADE",
+        nullable: true,
+    }),
+    __metadata("design:type", Workspace_1.Workspace)
+], Project.prototype, "workspace", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

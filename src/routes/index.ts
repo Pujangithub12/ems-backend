@@ -8,6 +8,7 @@ import { MyTaskController } from "../controllers/MyTaskController";
 import { LeaveRequestController } from "../controllers/LeaveRequestController";
 import { CalendarEventController } from "../controllers/CalendarEventController";
 import { ActivityController } from "../controllers/ActivityController";
+import { WorkspaceController } from "../controllers/WorkspaceController";
 import { authMiddleware, roleMiddleware } from "../middlewares/auth";
 import { upload } from "../middlewares/upload";
 import { UserRole } from "../entities/User";
@@ -21,6 +22,16 @@ router.get("/me", authMiddleware, AuthController.getMe);
 router.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
 });
+
+// Workspace routes
+router.get("/workspaces", authMiddleware, WorkspaceController.getAll);
+router.post("/workspaces", authMiddleware, WorkspaceController.create);
+router.post("/workspaces/switch", authMiddleware, WorkspaceController.switch);
+router.get(
+  "/workspaces/current",
+  authMiddleware,
+  WorkspaceController.getCurrent,
+);
 
 // User routes - Admin only for adding and deleting users
 router.post(

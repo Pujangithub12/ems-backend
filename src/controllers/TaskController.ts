@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { AppDataSource } from "../config/data-source";
 import { Task } from "../entities/Task";
-import { TaskPriority, TaskStatus } from "../entities/TaskEnums";
+import { TaskPriority, TaskStatus, UserRole } from "../entities/TaskEnums";
 import { User } from "../entities/User";
 import { Project } from "../entities/Project";
 import { SubTask } from "../entities/SubTask";
@@ -193,6 +193,7 @@ export class TaskController {
         progress: progress ? parseInt(progress) : 0,
         projectName: projectName || null,
         createdBy: user!,
+        workspace: req.workspace!,
       };
 
       if (project) taskPayload.project = project;
@@ -437,29 +438,37 @@ EMS Management
     try {
       const taskRepository = AppDataSource.getRepository(Task);
       const subTaskRepository = AppDataSource.getRepository(SubTask);
+      const workspace = req.workspace!;
       let tasks;
 
-      if (req.user?.role === "super_admin") {
-        // Super admin can see all tasks
+      if (req.user?.role === UserRole.SUPER_ADMIN) {
+        // Super admin can see all tasks in current workspace
         tasks = await taskRepository.find({
           relations: ["assignedUsers", "project", "comments"],
+          where: { workspace: { id: workspace.id } },
           order: { createdAt: "DESC" },
         });
-      } else if (req.user?.role === "admin") {
-        // Regular admin only sees tasks they created
+      } else if (req.user?.role === UserRole.ADMIN) {
+        // Regular admin only sees tasks they created in current workspace
         tasks = await taskRepository.find({
           relations: ["assignedUsers", "project", "comments"],
-          where: { createdBy: { id: req.user?.id } },
+          where: {
+            createdBy: { id: req.user?.id },
+            workspace: { id: workspace.id },
+          },
           order: { createdAt: "DESC" },
         });
       } else {
-        // Regular user sees tasks assigned to them
+        // Regular user sees tasks assigned to them in current workspace
         tasks = await taskRepository
           .createQueryBuilder("task")
           .leftJoinAndSelect("task.assignedUsers", "user")
           .leftJoinAndSelect("task.project", "project")
           .leftJoinAndSelect("task.comments", "comment")
           .where("user.id = :userId", { userId: req.user?.id })
+          .andWhere("task.workspace.id = :workspaceId", {
+            workspaceId: workspace.id,
+          })
           .orderBy("task.createdAt", "DESC")
           .getMany();
       }
@@ -517,8 +526,8 @@ EMS Management
 
       if (
         !isAssigned &&
-        req.user?.role !== "admin" &&
-        req.user?.role !== "super_admin"
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN
       ) {
         return res
           .status(403)
@@ -547,7 +556,10 @@ EMS Management
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
+      if (
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN
+      ) {
         const assignedToUser = task.assignedUsers.some(
           (user) => user.id === req.user?.id,
         );
@@ -802,8 +814,8 @@ EMS Management
       const isAssigned = task.assignedUsers.some((user) => user.id === userId);
       if (
         !isAssigned &&
-        req.user?.role !== "admin" &&
-        req.user?.role !== "super_admin"
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN
       )
         return res.status(403).json({ message: "Forbidden" });
 
@@ -837,7 +849,10 @@ EMS Management
       });
 
       let tasksToReturn = projectTasks;
-      if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
+      if (
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN
+      ) {
         tasksToReturn = projectTasks.filter((task) =>
           task.assignedUsers.some((user) => user.id === req.user?.id),
         );
@@ -896,8 +911,8 @@ EMS Management
 
       if (
         !isAssigned &&
-        req.user?.role !== "admin" &&
-        req.user?.role !== "super_admin"
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN
       ) {
         return res
           .status(403)
@@ -1095,8 +1110,8 @@ EMS Management
       );
       if (
         !isAssigned &&
-        req.user?.role !== "admin" &&
-        req.user?.role !== "super_admin"
+        req.user?.role !== UserRole.ADMIN &&
+        req.user?.role !== UserRole.SUPER_ADMIN
       )
         return res.status(403).json({ message: "Forbidden" });
 

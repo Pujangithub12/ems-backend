@@ -6,12 +6,14 @@ import {
   ManyToMany,
   JoinTable,
   OneToMany,
+  ManyToOne,
 } from "typeorm";
 import { User } from "./User";
 import { TaskPriority, TaskStatus } from "./TaskEnums";
 import { ProjectFile } from "./ProjectFile";
 import { ProjectHeading } from "./ProjectHeading";
 import { Task } from "./Task";
+import { Workspace } from "./Workspace";
 
 @Entity()
 export class Project {
@@ -51,6 +53,12 @@ export class Project {
 
   @OneToMany(() => ProjectFile, (file) => file.project)
   files!: ProjectFile[];
+
+  @ManyToOne(() => Workspace, (workspace) => workspace.projects, {
+    onDelete: "CASCADE",
+    nullable: true,
+  })
+  workspace?: Workspace;
 
   @CreateDateColumn()
   createdAt!: Date;

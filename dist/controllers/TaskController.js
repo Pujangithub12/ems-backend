@@ -153,6 +153,7 @@ class TaskController {
                 progress: progress ? parseInt(progress) : 0,
                 projectName: projectName || null,
                 createdBy: user,
+                workspace: req.workspace,
             };
             if (project)
                 taskPayload.project = project;
@@ -361,30 +362,38 @@ EMS Management
         try {
             const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
             const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
+            const workspace = req.workspace;
             let tasks;
-            if (req.user?.role === "super_admin") {
-                // Super admin can see all tasks
+            if (req.user?.role === TaskEnums_1.UserRole.SUPER_ADMIN) {
+                // Super admin can see all tasks in current workspace
                 tasks = await taskRepository.find({
                     relations: ["assignedUsers", "project", "comments"],
+                    where: { workspace: { id: workspace.id } },
                     order: { createdAt: "DESC" },
                 });
             }
-            else if (req.user?.role === "admin") {
-                // Regular admin only sees tasks they created
+            else if (req.user?.role === TaskEnums_1.UserRole.ADMIN) {
+                // Regular admin only sees tasks they created in current workspace
                 tasks = await taskRepository.find({
                     relations: ["assignedUsers", "project", "comments"],
-                    where: { createdBy: { id: req.user?.id } },
+                    where: {
+                        createdBy: { id: req.user?.id },
+                        workspace: { id: workspace.id },
+                    },
                     order: { createdAt: "DESC" },
                 });
             }
             else {
-                // Regular user sees tasks assigned to them
+                // Regular user sees tasks assigned to them in current workspace
                 tasks = await taskRepository
                     .createQueryBuilder("task")
                     .leftJoinAndSelect("task.assignedUsers", "user")
                     .leftJoinAndSelect("task.project", "project")
                     .leftJoinAndSelect("task.comments", "comment")
                     .where("user.id = :userId", { userId: req.user?.id })
+                    .andWhere("task.workspace.id = :workspaceId", {
+                    workspaceId: workspace.id,
+                })
                     .orderBy("task.createdAt", "DESC")
                     .getMany();
             }
@@ -433,8 +442,8 @@ EMS Management
             const userId = req.user?.id;
             const isAssigned = task.assignedUsers.some((user) => user.id === userId);
             if (!isAssigned &&
-                req.user?.role !== "admin" &&
-                req.user?.role !== "super_admin") {
+                req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
+                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN) {
                 return res
                     .status(403)
                     .json({ message: "Forbidden: You are not assigned to this task." });
@@ -459,7 +468,8 @@ EMS Management
             });
             if (!task)
                 return res.status(404).json({ message: "Task not found" });
-            if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
+            if (req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
+                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN) {
                 const assignedToUser = task.assignedUsers.some((user) => user.id === req.user?.id);
                 if (!assignedToUser)
                     return res.status(403).json({ message: "Forbidden" });
@@ -657,8 +667,8 @@ EMS Management
             const userId = req.user?.id;
             const isAssigned = task.assignedUsers.some((user) => user.id === userId);
             if (!isAssigned &&
-                req.user?.role !== "admin" &&
-                req.user?.role !== "super_admin")
+                req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
+                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN)
                 return res.status(403).json({ message: "Forbidden" });
             task.status = normalized;
             await taskRepository.save(task);
@@ -682,7 +692,8 @@ EMS Management
                 order: { createdAt: "DESC" },
             });
             let tasksToReturn = projectTasks;
-            if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
+            if (req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
+                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN) {
                 tasksToReturn = projectTasks.filter((task) => task.assignedUsers.some((user) => user.id === req.user?.id));
             }
             if (tasksToReturn.length > 0) {
@@ -729,8 +740,8 @@ EMS Management
             const userId = req.user?.id;
             const isAssigned = task.assignedUsers.some((user) => user.id === userId);
             if (!isAssigned &&
-                req.user?.role !== "admin" &&
-                req.user?.role !== "super_admin") {
+                req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
+                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN) {
                 return res
                     .status(403)
                     .json({ message: "Forbidden: You are not assigned to this task." });
@@ -773,6 +784,7 @@ EMS Management
         });
         try {
             const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
+            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
             const subTask = await subTaskRepository.findOne({
                 where: { id: parseInt(subtaskId) },
                 relations: ["task"],
@@ -780,6 +792,9 @@ EMS Management
             if (!subTask || subTask.task.id !== parseInt(taskId)) {
                 return res.status(404).json({ message: "Subtask not found" });
             }
+            const user = await userRepository.findOneBy({ id: req.user.id });
+            if (!user)
+                return res.status(404).json({ message: "User not found" });
             // Capture old values for history
             const oldTitle = subTask.title;
             const oldProgress = subTask.progress ?? 0;
@@ -798,6 +813,8 @@ EMS Management
                 date: new Date().toISOString(),
                 title: oldTitle,
                 progress: oldProgress,
+                authorId: user.id,
+                authorName: user.fullName,
             });
             // Keep only the last 5 updates to prevent database bloat
             subTask.history = history.slice(0, 5);
@@ -886,8 +903,8 @@ EMS Management
                 return res.status(404).json({ message: "User not found" });
             const isAssigned = task.assignedUsers.some((assigned) => assigned.id === user.id);
             if (!isAssigned &&
-                req.user?.role !== "admin" &&
-                req.user?.role !== "super_admin")
+                req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
+                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN)
                 return res.status(403).json({ message: "Forbidden" });
             const comment = commentRepository.create({
                 commentText,
@@ -1129,10 +1146,8 @@ EMS Management
                 comment.subTask.task.id !== parseInt(taskId)) {
                 return res.status(404).json({ message: "Comment not found" });
             }
-            const isAssigned = comment.subTask.task.assignedUsers.some((assigned) => assigned.id === req.user?.id);
-            if (!isAssigned &&
-                req.user?.role !== "admin" &&
-                req.user?.role !== "super_admin")
+            // Only allow admin/super_admin to add feedback
+            if (req.user?.role !== "admin" && req.user?.role !== "super_admin")
                 return res.status(403).json({ message: "Forbidden" });
             comment.feedback = feedback;
             await commentRepository.save(comment);

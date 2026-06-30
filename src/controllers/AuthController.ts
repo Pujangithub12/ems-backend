@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { AppDataSource } from "../config/data-source";
-import { User } from "../entities/User";
+import { User, UserRole } from "../entities/User";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
@@ -37,10 +37,10 @@ export class AuthController {
       // reject the login instead of silently issuing a token for the wrong role.
       if (role && role !== user.role) {
         // Allow super_admin to log in via admin portal too
-        if (!(role === "admin" && user.role === "super_admin")) {
+        if (!(role === UserRole.ADMIN && user.role === UserRole.SUPER_ADMIN)) {
           return res.status(403).json({
             message:
-              role === "admin" || role === "super_admin"
+              role === UserRole.ADMIN || role === UserRole.SUPER_ADMIN
                 ? "Access denied. This account does not have admin privileges."
                 : "Please use the admin portal to sign in.",
           });
@@ -105,4 +105,3 @@ export class AuthController {
     }
   };
 }
-

@@ -36,12 +36,14 @@ class AnnouncementController {
             if (recipientEmails.length === 0) {
                 return res.status(400).json({ message: "No recipients found" });
             }
+            const workspace = req.workspace;
             // Save to history
             const newAnnouncement = announcementRepository.create({
                 subject,
                 message,
                 targetType,
-                targetEmails: targetType === "specific" ? recipientEmails : []
+                targetEmails: targetType === "specific" ? recipientEmails : [],
+                workspace
             });
             await announcementRepository.save(newAnnouncement);
             (0, emailService_1.sendEmail)(recipientEmails, subject, message).catch(err => {
@@ -59,7 +61,9 @@ class AnnouncementController {
     static getHistory = async (req, res) => {
         try {
             const announcementRepository = data_source_1.AppDataSource.getRepository(Announcement_1.Announcement);
+            const workspace = req.workspace;
             const history = await announcementRepository.find({
+                where: { workspace: { id: workspace.id } },
                 order: { createdAt: "DESC" }
             });
             return res.status(200).json(history);
@@ -76,9 +80,13 @@ class AnnouncementController {
         }
         try {
             const announcementRepository = data_source_1.AppDataSource.getRepository(Announcement_1.Announcement);
+            const workspace = req.workspace;
             // Cast id to string for parseInt
             const announcement = await announcementRepository.findOne({
-                where: { id: parseInt(id) },
+                where: {
+                    id: parseInt(id),
+                    workspace: { id: workspace.id }
+                },
             });
             if (!announcement) {
                 return res.status(404).json({ message: "Announcement not found" });

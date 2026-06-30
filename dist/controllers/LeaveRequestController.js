@@ -16,6 +16,7 @@ class LeaveRequestController {
             const userId = req.user?.id;
             const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
+            const workspace = req.workspace;
             const user = await userRepository.findOne({
                 where: { id: userId },
             });
@@ -28,6 +29,7 @@ class LeaveRequestController {
                 endDate: new Date(endDate),
                 reason,
                 status: "pending",
+                workspace
             });
             await lrRepository.save(newRequest);
             return res
@@ -41,9 +43,11 @@ class LeaveRequestController {
     static getAllLeaveRequests = async (req, res) => {
         try {
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
+            const workspace = req.workspace;
             if (req.user?.role === User_1.UserRole.ADMIN ||
                 req.user?.role === User_1.UserRole.SUPER_ADMIN) {
                 const all = await lrRepository.find({
+                    where: { workspace: { id: workspace.id } },
                     order: { createdAt: "DESC" },
                     relations: ["user"],
                 });
@@ -53,6 +57,7 @@ class LeaveRequestController {
                         where: {
                             user: { id: lr.user.id },
                             status: "approved",
+                            workspace: { id: workspace.id }
                         },
                     });
                     return { ...lr, historyCount };
@@ -60,7 +65,10 @@ class LeaveRequestController {
                 return res.status(200).json(requestsWithHistory);
             }
             const mine = await lrRepository.find({
-                where: { user: { id: req.user?.id } },
+                where: {
+                    user: { id: req.user?.id },
+                    workspace: { id: workspace.id }
+                },
                 order: { createdAt: "DESC" },
             });
             return res.status(200).json(mine);
@@ -81,8 +89,12 @@ class LeaveRequestController {
                 return res.status(403).json({ message: "Forbidden" });
             }
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
+            const workspace = req.workspace;
             const lr = await lrRepository.findOne({
-                where: { id: parseInt(id) },
+                where: {
+                    id: parseInt(id),
+                    workspace: { id: workspace.id }
+                },
             });
             if (!lr)
                 return res.status(404).json({ message: "Leave request not found" });
@@ -100,8 +112,12 @@ class LeaveRequestController {
         const { id } = req.params;
         try {
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
+            const workspace = req.workspace;
             const lr = await lrRepository.findOne({
-                where: { id: parseInt(id) },
+                where: {
+                    id: parseInt(id),
+                    workspace: { id: workspace.id }
+                },
             });
             if (!lr)
                 return res.status(404).json({ message: "Leave request not found" });
@@ -121,8 +137,12 @@ class LeaveRequestController {
         const { startDate, endDate, reason } = req.body;
         try {
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
+            const workspace = req.workspace;
             const lr = await lrRepository.findOne({
-                where: { id: parseInt(id) },
+                where: {
+                    id: parseInt(id),
+                    workspace: { id: workspace.id }
+                },
             });
             if (!lr)
                 return res.status(404).json({ message: "Leave request not found" });
@@ -154,8 +174,12 @@ class LeaveRequestController {
                 return res.status(403).json({ message: "Forbidden" });
             }
             const lrRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
+            const workspace = req.workspace;
             const lr = await lrRepository.findOne({
-                where: { id: parseInt(id) },
+                where: {
+                    id: parseInt(id),
+                    workspace: { id: workspace.id }
+                },
             });
             if (!lr)
                 return res.status(404).json({ message: "Leave request not found" });

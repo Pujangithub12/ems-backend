@@ -2,13 +2,16 @@ import { Request, Response } from "express";
 import { AppDataSource } from "../config/data-source";
 import { Activity, ActivityType } from "../entities/Activity";
 import { AuthRequest } from "../middlewares/auth";
+import { Workspace } from "../entities/Workspace";
 
 export class ActivityController {
   
   static getAllActivities = async (req: AuthRequest, res: Response) => {
     try {
       const activityRepository = AppDataSource.getRepository(Activity);
+      const workspace = req.workspace!;
       const activities = await activityRepository.find({
+        where: { workspace: { id: workspace.id } },
         relations: ["user", "task"],
         order: { createdAt: "DESC" },
       });
@@ -26,6 +29,7 @@ export class ActivityController {
     description: string,
     taskId?: number,
     userId?: number,
+    workspace?: Workspace,
   ) => {
     try {
       const activityRepository = AppDataSource.getRepository(Activity);
@@ -40,6 +44,10 @@ export class ActivityController {
       
       if (userId !== undefined) {
         activityData.userId = userId;
+      }
+      
+      if (workspace !== undefined) {
+        activityData.workspace = workspace;
       }
       
       const activity = activityRepository.create(activityData);

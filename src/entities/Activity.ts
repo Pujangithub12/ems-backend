@@ -8,6 +8,7 @@ import {
 } from "typeorm";
 import { User } from "./User";
 import { Task } from "./Task";
+import { Workspace } from "./Workspace";
 
 export enum ActivityType {
   TASK_CREATED = "task_created",
@@ -41,6 +42,12 @@ export class Activity {
 
   @Column({ nullable: true })
   userId?: number | null;
+
+  @ManyToOne(() => Workspace, (workspace) => workspace.activities, {
+    onDelete: "CASCADE",
+    nullable: true,
+  })
+  workspace?: Workspace;
 
   @CreateDateColumn()
   createdAt!: Date;

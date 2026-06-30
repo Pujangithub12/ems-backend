@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.LeaveRequest = void 0;
 const typeorm_1 = require("typeorm");
 const User_1 = require("./User");
+const Workspace_1 = require("./Workspace");
 let LeaveRequest = class LeaveRequest {
     id;
     user;
@@ -20,6 +21,7 @@ let LeaveRequest = class LeaveRequest {
     endDate;
     reason;
     status;
+    workspace;
     createdAt;
 };
 exports.LeaveRequest = LeaveRequest;
@@ -55,6 +57,13 @@ __decorate([
     }),
     __metadata("design:type", String)
 ], LeaveRequest.prototype, "status", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => Workspace_1.Workspace, (workspace) => workspace.leaveRequests, {
+        onDelete: "CASCADE",
+        nullable: true,
+    }),
+    __metadata("design:type", Workspace_1.Workspace)
+], LeaveRequest.prototype, "workspace", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

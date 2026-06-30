@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TaskStatus = exports.TaskPriority = void 0;
+exports.UserRole = exports.TaskStatus = exports.TaskPriority = void 0;
 var TaskPriority;
 (function (TaskPriority) {
     TaskPriority["HIGH"] = "high";
@@ -13,4 +13,10 @@ var TaskStatus;
     TaskStatus["IN_PROGRESS"] = "in_progress";
     TaskStatus["COMPLETED"] = "completed";
 })(TaskStatus || (exports.TaskStatus = TaskStatus = {}));
+var UserRole;
+(function (UserRole) {
+    UserRole["SUPER_ADMIN"] = "super_admin";
+    UserRole["ADMIN"] = "admin";
+    UserRole["USER"] = "user";
+})(UserRole || (exports.UserRole = UserRole = {}));
 //# sourceMappingURL=TaskEnums.js.map

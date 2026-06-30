@@ -34,9 +34,9 @@ class AuthController {
             // reject the login instead of silently issuing a token for the wrong role.
             if (role && role !== user.role) {
                 // Allow super_admin to log in via admin portal too
-                if (!(role === "admin" && user.role === "super_admin")) {
+                if (!(role === User_1.UserRole.ADMIN && user.role === User_1.UserRole.SUPER_ADMIN)) {
                     return res.status(403).json({
-                        message: role === "admin" || role === "super_admin"
+                        message: role === User_1.UserRole.ADMIN || role === User_1.UserRole.SUPER_ADMIN
                             ? "Access denied. This account does not have admin privileges."
                             : "Please use the admin portal to sign in.",
                     });

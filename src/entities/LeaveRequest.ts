@@ -6,6 +6,7 @@ import {
   ManyToOne,
 } from "typeorm";
 import { User } from "./User";
+import { Workspace } from "./Workspace";
 
 @Entity()
 export class LeaveRequest {
@@ -33,6 +34,12 @@ export class LeaveRequest {
     default: "pending",
   })
   status!: string;
+
+  @ManyToOne(() => Workspace, (workspace) => workspace.leaveRequests, {
+    onDelete: "CASCADE",
+    nullable: true,
+  })
+  workspace?: Workspace;
 
   @CreateDateColumn()
   createdAt!: Date;

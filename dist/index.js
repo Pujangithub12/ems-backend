@@ -25,6 +25,7 @@ const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
 app.use((0, cors_1.default)({
     origin: [
+        "https://api.jdnenergy.com.np/",
         "https://emsjandaenergy.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",

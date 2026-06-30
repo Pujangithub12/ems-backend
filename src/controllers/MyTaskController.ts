@@ -15,6 +15,7 @@ export class MyTaskController {
     try {
       const userRepository = AppDataSource.getRepository(User);
       const myTaskRepository = AppDataSource.getRepository(MyTask);
+      const workspace = req.workspace!;
 
       const user = await userRepository.findOneBy({
         id: req.user?.id as number,
@@ -29,6 +30,7 @@ export class MyTaskController {
         description,
         status: MyTaskStatus.PENDING,
         user,
+        workspace
       };
 
       if (dueDate) {
@@ -50,13 +52,14 @@ export class MyTaskController {
     try {
       const myTaskRepository = AppDataSource.getRepository(MyTask);
       const userId = req.user?.id;
+      const workspace = req.workspace!;
 
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
       const tasks = await myTaskRepository.find({
-        where: { user: { id: userId } },
+        where: { user: { id: userId }, workspace: { id: workspace.id } },
         order: { createdAt: "DESC" },
       });
 
@@ -72,8 +75,12 @@ export class MyTaskController {
 
     try {
       const myTaskRepository = AppDataSource.getRepository(MyTask);
+      const workspace = req.workspace!;
       const myTask = await myTaskRepository.findOne({
-        where: { id: parseInt(id as string, 10) },
+        where: { 
+          id: parseInt(id as string, 10),
+          workspace: { id: workspace.id }
+        },
         relations: ["user"],
       });
 
@@ -109,8 +116,12 @@ export class MyTaskController {
 
     try {
       const myTaskRepository = AppDataSource.getRepository(MyTask);
+      const workspace = req.workspace!;
       const myTask = await myTaskRepository.findOne({
-        where: { id: parseInt(id as string, 10) },
+        where: { 
+          id: parseInt(id as string, 10),
+          workspace: { id: workspace.id }
+        },
         relations: ["user"],
       });
 

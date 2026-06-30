@@ -7,9 +7,10 @@ import { ProjectHeading } from "../entities/ProjectHeading";
 import { Task } from "../entities/Task";
 import { TaskPriority, TaskStatus } from "../entities/TaskEnums";
 import { In } from "typeorm";
+import { AuthRequest } from "../middlewares/auth";
 
 export class ProjectController {
-  static createProject = async (req: Request, res: Response) => {
+  static createProject = async (req: AuthRequest, res: Response) => {
     const { name, description, dueDate, status, priority, assigneeIds } =
       req.body;
 
@@ -26,6 +27,7 @@ export class ProjectController {
         assignees = await userRepository.findBy({ id: In(assigneeIds) });
       }
 
+      const workspace = req.workspace!;
       const projectPayload = {
         name,
         description,
@@ -38,6 +40,7 @@ export class ProjectController {
             ? priority
             : TaskPriority.MEDIUM,
         assignees,
+        workspace,
       } as Partial<Project>;
 
       if (dueDate) {
@@ -52,10 +55,12 @@ export class ProjectController {
     }
   };
 
-  static getAllProjects = async (req: Request, res: Response) => {
+  static getAllProjects = async (req: AuthRequest, res: Response) => {
     try {
       const projectRepository = AppDataSource.getRepository(Project);
+      const workspace = req.workspace!; // Assert not undefined (set by middleware)
       const projects = await projectRepository.find({
+        where: { workspace: { id: workspace.id } },
         relations: [
           "assignees",
           "files",
@@ -141,7 +146,7 @@ export class ProjectController {
     }
   };
 
-  static addProjectTask = async (req: Request, res: Response) => {
+  static addProjectTask = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
     const {
       description,
@@ -186,6 +191,7 @@ export class ProjectController {
         });
       }
 
+      const workspace = req.workspace!;
       const taskData: any = {
         title,
         description,
@@ -195,6 +201,7 @@ export class ProjectController {
         assignedUsers,
         status: status || TaskStatus.PENDING,
         progress: 0,
+        workspace,
       };
 
       if (heading) {

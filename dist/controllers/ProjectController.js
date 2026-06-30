@@ -22,6 +22,7 @@ class ProjectController {
             if (assigneeIds && Array.isArray(assigneeIds) && assigneeIds.length > 0) {
                 assignees = await userRepository.findBy({ id: (0, typeorm_1.In)(assigneeIds) });
             }
+            const workspace = req.workspace;
             const projectPayload = {
                 name,
                 description,
@@ -32,6 +33,7 @@ class ProjectController {
                     ? priority
                     : TaskEnums_1.TaskPriority.MEDIUM,
                 assignees,
+                workspace,
             };
             if (dueDate) {
                 projectPayload.dueDate = new Date(dueDate);
@@ -47,7 +49,9 @@ class ProjectController {
     static getAllProjects = async (req, res) => {
         try {
             const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
+            const workspace = req.workspace; // Assert not undefined (set by middleware)
             const projects = await projectRepository.find({
+                where: { workspace: { id: workspace.id } },
                 relations: [
                     "assignees",
                     "files",
@@ -154,6 +158,7 @@ class ProjectController {
                     id: (0, typeorm_1.In)(assignedUserIds),
                 });
             }
+            const workspace = req.workspace;
             const taskData = {
                 title,
                 description,
@@ -163,6 +168,7 @@ class ProjectController {
                 assignedUsers,
                 status: status || TaskEnums_1.TaskStatus.PENDING,
                 progress: 0,
+                workspace,
             };
             if (heading) {
                 taskData.projectHeading = heading;

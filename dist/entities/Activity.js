@@ -13,6 +13,7 @@ exports.Activity = exports.ActivityType = void 0;
 const typeorm_1 = require("typeorm");
 const User_1 = require("./User");
 const Task_1 = require("./Task");
+const Workspace_1 = require("./Workspace");
 var ActivityType;
 (function (ActivityType) {
     ActivityType["TASK_CREATED"] = "task_created";
@@ -27,6 +28,7 @@ let Activity = class Activity {
     taskId;
     user;
     userId;
+    workspace;
     createdAt;
 };
 exports.Activity = Activity;
@@ -62,6 +64,13 @@ __decorate([
     (0, typeorm_1.Column)({ nullable: true }),
     __metadata("design:type", Object)
 ], Activity.prototype, "userId", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => Workspace_1.Workspace, (workspace) => workspace.activities, {
+        onDelete: "CASCADE",
+        nullable: true,
+    }),
+    __metadata("design:type", Workspace_1.Workspace)
+], Activity.prototype, "workspace", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

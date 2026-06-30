@@ -11,12 +11,14 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Announcement = void 0;
 const typeorm_1 = require("typeorm");
+const Workspace_1 = require("./Workspace");
 let Announcement = class Announcement {
     id;
     subject;
     message;
     targetType; // "all" or "specific"
     targetEmails;
+    workspace;
     createdAt;
 };
 exports.Announcement = Announcement;
@@ -40,6 +42,13 @@ __decorate([
     (0, typeorm_1.Column)("simple-array", { nullable: true }),
     __metadata("design:type", Array)
 ], Announcement.prototype, "targetEmails", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => Workspace_1.Workspace, (workspace) => workspace.announcements, {
+        onDelete: "CASCADE",
+        nullable: true,
+    }),
+    __metadata("design:type", Workspace_1.Workspace)
+], Announcement.prototype, "workspace", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

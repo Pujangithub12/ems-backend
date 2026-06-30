@@ -13,6 +13,7 @@ class MyTaskController {
         try {
             const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
             const myTaskRepository = data_source_1.AppDataSource.getRepository(MyTask_1.MyTask);
+            const workspace = req.workspace;
             const user = await userRepository.findOneBy({
                 id: req.user?.id,
             });
@@ -24,6 +25,7 @@ class MyTaskController {
                 description,
                 status: MyTask_1.MyTaskStatus.PENDING,
                 user,
+                workspace
             };
             if (dueDate) {
                 taskPayload.dueDate = new Date(dueDate);
@@ -42,11 +44,12 @@ class MyTaskController {
         try {
             const myTaskRepository = data_source_1.AppDataSource.getRepository(MyTask_1.MyTask);
             const userId = req.user?.id;
+            const workspace = req.workspace;
             if (!userId) {
                 return res.status(401).json({ message: "Unauthorized" });
             }
             const tasks = await myTaskRepository.find({
-                where: { user: { id: userId } },
+                where: { user: { id: userId }, workspace: { id: workspace.id } },
                 order: { createdAt: "DESC" },
             });
             return res.status(200).json(tasks);
@@ -60,8 +63,12 @@ class MyTaskController {
         const { title, description, dueDate, status } = req.body;
         try {
             const myTaskRepository = data_source_1.AppDataSource.getRepository(MyTask_1.MyTask);
+            const workspace = req.workspace;
             const myTask = await myTaskRepository.findOne({
-                where: { id: parseInt(id, 10) },
+                where: {
+                    id: parseInt(id, 10),
+                    workspace: { id: workspace.id }
+                },
                 relations: ["user"],
             });
             if (!myTask) {
@@ -92,8 +99,12 @@ class MyTaskController {
         const { id } = req.params;
         try {
             const myTaskRepository = data_source_1.AppDataSource.getRepository(MyTask_1.MyTask);
+            const workspace = req.workspace;
             const myTask = await myTaskRepository.findOne({
-                where: { id: parseInt(id, 10) },
+                where: {
+                    id: parseInt(id, 10),
+                    workspace: { id: workspace.id }
+                },
                 relations: ["user"],
             });
             if (!myTask) {
