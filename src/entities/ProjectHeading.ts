@@ -8,6 +8,7 @@ import {
 } from "typeorm";
 import { Project } from "./Project";
 import { Task } from "./Task";
+import { Workspace } from "./Workspace";
 
 @Entity()
 export class ProjectHeading {
@@ -19,6 +20,9 @@ export class ProjectHeading {
 
   @ManyToOne(() => Project, (project) => project.headings, { onDelete: "CASCADE" })
   project!: Project;
+
+  @ManyToOne(() => Workspace, { nullable: true })
+  workspace?: Workspace;
 
   @ManyToOne(() => ProjectHeading, (heading) => heading.subHeadings, { nullable: true, onDelete: "CASCADE" })
   parentHeading?: ProjectHeading;
