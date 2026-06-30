@@ -10,6 +10,7 @@ const MyTaskController_1 = require("../controllers/MyTaskController");
 const LeaveRequestController_1 = require("../controllers/LeaveRequestController");
 const CalendarEventController_1 = require("../controllers/CalendarEventController");
 const ActivityController_1 = require("../controllers/ActivityController");
+const WorkspaceController_1 = require("../controllers/WorkspaceController");
 const auth_1 = require("../middlewares/auth");
 const upload_1 = require("../middlewares/upload");
 const User_1 = require("../entities/User");
@@ -21,6 +22,11 @@ router.get("/me", auth_1.authMiddleware, AuthController_1.AuthController.getMe);
 router.get("/health", (req, res) => {
     res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
 });
+// Workspace routes
+router.get("/workspaces", auth_1.authMiddleware, WorkspaceController_1.WorkspaceController.getAll);
+router.post("/workspaces", auth_1.authMiddleware, WorkspaceController_1.WorkspaceController.create);
+router.post("/workspaces/switch", auth_1.authMiddleware, WorkspaceController_1.WorkspaceController.switch);
+router.get("/workspaces/current", auth_1.authMiddleware, WorkspaceController_1.WorkspaceController.getCurrent);
 // User routes - Admin only for adding and deleting users
 router.post("/users", auth_1.authMiddleware, (0, auth_1.roleMiddleware)([User_1.UserRole.ADMIN]), UserController_1.UserController.addUser);
 router.get("/users", auth_1.authMiddleware, UserController_1.UserController.getAllUsers);

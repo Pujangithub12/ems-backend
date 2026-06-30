@@ -21,6 +21,7 @@ class UserController {
         }
         try {
             const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
+            const workspace = req.workspace;
             // Check if user already exists
             const existingUser = await userRepository.findOne({ where: { email } });
             if (existingUser) {
@@ -51,6 +52,7 @@ class UserController {
                 jobPosition,
                 joinDate: new Date(joinDate),
                 role: finalRole,
+                workspaces: [workspace],
             });
             await userRepository.save(newUser);
             return res.status(201).json({
@@ -70,19 +72,24 @@ class UserController {
     static getAllUsers = async (req, res) => {
         try {
             const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const users = await userRepository.find({
-                select: [
-                    "id",
-                    "fullName",
-                    "email",
-                    "phoneNumber",
-                    "address",
-                    "jobPosition",
-                    "joinDate",
-                    "role",
-                    "createdAt",
-                ],
-            });
+            const workspace = req.workspace;
+            // Get all users that are members of the current workspace
+            const users = await userRepository
+                .createQueryBuilder("user")
+                .innerJoin("user.workspaces", "workspace")
+                .where("workspace.id = :workspaceId", { workspaceId: workspace.id })
+                .select([
+                "user.id",
+                "user.fullName",
+                "user.email",
+                "user.phoneNumber",
+                "user.address",
+                "user.jobPosition",
+                "user.joinDate",
+                "user.role",
+                "user.createdAt",
+            ])
+                .getMany();
             return res.status(200).json(users);
         }
         catch (error) {
@@ -96,14 +103,26 @@ class UserController {
         }
         try {
             const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const user = await userRepository.findOne({
-                where: { id: parseInt(id) },
-            });
+            const workspace = req.workspace;
+            // Find user only if they are in current workspace
+            const user = await userRepository
+                .createQueryBuilder("user")
+                .innerJoin("user.workspaces", "workspace")
+                .where("user.id = :id", { id: parseInt(id) })
+                .andWhere("workspace.id = :workspaceId", { workspaceId: workspace.id })
+                .getOne();
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
-            await userRepository.remove(user);
-            return res.status(200).json({ message: "User deleted successfully" });
+            // Remove user from workspace
+            await userRepository
+                .createQueryBuilder()
+                .relation(User_1.User, "workspaces")
+                .of(user)
+                .remove(workspace);
+            return res
+                .status(200)
+                .json({ message: "User removed from workspace successfully" });
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });
@@ -117,9 +136,14 @@ class UserController {
         }
         try {
             const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const user = await userRepository.findOne({
-                where: { id: parseInt(id) },
-            });
+            const workspace = req.workspace;
+            // Find user only if they are in current workspace
+            const user = await userRepository
+                .createQueryBuilder("user")
+                .innerJoin("user.workspaces", "workspace")
+                .where("user.id = :id", { id: parseInt(id) })
+                .andWhere("workspace.id = :workspaceId", { workspaceId: workspace.id })
+                .getOne();
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }

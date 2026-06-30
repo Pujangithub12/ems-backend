@@ -7,7 +7,9 @@ class CalendarEventController {
     static getAllEvents = async (req, res) => {
         try {
             const eventRepository = data_source_1.AppDataSource.getRepository(CalendarEvent_1.CalendarEvent);
+            const workspace = req.workspace;
             const events = await eventRepository.find({
+                where: { workspace: { id: workspace.id } },
                 order: { date: "ASC" },
             });
             return res.status(200).json(events);
@@ -23,10 +25,12 @@ class CalendarEventController {
         }
         try {
             const eventRepository = data_source_1.AppDataSource.getRepository(CalendarEvent_1.CalendarEvent);
+            const workspace = req.workspace;
             const newEvent = eventRepository.create({
                 title,
                 date: new Date(date),
                 type: type || "holiday",
+                workspace
             });
             await eventRepository.save(newEvent);
             return res.status(201).json(newEvent);
@@ -42,8 +46,10 @@ class CalendarEventController {
         }
         try {
             const eventRepository = data_source_1.AppDataSource.getRepository(CalendarEvent_1.CalendarEvent);
+            const workspace = req.workspace;
             const event = await eventRepository.findOneBy({
                 id: parseInt(id),
+                workspace: { id: workspace.id }
             });
             if (!event) {
                 return res.status(404).json({ message: "Event not found" });

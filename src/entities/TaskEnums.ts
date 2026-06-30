@@ -9,3 +9,9 @@ export enum TaskStatus {
   IN_PROGRESS = "in_progress",
   COMPLETED = "completed",
 }
+
+export enum UserRole {
+  SUPER_ADMIN = "super_admin",
+  ADMIN = "admin",
+  USER = "user",
+}

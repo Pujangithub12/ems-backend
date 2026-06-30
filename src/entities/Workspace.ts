@@ -1,0 +1,57 @@
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  ManyToMany,
+  OneToMany,
+  JoinTable,
+} from "typeorm";
+import { User } from "./User";
+import { Task } from "./Task";
+import { Project } from "./Project";
+import { Announcement } from "./Announcement";
+import { LeaveRequest } from "./LeaveRequest";
+import { MyTask } from "./MyTask";
+import { CalendarEvent } from "./CalendarEvent";
+import { Activity } from "./Activity";
+
+@Entity()
+export class Workspace {
+  @PrimaryGeneratedColumn()
+  id!: number;
+
+  @Column()
+  name!: string;
+
+  @Column({ nullable: true })
+  description?: string;
+
+  @ManyToMany(() => User, (user) => user.workspaces)
+  @JoinTable()
+  members!: User[];
+
+  @OneToMany(() => Task, (task) => task.workspace, { cascade: true })
+  tasks!: Task[];
+
+  @OneToMany(() => Project, (project) => project.workspace, { cascade: true })
+  projects!: Project[];
+
+  @OneToMany(() => Announcement, (ann) => ann.workspace, { cascade: true })
+  announcements!: Announcement[];
+
+  @OneToMany(() => LeaveRequest, (lr) => lr.workspace, { cascade: true })
+  leaveRequests!: LeaveRequest[];
+
+  @OneToMany(() => MyTask, (mt) => mt.workspace, { cascade: true })
+  myTasks!: MyTask[];
+
+  @OneToMany(() => CalendarEvent, (ce) => ce.workspace, { cascade: true })
+  calendarEvents!: CalendarEvent[];
+
+  @OneToMany(() => Activity, (act) => act.workspace, { cascade: true })
+  activities!: Activity[];
+
+  @CreateDateColumn()
+  createdAt!: Date;
+}

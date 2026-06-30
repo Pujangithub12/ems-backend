@@ -19,6 +19,7 @@ const SubTaskComment_1 = require("../entities/SubTaskComment");
 const MyTask_1 = require("../entities/MyTask");
 const CalendarEvent_1 = require("../entities/CalendarEvent");
 const Activity_1 = require("../entities/Activity");
+const Workspace_1 = require("../entities/Workspace");
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 console.log("NODE_ENV:", process.env.NODE_ENV);
@@ -40,6 +41,7 @@ const entityList = isProduction
         MyTask_1.MyTask,
         CalendarEvent_1.CalendarEvent,
         Activity_1.Activity,
+        Workspace_1.Workspace,
     ];
 const baseOptions = {
     type: "postgres",

@@ -11,11 +11,13 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CalendarEvent = void 0;
 const typeorm_1 = require("typeorm");
+const Workspace_1 = require("./Workspace");
 let CalendarEvent = class CalendarEvent {
     id;
     title;
     date;
     type;
+    workspace;
     createdAt;
 };
 exports.CalendarEvent = CalendarEvent;
@@ -36,6 +38,13 @@ __decorate([
     ,
     __metadata("design:type", String)
 ], CalendarEvent.prototype, "type", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => Workspace_1.Workspace, (workspace) => workspace.calendarEvents, {
+        onDelete: "CASCADE",
+        nullable: true,
+    }),
+    __metadata("design:type", Workspace_1.Workspace)
+], CalendarEvent.prototype, "workspace", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

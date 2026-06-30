@@ -7,7 +7,9 @@ class ActivityController {
     static getAllActivities = async (req, res) => {
         try {
             const activityRepository = data_source_1.AppDataSource.getRepository(Activity_1.Activity);
+            const workspace = req.workspace;
             const activities = await activityRepository.find({
+                where: { workspace: { id: workspace.id } },
                 relations: ["user", "task"],
                 order: { createdAt: "DESC" },
             });
@@ -20,7 +22,7 @@ class ActivityController {
         }
     };
     // Helper function to log activities, to be used from other controllers
-    static logActivity = async (type, description, taskId, userId) => {
+    static logActivity = async (type, description, taskId, userId, workspace) => {
         try {
             const activityRepository = data_source_1.AppDataSource.getRepository(Activity_1.Activity);
             const activityData = {
@@ -32,6 +34,9 @@ class ActivityController {
             }
             if (userId !== undefined) {
                 activityData.userId = userId;
+            }
+            if (workspace !== undefined) {
+                activityData.workspace = workspace;
             }
             const activity = activityRepository.create(activityData);
             await activityRepository.save(activity);

@@ -6,6 +6,7 @@ import {
   ManyToOne,
 } from "typeorm";
 import { User } from "./User";
+import { Workspace } from "./Workspace";
 
 export enum MyTaskStatus {
   PENDING = "pending",
@@ -31,6 +32,12 @@ export class MyTask {
 
   @ManyToOne(() => User, { onDelete: "CASCADE" })
   user!: User;
+
+  @ManyToOne(() => Workspace, (workspace) => workspace.myTasks, {
+    onDelete: "CASCADE",
+    nullable: true,
+  })
+  workspace?: Workspace;
 
   @CreateDateColumn()
   createdAt!: Date;

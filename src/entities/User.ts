@@ -3,13 +3,12 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  ManyToMany,
 } from "typeorm";
+import { UserRole } from "./TaskEnums";
+import { Workspace } from "./Workspace";
 
-export enum UserRole {
-  SUPER_ADMIN = "super_admin",
-  ADMIN = "admin",
-  USER = "user",
-}
+export { UserRole };
 
 @Entity()
 export class User {
@@ -42,6 +41,9 @@ export class User {
     default: UserRole.USER,
   })
   role!: UserRole;
+
+  @ManyToMany(() => Workspace, (workspace) => workspace.members)
+  workspaces!: Workspace[];
 
   @CreateDateColumn()
   createdAt!: Date;

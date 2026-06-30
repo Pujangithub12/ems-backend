@@ -3,7 +3,9 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  ManyToOne,
 } from "typeorm";
+import { Workspace } from "./Workspace";
 
 @Entity()
 export class CalendarEvent {
@@ -18,6 +20,12 @@ export class CalendarEvent {
 
   @Column({ default: "holiday" }) // e.g., holiday, event, deadline
   type!: string;
+
+  @ManyToOne(() => Workspace, (workspace) => workspace.calendarEvents, {
+    onDelete: "CASCADE",
+    nullable: true,
+  })
+  workspace?: Workspace;
 
   @CreateDateColumn()
   createdAt!: Date;

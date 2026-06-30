@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MyTask = exports.MyTaskStatus = void 0;
 const typeorm_1 = require("typeorm");
 const User_1 = require("./User");
+const Workspace_1 = require("./Workspace");
 var MyTaskStatus;
 (function (MyTaskStatus) {
     MyTaskStatus["PENDING"] = "pending";
@@ -24,6 +25,7 @@ let MyTask = class MyTask {
     dueDate;
     status;
     user;
+    workspace;
     createdAt;
 };
 exports.MyTask = MyTask;
@@ -51,6 +53,13 @@ __decorate([
     (0, typeorm_1.ManyToOne)(() => User_1.User, { onDelete: "CASCADE" }),
     __metadata("design:type", User_1.User)
 ], MyTask.prototype, "user", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => Workspace_1.Workspace, (workspace) => workspace.myTasks, {
+        onDelete: "CASCADE",
+        nullable: true,
+    }),
+    __metadata("design:type", Workspace_1.Workspace)
+], MyTask.prototype, "workspace", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

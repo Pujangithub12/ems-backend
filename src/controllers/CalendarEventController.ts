@@ -1,12 +1,15 @@
 import { Request, Response } from "express";
 import { AppDataSource } from "../config/data-source";
 import { CalendarEvent } from "../entities/CalendarEvent";
+import { AuthRequest } from "../middlewares/auth";
 
 export class CalendarEventController {
-  static getAllEvents = async (req: Request, res: Response) => {
+  static getAllEvents = async (req: AuthRequest, res: Response) => {
     try {
       const eventRepository = AppDataSource.getRepository(CalendarEvent);
+      const workspace = req.workspace!;
       const events = await eventRepository.find({
+        where: { workspace: { id: workspace.id } },
         order: { date: "ASC" },
       });
       return res.status(200).json(events);
@@ -15,7 +18,7 @@ export class CalendarEventController {
     }
   };
 
-  static createEvent = async (req: Request, res: Response) => {
+  static createEvent = async (req: AuthRequest, res: Response) => {
     const { title, date, type } = req.body;
 
     if (!title || !date) {
@@ -24,10 +27,12 @@ export class CalendarEventController {
 
     try {
       const eventRepository = AppDataSource.getRepository(CalendarEvent);
+      const workspace = req.workspace!;
       const newEvent = eventRepository.create({
         title,
         date: new Date(date),
         type: type || "holiday",
+        workspace
       });
 
       await eventRepository.save(newEvent);
@@ -37,7 +42,7 @@ export class CalendarEventController {
     }
   };
 
-  static deleteEvent = async (req: Request, res: Response) => {
+  static deleteEvent = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
 
     if (!id) {
@@ -46,8 +51,10 @@ export class CalendarEventController {
 
     try {
       const eventRepository = AppDataSource.getRepository(CalendarEvent);
+      const workspace = req.workspace!;
       const event = await eventRepository.findOneBy({
         id: parseInt(id as string),
+        workspace: { id: workspace.id }
       });
 
       if (!event) {

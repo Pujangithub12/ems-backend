@@ -14,6 +14,7 @@ import { SubTask } from "./SubTask";
 import { TaskComment } from "./TaskComment";
 import { TaskPriority, TaskStatus } from "./TaskEnums";
 import { ProjectHeading } from "./ProjectHeading";
+import { Workspace } from "./Workspace";
 
 @Entity()
 export class Task {
@@ -79,6 +80,12 @@ export class Task {
 
   @ManyToOne(() => User, { nullable: true, onDelete: "SET NULL" })
   createdBy?: User;
+
+  @ManyToOne(() => Workspace, (workspace) => workspace.tasks, {
+    onDelete: "CASCADE",
+    nullable: true,
+  })
+  workspace?: Workspace;
 
   @CreateDateColumn()
   createdAt!: Date;

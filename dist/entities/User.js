@@ -11,12 +11,9 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.User = exports.UserRole = void 0;
 const typeorm_1 = require("typeorm");
-var UserRole;
-(function (UserRole) {
-    UserRole["SUPER_ADMIN"] = "super_admin";
-    UserRole["ADMIN"] = "admin";
-    UserRole["USER"] = "user";
-})(UserRole || (exports.UserRole = UserRole = {}));
+const TaskEnums_1 = require("./TaskEnums");
+Object.defineProperty(exports, "UserRole", { enumerable: true, get: function () { return TaskEnums_1.UserRole; } });
+const Workspace_1 = require("./Workspace");
 let User = class User {
     id;
     fullName;
@@ -27,6 +24,7 @@ let User = class User {
     jobPosition;
     joinDate;
     role;
+    workspaces;
     createdAt;
 };
 exports.User = User;
@@ -65,10 +63,14 @@ __decorate([
 __decorate([
     (0, typeorm_1.Column)({
         type: "varchar",
-        default: UserRole.USER,
+        default: TaskEnums_1.UserRole.USER,
     }),
     __metadata("design:type", String)
 ], User.prototype, "role", void 0);
+__decorate([
+    (0, typeorm_1.ManyToMany)(() => Workspace_1.Workspace, (workspace) => workspace.members),
+    __metadata("design:type", Array)
+], User.prototype, "workspaces", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

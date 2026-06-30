@@ -18,6 +18,7 @@ export class LeaveRequestController {
       const userId = req.user?.id;
       const userRepository = AppDataSource.getRepository(User);
       const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const workspace = req.workspace!;
 
       const user = await userRepository.findOne({
         where: { id: userId as number },
@@ -31,6 +32,7 @@ export class LeaveRequestController {
         endDate: new Date(endDate),
         reason,
         status: "pending",
+        workspace
       });
 
       await lrRepository.save(newRequest);
@@ -46,12 +48,14 @@ export class LeaveRequestController {
   static getAllLeaveRequests = async (req: AuthRequest, res: Response) => {
     try {
       const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const workspace = req.workspace!;
 
       if (
         req.user?.role === UserRole.ADMIN ||
         req.user?.role === UserRole.SUPER_ADMIN
       ) {
         const all = await lrRepository.find({
+          where: { workspace: { id: workspace.id } },
           order: { createdAt: "DESC" },
           relations: ["user"],
         });
@@ -63,6 +67,7 @@ export class LeaveRequestController {
               where: {
                 user: { id: lr.user.id },
                 status: "approved",
+                workspace: { id: workspace.id }
               },
             });
             return { ...lr, historyCount };
@@ -73,7 +78,10 @@ export class LeaveRequestController {
       }
 
       const mine = await lrRepository.find({
-        where: { user: { id: req.user?.id } },
+        where: { 
+          user: { id: req.user?.id },
+          workspace: { id: workspace.id } 
+        },
         order: { createdAt: "DESC" },
       } as any);
 
@@ -100,8 +108,12 @@ export class LeaveRequestController {
       }
 
       const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const workspace = req.workspace!;
       const lr = await lrRepository.findOne({
-        where: { id: parseInt(id as string) },
+        where: { 
+          id: parseInt(id as string),
+          workspace: { id: workspace.id }
+        },
       });
 
       if (!lr)
@@ -122,8 +134,12 @@ export class LeaveRequestController {
     const { id } = req.params;
     try {
       const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const workspace = req.workspace!;
       const lr = await lrRepository.findOne({
-        where: { id: parseInt(id as string) },
+        where: { 
+          id: parseInt(id as string),
+          workspace: { id: workspace.id }
+        },
       });
 
       if (!lr)
@@ -149,8 +165,12 @@ export class LeaveRequestController {
 
     try {
       const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const workspace = req.workspace!;
       const lr = await lrRepository.findOne({
-        where: { id: parseInt(id as string) },
+        where: { 
+          id: parseInt(id as string),
+          workspace: { id: workspace.id }
+        },
       });
 
       if (!lr)
@@ -189,8 +209,12 @@ export class LeaveRequestController {
       }
 
       const lrRepository = AppDataSource.getRepository(LeaveRequest);
+      const workspace = req.workspace!;
       const lr = await lrRepository.findOne({
-        where: { id: parseInt(id as string) },
+        where: { 
+          id: parseInt(id as string),
+          workspace: { id: workspace.id }
+        },
       });
 
       if (!lr)

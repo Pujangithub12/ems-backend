@@ -17,6 +17,7 @@ const SubTask_1 = require("./SubTask");
 const TaskComment_1 = require("./TaskComment");
 const TaskEnums_1 = require("./TaskEnums");
 const ProjectHeading_1 = require("./ProjectHeading");
+const Workspace_1 = require("./Workspace");
 let Task = class Task {
     id;
     companyName;
@@ -34,6 +35,7 @@ let Task = class Task {
     comments;
     files;
     createdBy;
+    workspace;
     createdAt;
 };
 exports.Task = Task;
@@ -116,6 +118,13 @@ __decorate([
     (0, typeorm_1.ManyToOne)(() => User_1.User, { nullable: true, onDelete: "SET NULL" }),
     __metadata("design:type", User_1.User)
 ], Task.prototype, "createdBy", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => Workspace_1.Workspace, (workspace) => workspace.tasks, {
+        onDelete: "CASCADE",
+        nullable: true,
+    }),
+    __metadata("design:type", Workspace_1.Workspace)
+], Task.prototype, "workspace", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)
