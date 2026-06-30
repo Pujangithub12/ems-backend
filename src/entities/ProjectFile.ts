@@ -6,6 +6,7 @@ import {
   ManyToOne,
 } from "typeorm";
 import { Project } from "./Project";
+import { Workspace } from "./Workspace";
 
 @Entity()
 export class ProjectFile {
@@ -26,6 +27,9 @@ export class ProjectFile {
 
   @ManyToOne(() => Project, (project) => project.id, { onDelete: "CASCADE" })
   project!: Project;
+
+  @ManyToOne(() => Workspace, { nullable: true })
+  workspace?: Workspace;
 
   @CreateDateColumn()
   createdAt!: Date;

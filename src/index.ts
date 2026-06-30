@@ -7,17 +7,18 @@ import { AppDataSource } from "./config/data-source";
 import routes from "./routes";
 import { User, UserRole } from "./entities/User";
 import bcrypt from "bcrypt";
+import { backfillWorkspace } from "./utils/backfill-workspace";
 
 dotenv.config();
 
 console.log("RESEND_API_KEY present?", !!process.env.RESEND_API_KEY);
 console.log("RESEND_FROM_EMAIL:", process.env.RESEND_FROM_EMAIL);
 
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
 });
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
 });
 
 const app = express();
@@ -83,11 +84,10 @@ AppDataSource.initialize()
   .then(async () => {
     console.log("Data Source has been initialized!");
     await seedAdmin();
+    await backfillWorkspace(); // Backfill all existing data to default workspace!
     app.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`);
     });
-
-    
   })
   .catch((err: any) => {
     console.error("Error during Data Source initialization", err);
