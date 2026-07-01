@@ -441,21 +441,11 @@ EMS Management
       const workspace = req.workspace!;
       let tasks;
 
-      if (req.user?.role === UserRole.SUPER_ADMIN) {
-        // Super admin can see all tasks in current workspace
+      if (req.user?.role === UserRole.SUPER_ADMIN || req.user?.role === UserRole.ADMIN) {
+        // Super admin and regular admin can see all tasks in current workspace
         tasks = await taskRepository.find({
           relations: ["assignedUsers", "project", "comments"],
           where: { workspace: { id: workspace.id } },
-          order: { createdAt: "DESC" },
-        });
-      } else if (req.user?.role === UserRole.ADMIN) {
-        // Regular admin only sees tasks they created in current workspace
-        tasks = await taskRepository.find({
-          relations: ["assignedUsers", "project", "comments"],
-          where: {
-            createdBy: { id: req.user?.id },
-            workspace: { id: workspace.id },
-          },
           order: { createdAt: "DESC" },
         });
       } else {
