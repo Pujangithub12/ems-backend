@@ -15,6 +15,7 @@ import { LeaveRequest } from "./LeaveRequest";
 import { MyTask } from "./MyTask";
 import { CalendarEvent } from "./CalendarEvent";
 import { Activity } from "./Activity";
+import { HierarchyNode } from "./HierarchyNode";
 
 @Entity()
 export class Workspace {
@@ -51,6 +52,9 @@ export class Workspace {
 
   @OneToMany(() => Activity, (act) => act.workspace, { cascade: true })
   activities!: Activity[];
+
+  @OneToMany(() => HierarchyNode, (node) => node.workspace, { cascade: true })
+  hierarchyNodes!: HierarchyNode[];
 
   @CreateDateColumn()
   createdAt!: Date;

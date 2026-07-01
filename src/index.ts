@@ -3,9 +3,11 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import path from "path";
 import dotenv from "dotenv";
+import cron from "node-cron";
 import { AppDataSource } from "./config/data-source";
 import routes from "./routes";
 import { User, UserRole } from "./entities/User";
+import { Announcement } from "./entities/Announcement";
 import bcrypt from "bcrypt";
 import { backfillWorkspace } from "./utils/backfill-workspace";
 
@@ -80,11 +82,42 @@ const seedAdmin = async () => {
   }
 };
 
+const deleteOldAnnouncements = async () => {
+  try {
+    const announcementRepository = AppDataSource.getRepository(Announcement);
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    const result = await announcementRepository
+      .createQueryBuilder()
+      .delete()
+      .from(Announcement)
+      .where("createdAt < :sevenDaysAgo", { sevenDaysAgo })
+      .execute();
+      
+    if (result.affected && result.affected > 0) {
+      console.log(`Deleted ${result.affected} old announcement(s) (older than 7 days)`);
+    }
+  } catch (error) {
+    console.error("Error deleting old announcements:", error);
+  }
+};
+
 AppDataSource.initialize()
   .then(async () => {
     console.log("Data Source has been initialized!");
     await seedAdmin();
     await backfillWorkspace(); // Backfill all existing data to default workspace!
+    
+    // Delete old announcements immediately on startup
+    await deleteOldAnnouncements();
+    
+    // Schedule to run every day at midnight (0 0 * * *)
+    cron.schedule("0 0 * * *", () => {
+      console.log("Running scheduled task to delete old announcements...");
+      deleteOldAnnouncements();
+    });
+    
     app.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`);
     });
