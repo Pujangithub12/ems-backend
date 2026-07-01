@@ -952,18 +952,20 @@ EMS Management
 
   static updateSubTask = async (req: AuthRequest, res: Response) => {
     const { taskId, subtaskId } = req.params;
-    const { title, status, progress } = req.body;
+    const { title: updateText, status, progress } = req.body;
 
     console.log("=== updateSubTask called ===", {
       taskId,
       subtaskId,
-      title,
+      updateText,
       progress,
     });
 
     try {
       const subTaskRepository = AppDataSource.getRepository(SubTask);
       const userRepository = AppDataSource.getRepository(User);
+      const subTaskCommentRepository =
+        AppDataSource.getRepository(SubTaskComment);
       const subTask = await subTaskRepository.findOne({
         where: { id: parseInt(subtaskId as string) },
         relations: ["task"],
@@ -976,11 +978,10 @@ EMS Management
       const user = await userRepository.findOneBy({ id: req.user!.id });
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      // Capture old values for history
-      const oldTitle = subTask.title;
+      // Capture old progress for history
       const oldProgress = subTask.progress ?? 0;
 
-      if (title) subTask.title = title;
+      // Only update status and progress, NOT the original title
       if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
         subTask.status = status as TaskStatus;
       }
@@ -988,22 +989,32 @@ EMS Management
         subTask.progress = parseInt(progress);
       }
 
-      // Add current state to history before overwriting
+      // Add current state to history with the update text
       const history = subTask.history || [];
       history.unshift({
         id: Date.now().toString(),
         date: new Date().toISOString(),
-        title: oldTitle,
-        progress: oldProgress,
+        title: updateText || `Progress updated to ${progress}%`,
+        progress: parseInt(progress) || oldProgress,
         authorId: user.id,
         authorName: user.fullName,
       });
 
-      // Keep only the last 5 updates to prevent database bloat
-      subTask.history = history.slice(0, 5);
+      // Keep only the last 10 updates to prevent database bloat
+      subTask.history = history.slice(0, 10);
 
-      console.log("Saving subtask history:", JSON.stringify(subTask.history));
+      // Save the subtask
       await subTaskRepository.save(subTask);
+
+      // Create a SubTaskComment for this update so admin can give feedback
+      if (updateText) {
+        const newComment = subTaskCommentRepository.create({
+          commentText: updateText,
+          author: user,
+          subTask: subTask,
+        });
+        await subTaskCommentRepository.save(newComment);
+      }
 
       const allSubTasks = await fetchSubTasksForTask(
         parseInt(taskId as string),

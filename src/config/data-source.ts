@@ -14,6 +14,7 @@ import { MyTask } from "../entities/MyTask";
 import { CalendarEvent } from "../entities/CalendarEvent";
 import { Activity } from "../entities/Activity";
 import { Workspace } from "../entities/Workspace";
+import { HierarchyNode } from "../entities/HierarchyNode";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -39,6 +40,7 @@ const entityList = isProduction
       CalendarEvent,
       Activity,
       Workspace,
+      HierarchyNode,
     ];
 
 const baseOptions: DataSourceOptions = {

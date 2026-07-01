@@ -10,7 +10,9 @@ export class AnnouncementController {
     const { subject, message, targetType, targetEmails } = req.body;
 
     if (!subject || !message || !targetType) {
-      return res.status(400).json({ message: "Subject, message, and targetType are required" });
+      return res
+        .status(400)
+        .json({ message: "Subject, message, and targetType are required" });
     }
 
     try {
@@ -22,20 +24,13 @@ export class AnnouncementController {
       if (targetType === "all") {
         const users = await userRepository.find({ select: ["email"] });
         // Filter out users who don't have an email address
-        recipientEmails = users
-          .map((u) => u.email)
-          .filter((email) => email);
-      } else if (
-        targetType === "specific" &&
-        Array.isArray(targetEmails)
-      ) {
+        recipientEmails = users.map((u) => u.email).filter((email) => email);
+      } else if (targetType === "specific" && Array.isArray(targetEmails)) {
         recipientEmails = targetEmails;
       } else {
-        return res
-          .status(400)
-          .json({
-            message: "Invalid targetType or missing targetEmails",
-          });
+        return res.status(400).json({
+          message: "Invalid targetType or missing targetEmails",
+        });
       }
 
       if (recipientEmails.length === 0) {
@@ -50,17 +45,17 @@ export class AnnouncementController {
         message,
         targetType,
         targetEmails: targetType === "specific" ? recipientEmails : [],
-        workspace
+        workspace,
       });
       await announcementRepository.save(newAnnouncement);
 
-      sendEmail(recipientEmails, subject, message).catch(err => {
+      sendEmail(recipientEmails, subject, message).catch((err) => {
         console.error("Failed to send announcement emails:", err);
       });
 
       return res.status(201).json({
         message: "Announcement created and emails are being sent",
-        announcement: newAnnouncement
+        announcement: newAnnouncement,
       });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -71,10 +66,19 @@ export class AnnouncementController {
     try {
       const announcementRepository = AppDataSource.getRepository(Announcement);
       const workspace = req.workspace!;
-      const history = await announcementRepository.find({
-        where: { workspace: { id: workspace.id } },
-        order: { createdAt: "DESC" }
-      });
+
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const history = await announcementRepository
+        .createQueryBuilder("announcement")
+        .where("announcement.workspaceId = :workspaceId", {
+          workspaceId: workspace.id,
+        })
+        .andWhere("announcement.createdAt >= :sevenDaysAgo", { sevenDaysAgo })
+        .orderBy("announcement.createdAt", "DESC")
+        .getMany();
+
       return res.status(200).json(history);
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -89,14 +93,13 @@ export class AnnouncementController {
     }
 
     try {
-      const announcementRepository =
-        AppDataSource.getRepository(Announcement);
+      const announcementRepository = AppDataSource.getRepository(Announcement);
       const workspace = req.workspace!;
       // Cast id to string for parseInt
       const announcement = await announcementRepository.findOne({
-        where: { 
+        where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id }
+          workspace: { id: workspace.id },
         },
       });
 

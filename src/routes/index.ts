@@ -9,6 +9,7 @@ import { LeaveRequestController } from "../controllers/LeaveRequestController";
 import { CalendarEventController } from "../controllers/CalendarEventController";
 import { ActivityController } from "../controllers/ActivityController";
 import { WorkspaceController } from "../controllers/WorkspaceController";
+import { HierarchyController } from "../controllers/HierarchyController";
 import { authMiddleware, roleMiddleware } from "../middlewares/auth";
 import { upload } from "../middlewares/upload";
 import { UserRole } from "../entities/User";
@@ -299,6 +300,10 @@ router.delete(
 
 // Activity routes
 router.get("/activities", authMiddleware, ActivityController.getAllActivities);
+
+// Hierarchy routes
+router.get("/hierarchy", authMiddleware, HierarchyController.getHierarchy);
+router.put("/hierarchy", authMiddleware, HierarchyController.saveHierarchy);
 
 // Date conversion is now handled on the frontend; server routes removed.
 

@@ -19,6 +19,15 @@ export class ProjectController {
     }
 
     try {
+      const user = req.user!;
+
+      // Only admins or super admins can create projects
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to create projects" });
+      }
+
       const projectRepository = AppDataSource.getRepository(Project);
       const userRepository = AppDataSource.getRepository(User);
 
@@ -59,50 +68,148 @@ export class ProjectController {
     try {
       const projectRepository = AppDataSource.getRepository(Project);
       const workspace = req.workspace!; // Assert not undefined (set by middleware)
-      const projects = await projectRepository.find({
-        where: { workspace: { id: workspace.id } },
-        relations: [
-          "assignees",
-          "files",
-          "headings",
-          "headings.tasks",
-          "headings.tasks.assignedUsers",
-        ],
-        order: { createdAt: "DESC" },
-      });
+      const user = req.user!;
+
+      let projects: Project[];
+
+      if (user.role === "admin" || user.role === "super_admin") {
+        // Admin or super admin see all projects
+        projects = await projectRepository.find({
+          where: { workspace: { id: workspace.id } },
+          relations: [
+            "assignees",
+            "files",
+            "headings",
+            "headings.tasks",
+            "headings.tasks.assignedUsers",
+            "headings.subHeadings",
+            "headings.subHeadings.tasks",
+            "headings.subHeadings.tasks.assignedUsers",
+            "projectTasks",
+            "projectTasks.assignedUsers",
+          ],
+          order: { createdAt: "DESC" },
+        });
+      } else {
+        // Regular users only see projects they are assigned to
+        projects = await projectRepository
+          .createQueryBuilder("project")
+          .leftJoinAndSelect("project.assignees", "assignee")
+          .leftJoinAndSelect("project.files", "file")
+          .leftJoinAndSelect("project.headings", "heading")
+          .leftJoinAndSelect("heading.tasks", "headingTask")
+          .leftJoinAndSelect("headingTask.assignedUsers", "headingTaskUser")
+          .leftJoinAndSelect("heading.subHeadings", "subHeading")
+          .leftJoinAndSelect("subHeading.tasks", "subHeadingTask")
+          .leftJoinAndSelect(
+            "subHeadingTask.assignedUsers",
+            "subHeadingTaskUser",
+          )
+          .leftJoinAndSelect("project.projectTasks", "projectTask")
+          .leftJoinAndSelect("projectTask.assignedUsers", "projectTaskUser")
+          .where("project.workspaceId = :workspaceId", {
+            workspaceId: workspace.id,
+          })
+          .andWhere("assignee.id = :userId", { userId: user.id })
+          .orderBy("project.createdAt", "DESC")
+          .getMany();
+      }
+
+      console.log(
+        "[ProjectController.getAllProjects] Projects count:",
+        projects.length,
+      );
       return res.status(200).json(projects);
     } catch (error) {
+      console.error("[ProjectController.getAllProjects] Error:", error);
       return res.status(500).json({ message: "Internal server error", error });
     }
   };
 
-  static getProjectById = async (req: Request, res: Response) => {
+  static getProjectById = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
+    const user = req.user!;
+    const workspace = req.workspace!;
     try {
       const projectRepository = AppDataSource.getRepository(Project);
-      const project = await projectRepository.findOne({
-        where: { id: parseInt(id as string) },
-        relations: [
-          "assignees",
-          "files",
-          "headings",
-          "headings.tasks",
-          "headings.tasks.assignedUsers",
-          "headings.subHeadings",
-        ],
-      });
+
+      let project: Project | null;
+
+      if (user.role === "admin" || user.role === "super_admin") {
+        project = await projectRepository.findOne({
+          where: {
+            id: parseInt(id as string),
+            workspace: { id: workspace.id },
+          },
+          relations: [
+            "assignees",
+            "files",
+            "headings",
+            "headings.tasks",
+            "headings.tasks.assignedUsers",
+            "headings.subHeadings",
+            "headings.subHeadings.tasks",
+            "headings.subHeadings.tasks.assignedUsers",
+            "projectTasks",
+            "projectTasks.assignedUsers",
+          ],
+        });
+      } else {
+        // Check that the user is assigned to the project
+        project = await projectRepository
+          .createQueryBuilder("project")
+          .leftJoinAndSelect("project.assignees", "assignee")
+          .leftJoinAndSelect("project.files", "file")
+          .leftJoinAndSelect("project.headings", "heading")
+          .leftJoinAndSelect("heading.tasks", "headingTask")
+          .leftJoinAndSelect("headingTask.assignedUsers", "headingTaskUser")
+          .leftJoinAndSelect("heading.subHeadings", "subHeading")
+          .leftJoinAndSelect("subHeading.tasks", "subHeadingTask")
+          .leftJoinAndSelect(
+            "subHeadingTask.assignedUsers",
+            "subHeadingTaskUser",
+          )
+          .leftJoinAndSelect("project.projectTasks", "projectTask")
+          .leftJoinAndSelect("projectTask.assignedUsers", "projectTaskUser")
+          .where("project.id = :projectId", {
+            projectId: parseInt(id as string),
+          })
+          .andWhere("project.workspaceId = :workspaceId", {
+            workspaceId: workspace.id,
+          })
+          .andWhere("assignee.id = :userId", { userId: user.id })
+          .getOne();
+      }
 
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
       }
 
+      console.log(
+        "[ProjectController.getProjectById] Found project:",
+        project?.id,
+        project?.name,
+      );
+      console.log(
+        "[ProjectController.getProjectById] projectTasks length:",
+        project?.projectTasks?.length,
+      );
+      console.log("[ProjectController.getProjectById] headings tasks:");
+      project?.headings?.forEach((h) => {
+        console.log(`  - Heading ${h.name}: ${h.tasks?.length} tasks`);
+        h.subHeadings?.forEach((sh) => {
+          console.log(`    - Subheading ${sh.name}: ${sh.tasks?.length} tasks`);
+        });
+      });
+
       return res.status(200).json(project);
     } catch (error) {
+      console.error("[ProjectController.getProjectById] Error:", error);
       return res.status(500).json({ message: "Internal server error", error });
     }
   };
 
-  static addProjectHeading = async (req: Request, res: Response) => {
+  static addProjectHeading = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
     const { name, parentHeadingId } = req.body;
 
@@ -111,11 +218,23 @@ export class ProjectController {
     }
 
     try {
+      const user = req.user!;
+
+      // Only admins or super admins can add headings
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to add project headings" });
+      }
+
       const projectRepository = AppDataSource.getRepository(Project);
       const headingRepository = AppDataSource.getRepository(ProjectHeading);
 
-      const project = await projectRepository.findOneBy({
-        id: parseInt(projectId as string),
+      const project = await projectRepository.findOne({
+        where: {
+          id: parseInt(projectId as string),
+          workspace: { id: req.workspace!.id },
+        },
       });
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
@@ -165,13 +284,25 @@ export class ProjectController {
     }
 
     try {
+      const user = req.user!;
+
+      // Only admins or super admins can add project tasks
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to add project tasks" });
+      }
+
       const projectRepository = AppDataSource.getRepository(Project);
       const headingRepository = AppDataSource.getRepository(ProjectHeading);
       const taskRepository = AppDataSource.getRepository(Task);
       const userRepository = AppDataSource.getRepository(User);
 
-      const project = await projectRepository.findOneBy({
-        id: parseInt(projectId as string),
+      const project = await projectRepository.findOne({
+        where: {
+          id: parseInt(projectId as string),
+          workspace: { id: req.workspace!.id },
+        },
       });
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
@@ -325,15 +456,27 @@ export class ProjectController {
     }
   };
 
-  static updateProject = async (req: Request, res: Response) => {
+  static updateProject = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { name, description, dueDate, status, priority, assigneeIds } =
       req.body;
     try {
+      const user = req.user!;
+
+      // Only admins or super admins can update projects
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to update projects" });
+      }
+
       const projectRepository = AppDataSource.getRepository(Project);
       const userRepository = AppDataSource.getRepository(User);
       const project = await projectRepository.findOne({
-        where: { id: parseInt(id as string) },
+        where: {
+          id: parseInt(id as string),
+          workspace: { id: req.workspace!.id },
+        },
         relations: ["assignees"],
       });
 
@@ -367,12 +510,24 @@ export class ProjectController {
     }
   };
 
-  static deleteProject = async (req: Request, res: Response) => {
+  static deleteProject = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
+      const user = req.user!;
+
+      // Only admins or super admins can delete projects
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to delete projects" });
+      }
+
       const projectRepository = AppDataSource.getRepository(Project);
-      const project = await projectRepository.findOneBy({
-        id: parseInt(id as string),
+      const project = await projectRepository.findOne({
+        where: {
+          id: parseInt(id as string),
+          workspace: { id: req.workspace!.id },
+        },
       });
 
       if (!project) {
