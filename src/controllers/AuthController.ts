@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const JWT_SECRET: string = process.env.JWT_SECRET || "your_jwt_secret_key";
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000; 
 
 export class AuthController {
   static login = async (req: Request, res: Response) => {
@@ -48,7 +49,7 @@ export class AuthController {
       }
 
       const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
-        expiresIn: "30d",
+        expiresIn: "3h",
       });
 
       const isProduction = process.env.NODE_ENV === "production";
@@ -56,7 +57,7 @@ export class AuthController {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "none" : "lax",
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+        maxAge: THREE_HOURS_MS, // 3 hours
       });
 
       return res.status(200).json({
