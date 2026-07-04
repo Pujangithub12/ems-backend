@@ -41,10 +41,56 @@ export const authMiddleware = async (
       role: decoded.role,
     };
 
-    // Now get the current workspace
-    let workspaceId = req.cookies.workspaceId;
     const workspaceRepo = AppDataSource.getRepository(Workspace);
     const userRepo = AppDataSource.getRepository(User);
+
+    // The frontend is URL-driven: each request declares which workspace it's
+    // operating on via this header (derived from the route, not shared cookie
+    // state), so switching workspaces takes effect on the very next request
+    // instead of racing a cookie update. Falls back to the cookie below for
+    // requests that can't set custom headers (e.g. the static /uploads route).
+    const headerWorkspaceId = req.headers["x-workspace-id"];
+    if (headerWorkspaceId) {
+      const raw = Array.isArray(headerWorkspaceId)
+        ? headerWorkspaceId[0]
+        : headerWorkspaceId;
+      const parsedId = Number(raw);
+      if (!Number.isInteger(parsedId) || parsedId <= 0) {
+        return res.status(400).json({ message: "Invalid workspace id" });
+      }
+
+      const user = await userRepo.findOne({
+        where: { id: req.user.id },
+        relations: ["workspaces"],
+      });
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const targetWorkspace = user.workspaces.find((w) => w.id === parsedId);
+      if (!targetWorkspace) {
+        return res
+          .status(403)
+          .json({ message: "Not a member of this workspace" });
+      }
+
+      req.workspace = targetWorkspace;
+
+      // Keep the cookie in sync as the "last used" default for requests
+      // without the header.
+      const isProduction = process.env.NODE_ENV === "production";
+      res.cookie("workspaceId", targetWorkspace.id.toString(), {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? "none" : "lax",
+        maxAge: THREE_HOURS_MS,
+      });
+
+      return next();
+    }
+
+    // Now get the current workspace
+    let workspaceId = req.cookies.workspaceId;
 
     if (!workspaceId) {
       // Try to get user's first workspace or create default

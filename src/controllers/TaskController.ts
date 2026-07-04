@@ -441,7 +441,10 @@ EMS Management
       const workspace = req.workspace!;
       let tasks;
 
-      if (req.user?.role === UserRole.SUPER_ADMIN || req.user?.role === UserRole.ADMIN) {
+      if (
+        req.user?.role === UserRole.SUPER_ADMIN ||
+        req.user?.role === UserRole.ADMIN
+      ) {
         // Super admin and regular admin can see all tasks in current workspace
         tasks = await taskRepository.find({
           relations: ["assignedUsers", "project", "comments"],
@@ -1194,20 +1197,35 @@ EMS Management
       const isAdmin =
         req.user?.role === "admin" || req.user?.role === "super_admin";
       const userId = req.user?.id;
+      const workspace = req.workspace!;
 
       if (isAdmin) {
-        const total = await taskRepository.count();
+        const total = await taskRepository.count({
+          where: { workspace: { id: workspace.id } },
+        });
         const pending = await taskRepository.count({
-          where: { status: TaskStatus.PENDING },
+          where: {
+            status: TaskStatus.PENDING,
+            workspace: { id: workspace.id },
+          },
         });
         const inProgress = await taskRepository.count({
-          where: { status: TaskStatus.IN_PROGRESS },
+          where: {
+            status: TaskStatus.IN_PROGRESS,
+            workspace: { id: workspace.id },
+          },
         });
         const completed = await taskRepository.count({
-          where: { status: TaskStatus.COMPLETED },
+          where: {
+            status: TaskStatus.COMPLETED,
+            workspace: { id: workspace.id },
+          },
         });
         const highPriorityTasks = await taskRepository.find({
-          where: { priority: TaskPriority.HIGH },
+          where: {
+            priority: TaskPriority.HIGH,
+            workspace: { id: workspace.id },
+          },
           relations: ["assignedUsers"],
           order: { createdAt: "DESC" },
         });
@@ -1221,29 +1239,44 @@ EMS Management
         .createQueryBuilder("task")
         .leftJoin("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
+        .andWhere("task.workspace.id = :workspaceId", {
+          workspaceId: workspace.id,
+        })
         .getCount();
       const pending = await taskRepository
         .createQueryBuilder("task")
         .leftJoin("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
+        .andWhere("task.workspace.id = :workspaceId", {
+          workspaceId: workspace.id,
+        })
         .andWhere("task.status = :status", { status: TaskStatus.PENDING })
         .getCount();
       const inProgress = await taskRepository
         .createQueryBuilder("task")
         .leftJoin("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
+        .andWhere("task.workspace.id = :workspaceId", {
+          workspaceId: workspace.id,
+        })
         .andWhere("task.status = :status", { status: TaskStatus.IN_PROGRESS })
         .getCount();
       const completed = await taskRepository
         .createQueryBuilder("task")
         .leftJoin("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
+        .andWhere("task.workspace.id = :workspaceId", {
+          workspaceId: workspace.id,
+        })
         .andWhere("task.status = :status", { status: TaskStatus.COMPLETED })
         .getCount();
       const highPriorityTasks = await taskRepository
         .createQueryBuilder("task")
         .leftJoinAndSelect("task.assignedUsers", "user")
         .where("user.id = :userId", { userId })
+        .andWhere("task.workspace.id = :workspaceId", {
+          workspaceId: workspace.id,
+        })
         .andWhere("task.priority = :priority", { priority: TaskPriority.HIGH })
         .orderBy("task.createdAt", "DESC")
         .getMany();

@@ -27,3 +27,31 @@ export const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10MB limit
   },
 });
+
+// Project documents (Documents tab) — stored per-project under uploads/projects/<projectId>/
+const sanitizeFilename = (originalname: string): string => {
+  const base = path.basename(originalname).replace(/[^a-zA-Z0-9.\-_ ]/g, "_");
+  return base || "file";
+};
+
+const projectFileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const projectId = req.params.projectId;
+    const dir = path.join("uploads", "projects", String(projectId));
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
+  },
+});
+
+export const uploadProjectFile = multer({
+  storage: projectFileStorage,
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB limit
+  },
+});

@@ -10,11 +10,15 @@ import { CalendarEventController } from "../controllers/CalendarEventController"
 import { ActivityController } from "../controllers/ActivityController";
 import { WorkspaceController } from "../controllers/WorkspaceController";
 import { HierarchyController } from "../controllers/HierarchyController";
+import { ScheduleController } from "../controllers/ScheduleController";
+import { ScheduleService } from "../services/schedule.service";
 import { authMiddleware, roleMiddleware } from "../middlewares/auth";
-import { upload } from "../middlewares/upload";
+import { upload, uploadProjectFile } from "../middlewares/upload";
 import { UserRole } from "../entities/User";
 
 const router = Router();
+
+const scheduleController = new ScheduleController(new ScheduleService());
 
 // Auth routes
 router.post("/login", AuthController.login);
@@ -33,6 +37,8 @@ router.get(
   authMiddleware,
   WorkspaceController.getCurrent,
 );
+router.put("/workspaces/:id", authMiddleware, WorkspaceController.update);
+router.delete("/workspaces/:id", authMiddleware, WorkspaceController.remove);
 
 // User routes - Admin only for adding and deleting users
 router.post(
@@ -138,12 +144,35 @@ router.post(
   ProjectController.addProjectHeading,
 );
 
-// Project file routes
+// Project file routes (Documents tab)
+router.get(
+  "/projects/:projectId/files",
+  authMiddleware,
+  ProjectController.getProjectFiles,
+);
+router.post(
+  "/projects/:projectId/folders",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN]),
+  ProjectController.addProjectFolder,
+);
 router.post(
   "/projects/:projectId/files",
   authMiddleware,
   roleMiddleware([UserRole.ADMIN]),
+  uploadProjectFile.single("file"),
   ProjectController.addProjectFile,
+);
+router.get(
+  "/projects/files/:fileId/download",
+  authMiddleware,
+  ProjectController.downloadProjectFile,
+);
+router.put(
+  "/projects/files/:fileId",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN]),
+  ProjectController.renameProjectFile,
 );
 router.delete(
   "/projects/files/:fileId",
@@ -304,6 +333,19 @@ router.get("/activities", authMiddleware, ActivityController.getAllActivities);
 // Hierarchy routes
 router.get("/hierarchy", authMiddleware, HierarchyController.getHierarchy);
 router.put("/hierarchy", authMiddleware, HierarchyController.saveHierarchy);
+
+// Project schedule (Gantt) routes — full replace on save
+router.get(
+  "/projects/:projectId/schedule",
+  authMiddleware,
+  scheduleController.getSchedule,
+);
+router.put(
+  "/projects/:projectId/schedule",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN]),
+  scheduleController.saveSchedule,
+);
 
 // Date conversion is now handled on the frontend; server routes removed.
 
