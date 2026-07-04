@@ -7,6 +7,7 @@ import { Project } from "../entities/Project";
 import { SubTask } from "../entities/SubTask";
 import { TaskComment } from "../entities/TaskComment";
 import { SubTaskComment } from "../entities/SubTaskComment";
+import { LeaveRequest } from "../entities/LeaveRequest";
 import { In } from "typeorm";
 import { AuthRequest } from "../middlewares/auth";
 import { ActivityController } from "./ActivityController";
@@ -1194,6 +1195,7 @@ EMS Management
   static getDashboard = async (req: AuthRequest, res: Response) => {
     try {
       const taskRepository = AppDataSource.getRepository(Task);
+      const leaveRequestRepository = AppDataSource.getRepository(LeaveRequest);
       const isAdmin =
         req.user?.role === "admin" || req.user?.role === "super_admin";
       const userId = req.user?.id;
@@ -1229,11 +1231,29 @@ EMS Management
           relations: ["assignedUsers"],
           order: { createdAt: "DESC" },
         });
+        // Admins review every pending leave request in the workspace.
+        const pendingLeaveRequests = await leaveRequestRepository.count({
+          where: { status: "pending", workspace: { id: workspace.id } },
+        });
 
-        return res
-          .status(200)
-          .json({ total, pending, inProgress, completed, highPriorityTasks });
+        return res.status(200).json({
+          total,
+          pending,
+          inProgress,
+          completed,
+          highPriorityTasks,
+          pendingLeaveRequests,
+        });
       }
+
+      // Regular users only see the status of their own leave requests.
+      const pendingLeaveRequests = await leaveRequestRepository.count({
+        where: {
+          status: "pending",
+          workspace: { id: workspace.id },
+          user: { id: req.user!.id },
+        },
+      });
 
       const total = await taskRepository
         .createQueryBuilder("task")
@@ -1281,9 +1301,14 @@ EMS Management
         .orderBy("task.createdAt", "DESC")
         .getMany();
 
-      return res
-        .status(200)
-        .json({ total, pending, inProgress, completed, highPriorityTasks });
+      return res.status(200).json({
+        total,
+        pending,
+        inProgress,
+        completed,
+        highPriorityTasks,
+        pendingLeaveRequests,
+      });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
