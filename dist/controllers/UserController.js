@@ -33,8 +33,14 @@ class UserController {
             const currentUserRole = req.user?.role;
             let finalRole = role || User_1.UserRole.USER;
             if (currentUserRole === User_1.UserRole.ADMIN) {
-                // Admin can only create users
-                finalRole = User_1.UserRole.USER;
+                // Admin can create users or admins, but not super admins
+                if (finalRole === User_1.UserRole.USER || finalRole === User_1.UserRole.ADMIN) {
+                    // Keep the requested role (user or admin)
+                }
+                else {
+                    // Fallback to user if invalid role
+                    finalRole = User_1.UserRole.USER;
+                }
             }
             else if (currentUserRole !== User_1.UserRole.SUPER_ADMIN) {
                 // Users can't create anyone
@@ -163,8 +169,10 @@ class UserController {
             const currentUserRole = req.user?.role;
             if (role) {
                 if (currentUserRole === User_1.UserRole.ADMIN) {
-                    // Admin can only set role to user
-                    user.role = User_1.UserRole.USER;
+                    // Admin can set role to user or admin, but not super admin
+                    if (role === User_1.UserRole.USER || role === User_1.UserRole.ADMIN) {
+                        user.role = role;
+                    }
                 }
                 else if (currentUserRole === User_1.UserRole.SUPER_ADMIN) {
                     // Super admin can set any role

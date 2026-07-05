@@ -1,9 +1,10 @@
 import { Request, Response } from "express";
 import { AppDataSource } from "../config/data-source";
-import { User, UserRole } from "../entities/User";
+import { User } from "../entities/User";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import { LoginDto } from "../dto/auth.dto";
 
 dotenv.config();
 
@@ -12,7 +13,7 @@ const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 
 export class AuthController {
   static login = async (req: Request, res: Response) => {
-    const { email, password, role } = req.body;
+    const { email, password }: LoginDto = req.body;
 
     if (!email || !password) {
       return res
@@ -31,21 +32,6 @@ export class AuthController {
       const isPasswordValid = await bcrypt.compare(password, user.password);
       if (!isPasswordValid) {
         return res.status(401).json({ message: "Invalid email or password" });
-      }
-
-      // FIX 1: Validate that the user is logging in through the correct portal.
-      // If the frontend sends role: "admin" but the user's DB role is "user",
-      // reject the login instead of silently issuing a token for the wrong role.
-      if (role && role !== user.role) {
-        // Allow super_admin to log in via admin portal too
-        if (!(role === UserRole.ADMIN && user.role === UserRole.SUPER_ADMIN)) {
-          return res.status(403).json({
-            message:
-              role === UserRole.ADMIN || role === UserRole.SUPER_ADMIN
-                ? "Access denied. This account does not have admin privileges."
-                : "Please use the admin portal to sign in.",
-          });
-        }
       }
 
       const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {

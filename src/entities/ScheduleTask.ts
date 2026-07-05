@@ -48,6 +48,10 @@ export class ScheduleTask {
   @Column({ type: "varchar", nullable: true })
   predecessorId?: string | null;
 
+  /** Percent complete (0-100), manually entered. Null when not tracked. */
+  @Column({ type: "float", nullable: true })
+  progress?: number | null;
+
   /** Preserves the row order the user entered/uploaded. */
   @Column({ default: 0 })
   orderIndex!: number;

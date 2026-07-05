@@ -3,10 +3,11 @@ import { AppDataSource } from "../config/data-source";
 import { MyTask, MyTaskStatus } from "../entities/MyTask";
 import { User } from "../entities/User";
 import { AuthRequest } from "../middlewares/auth";
+import { CreateMyTaskDto, UpdateMyTaskDto } from "../dto/my-task.dto";
 
 export class MyTaskController {
   static createMyTask = async (req: AuthRequest, res: Response) => {
-    const { title, description, dueDate } = req.body;
+    const { title, description, dueDate }: CreateMyTaskDto = req.body;
 
     if (!title) {
       return res.status(400).json({ message: "Task title is required" });
@@ -27,7 +28,7 @@ export class MyTaskController {
 
       const taskPayload: Partial<MyTask> = {
         title,
-        description,
+        ...(description !== undefined ? { description } : {}),
         status: MyTaskStatus.PENDING,
         user,
         workspace
@@ -71,7 +72,7 @@ export class MyTaskController {
 
   static updateMyTask = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { title, description, dueDate, status } = req.body;
+    const { title, description, dueDate, status }: UpdateMyTaskDto = req.body;
 
     try {
       const myTaskRepository = AppDataSource.getRepository(MyTask);

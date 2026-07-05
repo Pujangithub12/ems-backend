@@ -4,24 +4,16 @@ import { HierarchyNode } from "../entities/HierarchyNode";
 import { User } from "../entities/User";
 import { UserRole } from "../entities/TaskEnums";
 import { AuthRequest } from "../middlewares/auth";
-
-// Interface for frontend tree node
-interface FrontendTreeNode {
-  id: string;
-  dbId?: number;
-  label?: string;
-  userId?: number;
-  children: FrontendTreeNode[];
-}
+import { HierarchyTreeNodeDto, SaveHierarchyDto } from "../dto/hierarchy.dto";
 
 // Helper to build tree from flat DB list
-const buildTreeFromDB = (nodes: HierarchyNode[]): FrontendTreeNode | null => {
-  const nodeMap = new Map<number, FrontendTreeNode>();
-  const rootNodes: FrontendTreeNode[] = [];
+const buildTreeFromDB = (nodes: HierarchyNode[]): HierarchyTreeNodeDto | null => {
+  const nodeMap = new Map<number, HierarchyTreeNodeDto>();
+  const rootNodes: HierarchyTreeNodeDto[] = [];
 
   // First pass: create all nodes
   nodes.forEach((node) => {
-    const frontendNode: FrontendTreeNode = {
+    const frontendNode: HierarchyTreeNodeDto = {
       id: `node-${node.id}`,
       dbId: node.id,
       label: node.label || node.user?.fullName || "Unknown",
@@ -47,7 +39,7 @@ const buildTreeFromDB = (nodes: HierarchyNode[]): FrontendTreeNode | null => {
   });
 
   // Sort children by orderIndex
-  const sortChildren = (nodeList: FrontendTreeNode[]) => {
+  const sortChildren = (nodeList: HierarchyTreeNodeDto[]) => {
     nodeList.sort((a, b) => {
       const nodeA = nodes.find((n) => n.id === a.dbId);
       const nodeB = nodes.find((n) => n.id === b.dbId);
@@ -136,7 +128,7 @@ export class HierarchyController {
         return res.status(400).json({ message: "Workspace not found" });
       }
 
-      const { tree } = req.body;
+      const { tree }: SaveHierarchyDto = req.body;
       if (!tree) {
         return res.status(400).json({ message: "Tree is required" });
       }
@@ -148,7 +140,7 @@ export class HierarchyController {
 
       // Function to recursively save nodes
       const saveNode = async (
-        node: FrontendTreeNode,
+        node: HierarchyTreeNodeDto,
         parentDbId?: number,
         orderIndex: number = 0,
       ): Promise<HierarchyNode> => {

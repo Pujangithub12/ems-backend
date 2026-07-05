@@ -1,10 +1,18 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WorkspaceController = void 0;
+const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
 const data_source_1 = require("../config/data-source");
 const Workspace_1 = require("../entities/Workspace");
 const User_1 = require("../entities/User");
+const Task_1 = require("../entities/Task");
+const ProjectFile_1 = require("../entities/ProjectFile");
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
+const isWorkspaceAdmin = (role) => role === "admin" || role === "super_admin";
 class WorkspaceController {
     // Get all workspaces for the current user
     static async getAll(req, res) {
@@ -40,7 +48,7 @@ class WorkspaceController {
             }
             const workspace = workspaceRepo.create({
                 name,
-                description,
+                ...(description !== undefined ? { description } : {}),
                 members: [user],
             });
             await workspaceRepo.save(workspace);
@@ -95,63 +103,129 @@ class WorkspaceController {
             return res.status(500).json({ message: "Failed to switch workspace" });
         }
     }
-    // Get current workspace from cookie
+    // Get the workspace authMiddleware already resolved for this request
+    // (X-Workspace-Id header if present, otherwise the workspaceId cookie —
+    // including its default-workspace-creation fallback either way).
     static async getCurrent(req, res) {
+        return res.status(200).json({ workspace: req.workspace });
+    }
+    // Rename / update a workspace's details
+    static async update(req, res) {
         try {
-            const workspaceId = req.cookies.workspaceId;
-            if (!workspaceId) {
-                // If no workspace cookie, try to get the user's first workspace
-                const userRepo = data_source_1.AppDataSource.getRepository(User_1.User);
+            const { id } = req.params;
+            const { name, description } = req.body;
+            if (!name || !String(name).trim()) {
+                return res.status(400).json({ message: "Workspace name is required" });
+            }
+            const workspaceRepo = data_source_1.AppDataSource.getRepository(Workspace_1.Workspace);
+            const workspace = await workspaceRepo.findOne({
+                where: { id: Number(id) },
+                relations: ["members"],
+            });
+            if (!workspace) {
+                return res.status(404).json({ message: "Workspace not found" });
+            }
+            const isMember = workspace.members.some((m) => m.id === req.user.id);
+            if (!isMember) {
+                return res.status(403).json({ message: "Not a member of this workspace" });
+            }
+            if (!isWorkspaceAdmin(req.user.role)) {
+                return res
+                    .status(403)
+                    .json({ message: "Only an admin can edit this workspace" });
+            }
+            workspace.name = String(name).trim();
+            if (description !== undefined) {
+                workspace.description = description;
+            }
+            await workspaceRepo.save(workspace);
+            return res.status(200).json({ workspace });
+        }
+        catch (error) {
+            console.error("Error updating workspace:", error);
+            return res.status(500).json({ message: "Failed to update workspace" });
+        }
+    }
+    // Permanently delete a workspace and everything scoped to it
+    static async remove(req, res) {
+        try {
+            const { id } = req.params;
+            const { confirmName } = req.body;
+            const workspaceId = Number(id);
+            const workspaceRepo = data_source_1.AppDataSource.getRepository(Workspace_1.Workspace);
+            const userRepo = data_source_1.AppDataSource.getRepository(User_1.User);
+            const workspace = await workspaceRepo.findOne({
+                where: { id: workspaceId },
+                relations: ["members"],
+            });
+            if (!workspace) {
+                return res.status(404).json({ message: "Workspace not found" });
+            }
+            const isMember = workspace.members.some((m) => m.id === req.user.id);
+            if (!isMember) {
+                return res.status(403).json({ message: "Not a member of this workspace" });
+            }
+            if (!isWorkspaceAdmin(req.user.role)) {
+                return res
+                    .status(403)
+                    .json({ message: "Only an admin can delete this workspace" });
+            }
+            if (!confirmName || confirmName !== workspace.name) {
+                return res
+                    .status(400)
+                    .json({ message: "Workspace name confirmation does not match" });
+            }
+            // Clean up files on disk that the DB cascade won't touch.
+            const projectFileRepo = data_source_1.AppDataSource.getRepository(ProjectFile_1.ProjectFile);
+            const projectFiles = await projectFileRepo.find({
+                where: { workspace: { id: workspaceId }, isFolder: false },
+            });
+            projectFiles.forEach((f) => {
+                if (f.path)
+                    fs_1.default.unlink(path_1.default.resolve("uploads", f.path), () => { });
+            });
+            const taskRepo = data_source_1.AppDataSource.getRepository(Task_1.Task);
+            const tasks = await taskRepo.find({
+                where: { workspace: { id: workspaceId } },
+            });
+            tasks.forEach((t) => {
+                (t.files || []).forEach((filePath) => fs_1.default.unlink(path_1.default.resolve(filePath), () => { }));
+            });
+            // The workspace FK on Project/Task/Announcement/LeaveRequest/MyTask/
+            // CalendarEvent/Activity/HierarchyNode (and the members join table) all
+            // carry ON DELETE CASCADE, so a single delete here removes everything
+            // scoped to this workspace at the database level.
+            await workspaceRepo.delete(workspaceId);
+            // If the caller was sitting in the workspace that just got deleted,
+            // move them to another one of their workspaces (or clear the cookie so
+            // authMiddleware creates a fresh default workspace on the next request).
+            let nextWorkspace = null;
+            if (req.workspace?.id === workspaceId) {
                 const user = await userRepo.findOne({
                     where: { id: req.user.id },
                     relations: ["workspaces"],
                 });
-                if (!user || user.workspaces.length === 0) {
-                    // Create default workspace if none exists
-                    const workspaceRepo = data_source_1.AppDataSource.getRepository(Workspace_1.Workspace);
-                    const defaultWorkspace = workspaceRepo.create({
-                        name: "EMS Workspace",
-                        members: [user],
-                    });
-                    await workspaceRepo.save(defaultWorkspace);
-                    // Set cookie
-                    const isProduction = process.env.NODE_ENV === "production";
-                    res.cookie("workspaceId", defaultWorkspace.id, {
+                nextWorkspace = user?.workspaces?.[0] ?? null;
+                const isProduction = process.env.NODE_ENV === "production";
+                if (nextWorkspace) {
+                    res.cookie("workspaceId", nextWorkspace.id.toString(), {
                         httpOnly: true,
                         secure: isProduction,
                         sameSite: isProduction ? "none" : "lax",
                         maxAge: 30 * 24 * 60 * 60 * 1000,
                     });
-                    return res.status(200).json({ workspace: defaultWorkspace });
                 }
-                const firstWorkspace = user.workspaces[0];
-                if (!firstWorkspace) {
-                    return res.status(404).json({ message: "No workspace found" });
+                else {
+                    res.clearCookie("workspaceId");
                 }
-                // Set cookie to first workspace
-                const isProduction = process.env.NODE_ENV === "production";
-                res.cookie("workspaceId", firstWorkspace.id, {
-                    httpOnly: true,
-                    secure: isProduction,
-                    sameSite: isProduction ? "none" : "lax",
-                    maxAge: 30 * 24 * 60 * 60 * 1000,
-                });
-                return res.status(200).json({ workspace: firstWorkspace });
             }
-            const workspaceRepo = data_source_1.AppDataSource.getRepository(Workspace_1.Workspace);
-            const workspace = await workspaceRepo.findOne({
-                where: { id: Number(workspaceId) },
-            });
-            if (!workspace) {
-                return res.status(404).json({ message: "Workspace not found" });
-            }
-            return res.status(200).json({ workspace });
+            return res
+                .status(200)
+                .json({ message: "Workspace deleted", workspace: nextWorkspace });
         }
         catch (error) {
-            console.error("Error getting current workspace:", error);
-            return res
-                .status(500)
-                .json({ message: "Failed to get current workspace" });
+            console.error("Error deleting workspace:", error);
+            return res.status(500).json({ message: "Failed to delete workspace" });
         }
     }
 }

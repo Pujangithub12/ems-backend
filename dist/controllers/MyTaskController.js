@@ -22,7 +22,7 @@ class MyTaskController {
             }
             const taskPayload = {
                 title,
-                description,
+                ...(description !== undefined ? { description } : {}),
                 status: MyTask_1.MyTaskStatus.PENDING,
                 user,
                 workspace

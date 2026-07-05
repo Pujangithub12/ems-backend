@@ -11,6 +11,7 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 class AuthController {
     static login = async (req, res) => {
         const { email, password, role } = req.body;
@@ -43,14 +44,14 @@ class AuthController {
                 }
             }
             const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role }, JWT_SECRET, {
-                expiresIn: "30d",
+                expiresIn: "3h",
             });
             const isProduction = process.env.NODE_ENV === "production";
             res.cookie("token", token, {
                 httpOnly: true,
                 secure: isProduction,
                 sameSite: isProduction ? "none" : "lax",
-                maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+                maxAge: THREE_HOURS_MS, // 3 hours
             });
             return res.status(200).json({
                 message: "Login successful",
