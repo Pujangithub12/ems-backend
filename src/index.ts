@@ -82,6 +82,36 @@ const seedAdmin = async () => {
   }
 };
 
+const seedSuperAdmin = async () => {
+  const userRepository = AppDataSource.getRepository(User);
+  const superAdminEmail = "superadmin@ems.com";
+  const superAdminExists = await userRepository.findOne({
+    where: { email: superAdminEmail },
+  });
+
+  if (!superAdminExists) {
+    const hashedPassword = await bcrypt.hash("superadmin123", 10);
+    const superAdmin = userRepository.create({
+      fullName: "Super Admin",
+      email: superAdminEmail,
+      password: hashedPassword,
+      phoneNumber: "0000000000",
+      address: "System",
+      jobPosition: "Super Administrator",
+      joinDate: new Date(),
+      role: UserRole.SUPER_ADMIN,
+    });
+    await userRepository.save(superAdmin);
+    console.log(`Default super admin created: ${superAdminEmail} / superadmin123`);
+  } else if (superAdminExists.role !== UserRole.SUPER_ADMIN) {
+    superAdminExists.role = UserRole.SUPER_ADMIN;
+    await userRepository.save(superAdminExists);
+    console.log(
+      `Existing account updated to role super_admin for: ${superAdminEmail}`,
+    );
+  }
+};
+
 const deleteOldAnnouncements = async () => {
   try {
     const announcementRepository = AppDataSource.getRepository(Announcement);
@@ -107,6 +137,7 @@ AppDataSource.initialize()
   .then(async () => {
     console.log("Data Source has been initialized!");
     await seedAdmin();
+    await seedSuperAdmin();
     await backfillWorkspace(); // Backfill all existing data to default workspace!
     
     // Delete old announcements immediately on startup

@@ -4,10 +4,12 @@ import { Announcement } from "../entities/Announcement";
 import { User } from "../entities/User";
 import { sendEmail } from "../utils/emailService";
 import { AuthRequest } from "../middlewares/auth";
+import { CreateAnnouncementDto } from "../dto/announcement.dto";
 
 export class AnnouncementController {
   static createAnnouncement = async (req: AuthRequest, res: Response) => {
-    const { subject, message, targetType, targetEmails } = req.body;
+    const { subject, message, targetType, targetEmails }: CreateAnnouncementDto =
+      req.body;
 
     if (!subject || !message || !targetType) {
       return res

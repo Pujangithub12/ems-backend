@@ -8,6 +8,12 @@ import { Task } from "../entities/Task";
 import { ProjectFile } from "../entities/ProjectFile";
 import { AuthRequest } from "../middlewares/auth";
 import jwt from "jsonwebtoken";
+import {
+  CreateWorkspaceDto,
+  SwitchWorkspaceDto,
+  UpdateWorkspaceDto,
+  DeleteWorkspaceDto,
+} from "../dto/workspace.dto";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
 
@@ -39,7 +45,7 @@ export class WorkspaceController {
   // Create a new workspace
   static async create(req: any, res: Response) {
     try {
-      const { name, description } = req.body;
+      const { name, description }: CreateWorkspaceDto = req.body;
       if (!name) {
         return res.status(400).json({ message: "Workspace name is required" });
       }
@@ -54,7 +60,7 @@ export class WorkspaceController {
 
       const workspace = workspaceRepo.create({
         name,
-        description,
+        ...(description !== undefined ? { description } : {}),
         members: [user],
       });
 
@@ -69,7 +75,7 @@ export class WorkspaceController {
   // Switch to a workspace (sets it in cookie)
   static async switch(req: any, res: Response) {
     try {
-      const { workspaceId } = req.body;
+      const { workspaceId }: SwitchWorkspaceDto = req.body;
       if (!workspaceId) {
         return res.status(400).json({ message: "Workspace ID is required" });
       }
@@ -130,7 +136,7 @@ export class WorkspaceController {
   static async update(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const { name, description } = req.body;
+      const { name, description }: UpdateWorkspaceDto = req.body;
 
       if (!name || !String(name).trim()) {
         return res.status(400).json({ message: "Workspace name is required" });
@@ -173,7 +179,7 @@ export class WorkspaceController {
   static async remove(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const { confirmName } = req.body;
+      const { confirmName }: DeleteWorkspaceDto = req.body;
       const workspaceId = Number(id);
 
       const workspaceRepo = AppDataSource.getRepository(Workspace);

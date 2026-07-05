@@ -13,6 +13,8 @@ export interface ScheduleTaskInput {
   startDate: string | null;
   parentId: string | null;
   predecessorId: string | null;
+  /** Percent complete (0-100), manually entered. Null when not tracked. */
+  progress: number | null;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -90,7 +92,18 @@ export function validateScheduleTasks(input: unknown): ScheduleTaskInput[] {
         ? String(raw.predecessorId).trim()
         : null;
 
-    return { id: finalId, taskName, duration, startDate, parentId, predecessorId };
+    let progress: number | null = null;
+    if (raw.progress !== undefined && raw.progress !== null && raw.progress !== "") {
+      const n = Number(raw.progress);
+      if (Number.isNaN(n)) {
+        throw new ValidationError(
+          `Task "${finalId}" has a non-numeric Progress.`,
+        );
+      }
+      progress = Math.max(0, Math.min(100, n));
+    }
+
+    return { id: finalId, taskName, duration, startDate, parentId, predecessorId, progress };
   });
 
   // Cross-row referential checks.

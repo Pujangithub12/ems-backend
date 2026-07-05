@@ -13,10 +13,12 @@ exports.ProjectHeading = void 0;
 const typeorm_1 = require("typeorm");
 const Project_1 = require("./Project");
 const Task_1 = require("./Task");
+const Workspace_1 = require("./Workspace");
 let ProjectHeading = class ProjectHeading {
     id;
     name;
     project;
+    workspace;
     parentHeading;
     subHeadings;
     tasks;
@@ -35,6 +37,10 @@ __decorate([
     (0, typeorm_1.ManyToOne)(() => Project_1.Project, (project) => project.headings, { onDelete: "CASCADE" }),
     __metadata("design:type", Project_1.Project)
 ], ProjectHeading.prototype, "project", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => Workspace_1.Workspace, { nullable: true }),
+    __metadata("design:type", Workspace_1.Workspace)
+], ProjectHeading.prototype, "workspace", void 0);
 __decorate([
     (0, typeorm_1.ManyToOne)(() => ProjectHeading, (heading) => heading.subHeadings, { nullable: true, onDelete: "CASCADE" }),
     __metadata("design:type", ProjectHeading)

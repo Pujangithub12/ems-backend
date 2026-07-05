@@ -9,7 +9,9 @@ class AnnouncementController {
     static createAnnouncement = async (req, res) => {
         const { subject, message, targetType, targetEmails } = req.body;
         if (!subject || !message || !targetType) {
-            return res.status(400).json({ message: "Subject, message, and targetType are required" });
+            return res
+                .status(400)
+                .json({ message: "Subject, message, and targetType are required" });
         }
         try {
             const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
@@ -18,18 +20,13 @@ class AnnouncementController {
             if (targetType === "all") {
                 const users = await userRepository.find({ select: ["email"] });
                 // Filter out users who don't have an email address
-                recipientEmails = users
-                    .map((u) => u.email)
-                    .filter((email) => email);
+                recipientEmails = users.map((u) => u.email).filter((email) => email);
             }
-            else if (targetType === "specific" &&
-                Array.isArray(targetEmails)) {
+            else if (targetType === "specific" && Array.isArray(targetEmails)) {
                 recipientEmails = targetEmails;
             }
             else {
-                return res
-                    .status(400)
-                    .json({
+                return res.status(400).json({
                     message: "Invalid targetType or missing targetEmails",
                 });
             }
@@ -43,15 +40,15 @@ class AnnouncementController {
                 message,
                 targetType,
                 targetEmails: targetType === "specific" ? recipientEmails : [],
-                workspace
+                workspace,
             });
             await announcementRepository.save(newAnnouncement);
-            (0, emailService_1.sendEmail)(recipientEmails, subject, message).catch(err => {
+            (0, emailService_1.sendEmail)(recipientEmails, subject, message).catch((err) => {
                 console.error("Failed to send announcement emails:", err);
             });
             return res.status(201).json({
                 message: "Announcement created and emails are being sent",
-                announcement: newAnnouncement
+                announcement: newAnnouncement,
             });
         }
         catch (error) {
@@ -62,10 +59,16 @@ class AnnouncementController {
         try {
             const announcementRepository = data_source_1.AppDataSource.getRepository(Announcement_1.Announcement);
             const workspace = req.workspace;
-            const history = await announcementRepository.find({
-                where: { workspace: { id: workspace.id } },
-                order: { createdAt: "DESC" }
-            });
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            const history = await announcementRepository
+                .createQueryBuilder("announcement")
+                .where("announcement.workspaceId = :workspaceId", {
+                workspaceId: workspace.id,
+            })
+                .andWhere("announcement.createdAt >= :sevenDaysAgo", { sevenDaysAgo })
+                .orderBy("announcement.createdAt", "DESC")
+                .getMany();
             return res.status(200).json(history);
         }
         catch (error) {
@@ -85,7 +88,7 @@ class AnnouncementController {
             const announcement = await announcementRepository.findOne({
                 where: {
                     id: parseInt(id),
-                    workspace: { id: workspace.id }
+                    workspace: { id: workspace.id },
                 },
             });
             if (!announcement) {

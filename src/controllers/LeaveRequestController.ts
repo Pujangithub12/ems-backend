@@ -3,10 +3,15 @@ import { AppDataSource } from "../config/data-source";
 import { LeaveRequest } from "../entities/LeaveRequest";
 import { User, UserRole } from "../entities/User";
 import { AuthRequest } from "../middlewares/auth";
+import {
+  CreateLeaveRequestDto,
+  UpdateLeaveRequestDto,
+  UpdateLeaveRequestStatusDto,
+} from "../dto/leave-request.dto";
 
 export class LeaveRequestController {
   static createLeaveRequest = async (req: AuthRequest, res: Response) => {
-    const { title, startDate, endDate, reason } = req.body;
+    const { title, startDate, endDate, reason }: CreateLeaveRequestDto = req.body;
 
     if (!title || !startDate || !endDate || !reason) {
       return res
@@ -93,7 +98,7 @@ export class LeaveRequestController {
 
   static updateStatus = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status }: UpdateLeaveRequestStatusDto = req.body;
 
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ message: "Invalid status" });
@@ -161,7 +166,7 @@ export class LeaveRequestController {
 
   static updateLeaveRequest = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { startDate, endDate, reason } = req.body;
+    const { startDate, endDate, reason }: UpdateLeaveRequestDto = req.body;
 
     try {
       const lrRepository = AppDataSource.getRepository(LeaveRequest);

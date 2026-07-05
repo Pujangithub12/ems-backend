@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AppDataSource } from "../config/data-source";
 import { CalendarEvent } from "../entities/CalendarEvent";
 import { AuthRequest } from "../middlewares/auth";
+import { CreateCalendarEventDto } from "../dto/calendar-event.dto";
 
 export class CalendarEventController {
   static getAllEvents = async (req: AuthRequest, res: Response) => {
@@ -19,7 +20,7 @@ export class CalendarEventController {
   };
 
   static createEvent = async (req: AuthRequest, res: Response) => {
-    const { title, date, type } = req.body;
+    const { title, date, type }: CreateCalendarEventDto = req.body;
 
     if (!title || !date) {
       return res.status(400).json({ message: "Title and date are required" });

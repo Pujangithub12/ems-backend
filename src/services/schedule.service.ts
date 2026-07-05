@@ -9,6 +9,7 @@ export interface ScheduleTaskDto {
   startDate: string | null;
   parentId: string | null;
   predecessorId: string | null;
+  progress: number | null;
 }
 
 function toProjectId(projectId: string): number {
@@ -27,6 +28,7 @@ function toDto(row: ScheduleTask): ScheduleTaskDto {
     startDate: row.startDate ?? null,
     parentId: row.parentId ?? null,
     predecessorId: row.predecessorId ?? null,
+    progress: row.progress ?? null,
   };
 }
 
@@ -75,6 +77,7 @@ export class ScheduleService {
           startDate: task.startDate,
           parentId: task.parentId,
           predecessorId: task.predecessorId,
+          progress: task.progress,
           orderIndex: index,
         }),
       );

@@ -4,6 +4,7 @@ import { User, UserRole } from "../entities/User";
 import { AuthRequest } from "../middlewares/auth";
 import bcrypt from "bcrypt";
 import { In } from "typeorm";
+import { CreateUserDto, UpdateUserDto } from "../dto/user.dto";
 
 export class UserController {
   static addUser = async (req: AuthRequest, res: Response) => {
@@ -16,7 +17,7 @@ export class UserController {
       jobPosition,
       joinDate,
       role,
-    } = req.body;
+    }: CreateUserDto = req.body;
 
     if (
       !fullName ||
@@ -44,7 +45,7 @@ export class UserController {
 
       // Enforce role creation rules
       const currentUserRole = req.user?.role;
-      let finalRole = role || UserRole.USER;
+      let finalRole = (role as UserRole) || UserRole.USER;
 
       if (currentUserRole === UserRole.ADMIN) {
         // Admin can create users or admins, but not super admins
@@ -169,7 +170,7 @@ export class UserController {
       jobPosition,
       joinDate,
       role,
-    } = req.body;
+    }: UpdateUserDto = req.body;
 
     if (!id) {
       return res.status(400).json({ message: "User ID is required" });
@@ -204,11 +205,11 @@ export class UserController {
         if (currentUserRole === UserRole.ADMIN) {
           // Admin can set role to user or admin, but not super admin
           if (role === UserRole.USER || role === UserRole.ADMIN) {
-            user.role = role;
+            user.role = role as UserRole;
           }
         } else if (currentUserRole === UserRole.SUPER_ADMIN) {
           // Super admin can set any role
-          user.role = role;
+          user.role = role as UserRole;
         }
         // Regular users can't change roles
       }

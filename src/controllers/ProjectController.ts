@@ -1,19 +1,23 @@
 import { Request, Response } from "express";
-import path from "path";
-import fs from "fs";
 import { AppDataSource } from "../config/data-source";
 import { Project } from "../entities/Project";
 import { User } from "../entities/User";
-import { ProjectFile } from "../entities/ProjectFile";
 import { ProjectHeading } from "../entities/ProjectHeading";
 import { Task } from "../entities/Task";
 import { TaskPriority, TaskStatus } from "../entities/TaskEnums";
 import { In } from "typeorm";
 import { AuthRequest } from "../middlewares/auth";
+import {
+  CreateProjectDto,
+  UpdateProjectDto,
+  AddProjectHeadingDto,
+  AddProjectTaskDto,
+  UpdateProjectTaskDto,
+} from "../dto/project.dto";
 
 export class ProjectController {
   static createProject = async (req: AuthRequest, res: Response) => {
-    const { name, description, dueDate, status, priority, assigneeIds } =
+    const { name, description, dueDate, status, priority, assigneeIds }: CreateProjectDto =
       req.body;
 
     if (!name) {
@@ -43,11 +47,11 @@ export class ProjectController {
         name,
         description,
         status:
-          status && Object.values(TaskStatus).includes(status)
+          status && Object.values(TaskStatus).includes(status as TaskStatus)
             ? status
             : TaskStatus.PENDING,
         priority:
-          priority && Object.values(TaskPriority).includes(priority)
+          priority && Object.values(TaskPriority).includes(priority as TaskPriority)
             ? priority
             : TaskPriority.MEDIUM,
         assignees,
@@ -213,7 +217,7 @@ export class ProjectController {
 
   static addProjectHeading = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
-    const { name, parentHeadingId } = req.body;
+    const { name, parentHeadingId }: AddProjectHeadingDto = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Heading name is required" });
@@ -277,7 +281,7 @@ export class ProjectController {
       priority,
       assignedUserIds,
       status,
-    } = req.body;
+    }: AddProjectTaskDto = req.body;
 
     if (!description || !dueDate || !title) {
       return res
@@ -331,6 +335,7 @@ export class ProjectController {
         dueDate: new Date(dueDate),
         priority: priority || TaskPriority.MEDIUM,
         project,
+        projectName: project.name,
         assignedUsers,
         status: status || TaskStatus.PENDING,
         progress: 0,
@@ -352,7 +357,7 @@ export class ProjectController {
 
   static updateProjectTask = async (req: Request, res: Response) => {
     const { taskId } = req.params;
-    const { description, dueDate, progress, status, priority, title } =
+    const { description, dueDate, progress, status, priority, title }: UpdateProjectTaskDto =
       req.body;
 
     try {
@@ -369,8 +374,8 @@ export class ProjectController {
       if (description !== undefined) task.description = description;
       if (dueDate !== undefined) task.dueDate = new Date(dueDate);
       if (progress !== undefined) task.progress = progress;
-      if (status !== undefined) task.status = status;
-      if (priority !== undefined) task.priority = priority;
+      if (status !== undefined) task.status = status as TaskStatus;
+      if (priority !== undefined) task.priority = priority as TaskPriority;
 
       await taskRepository.save(task);
       return res.status(200).json({ message: "Task updated", task });
@@ -399,280 +404,9 @@ export class ProjectController {
     }
   };
 
-  /** GET /projects/:projectId/files — flat list of all files/folders for the Documents tab. */
-  static getProjectFiles = async (req: AuthRequest, res: Response) => {
-    const { projectId } = req.params;
-    try {
-      const projectRepository = AppDataSource.getRepository(Project);
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-
-      const project = await projectRepository.findOne({
-        where: {
-          id: parseInt(projectId as string),
-          workspace: { id: req.workspace!.id },
-        },
-      });
-      if (!project) {
-        return res.status(404).json({ message: "Project not found" });
-      }
-
-      const files = await fileRepository.find({
-        where: { project: { id: project.id } },
-        relations: ["uploadedBy"],
-        order: { isFolder: "DESC", createdAt: "ASC" },
-      });
-
-      return res.status(200).json({ files });
-    } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
-    }
-  };
-
-  /** POST /projects/:projectId/folders — create a folder (no physical file). */
-  static addProjectFolder = async (req: AuthRequest, res: Response) => {
-    const { projectId } = req.params;
-    const { name, parentId } = req.body;
-
-    const trimmedName = typeof name === "string" ? name.trim() : "";
-    if (!trimmedName) {
-      return res.status(400).json({ message: "Folder name is required" });
-    }
-
-    try {
-      const projectRepository = AppDataSource.getRepository(Project);
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-
-      const project = await projectRepository.findOne({
-        where: {
-          id: parseInt(projectId as string),
-          workspace: { id: req.workspace!.id },
-        },
-      });
-      if (!project) {
-        return res.status(404).json({ message: "Project not found" });
-      }
-
-      const parsedParentId =
-        parentId !== undefined && parentId !== null && parentId !== ""
-          ? parseInt(parentId as string)
-          : null;
-
-      const duplicate = await fileRepository
-        .createQueryBuilder("file")
-        .where("file.projectId = :projectId", { projectId: project.id })
-        .andWhere("file.isFolder = true")
-        .andWhere("LOWER(file.name) = LOWER(:name)", { name: trimmedName })
-        .andWhere(
-          parsedParentId === null
-            ? "file.parentId IS NULL"
-            : "file.parentId = :parentId",
-          parsedParentId === null ? {} : { parentId: parsedParentId },
-        )
-        .getOne();
-
-      if (duplicate) {
-        return res
-          .status(409)
-          .json({ message: "A folder with this name already exists" });
-      }
-
-      const folderData: Partial<ProjectFile> = {
-        name: trimmedName,
-        isFolder: true,
-        project,
-        workspace: req.workspace!,
-        ...(parsedParentId !== null ? { parentId: parsedParentId } : {}),
-      };
-
-      const folder = fileRepository.create(folderData);
-      await fileRepository.save(folder);
-      return res.status(201).json({ message: "Folder created", file: folder });
-    } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
-    }
-  };
-
-  /** POST /projects/:projectId/files — upload a file (multipart, field "file") into an optional folder. */
-  static addProjectFile = async (req: AuthRequest, res: Response) => {
-    const { projectId } = req.params;
-    const { parentId } = req.body;
-    const uploadedFile = req.file;
-
-    if (!uploadedFile) {
-      return res.status(400).json({ message: "A file is required" });
-    }
-
-    try {
-      const projectRepository = AppDataSource.getRepository(Project);
-      const userRepository = AppDataSource.getRepository(User);
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-
-      const project = await projectRepository.findOne({
-        where: {
-          id: parseInt(projectId as string),
-          workspace: { id: req.workspace!.id },
-        },
-      });
-      if (!project) {
-        // Clean up the orphaned upload if the project doesn't exist/isn't in this workspace
-        fs.unlink(uploadedFile.path, () => {});
-        return res.status(404).json({ message: "Project not found" });
-      }
-
-      const uploadedBy = await userRepository.findOneBy({ id: req.user!.id });
-      const relativePath = path
-        .relative("uploads", uploadedFile.path)
-        .split(path.sep)
-        .join("/");
-      const ext = path.extname(uploadedFile.originalname).replace(".", "").toLowerCase();
-
-      const fileData: Partial<ProjectFile> = {
-        name: uploadedFile.originalname,
-        isFolder: false,
-        size: uploadedFile.size,
-        path: relativePath,
-        project,
-        workspace: req.workspace!,
-        ...(ext ? { type: ext } : {}),
-        ...(uploadedBy ? { uploadedBy } : {}),
-      };
-
-      if (parentId !== undefined && parentId !== null && parentId !== "") {
-        fileData.parentId = parseInt(parentId as string);
-      }
-
-      const file = fileRepository.create(fileData);
-      await fileRepository.save(file);
-      return res.status(201).json({ message: "File uploaded", file });
-    } catch (error) {
-      fs.unlink(uploadedFile.path, () => {});
-      return res.status(500).json({ message: "Internal server error", error });
-    }
-  };
-
-  /** GET /projects/files/:fileId/download — streams the file back with its original name. */
-  static downloadProjectFile = async (req: AuthRequest, res: Response) => {
-    const { fileId } = req.params;
-    try {
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const file = await fileRepository.findOne({
-        where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace"],
-      });
-
-      if (
-        !file ||
-        file.isFolder ||
-        !file.path ||
-        file.project?.workspace?.id !== req.workspace!.id
-      ) {
-        return res.status(404).json({ message: "File not found" });
-      }
-
-      const absolutePath = path.resolve("uploads", file.path);
-      return res.download(absolutePath, file.name);
-    } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
-    }
-  };
-
-  /** PUT /projects/files/:fileId — rename a file or folder. */
-  static renameProjectFile = async (req: AuthRequest, res: Response) => {
-    const { fileId } = req.params;
-    const { name } = req.body;
-
-    const trimmedName = typeof name === "string" ? name.trim() : "";
-    if (!trimmedName) {
-      return res.status(400).json({ message: "Name is required" });
-    }
-
-    try {
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const file = await fileRepository.findOne({
-        where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace"],
-      });
-
-      if (!file || file.project?.workspace?.id !== req.workspace!.id) {
-        return res.status(404).json({ message: "File not found" });
-      }
-
-      if (file.isFolder) {
-        const duplicate = await fileRepository
-          .createQueryBuilder("f")
-          .where("f.projectId = :projectId", { projectId: file.project.id })
-          .andWhere("f.isFolder = true")
-          .andWhere("f.id != :id", { id: file.id })
-          .andWhere("LOWER(f.name) = LOWER(:name)", { name: trimmedName })
-          .andWhere(
-            file.parentId === null || file.parentId === undefined
-              ? "f.parentId IS NULL"
-              : "f.parentId = :parentId",
-            file.parentId === null || file.parentId === undefined
-              ? {}
-              : { parentId: file.parentId },
-          )
-          .getOne();
-
-        if (duplicate) {
-          return res
-            .status(409)
-            .json({ message: "A folder with this name already exists" });
-        }
-      }
-
-      file.name = trimmedName;
-      await fileRepository.save(file);
-      return res.status(200).json({ message: "Renamed", file });
-    } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
-    }
-  };
-
-  /** DELETE /projects/files/:fileId — deletes a file, or a folder and everything inside it. */
-  static deleteProjectFile = async (req: AuthRequest, res: Response) => {
-    const { fileId } = req.params;
-    try {
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const file = await fileRepository.findOne({
-        where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace"],
-      });
-      if (!file || file.project?.workspace?.id !== req.workspace!.id) {
-        return res.status(404).json({ message: "File not found" });
-      }
-
-      // Gather this node plus all descendants (folders can be nested arbitrarily deep).
-      const allInProject = await fileRepository.find({
-        where: { project: { id: file.project.id } },
-      });
-      const toDelete: ProjectFile[] = [];
-      const collect = (nodeId: number) => {
-        const node = allInProject.find((f) => f.id === nodeId);
-        if (node) toDelete.push(node);
-        allInProject
-          .filter((f) => f.parentId === nodeId)
-          .forEach((child) => collect(child.id));
-      };
-      collect(file.id);
-
-      for (const node of toDelete) {
-        if (!node.isFolder && node.path) {
-          const absolutePath = path.resolve("uploads", node.path);
-          fs.unlink(absolutePath, () => {});
-        }
-      }
-
-      await fileRepository.remove(toDelete);
-      return res.status(200).json({ message: "Deleted" });
-    } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
-    }
-  };
-
   static updateProject = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { name, description, dueDate, status, priority, assigneeIds } =
+    const { name, description, dueDate, status, priority, assigneeIds }: UpdateProjectDto =
       req.body;
     try {
       const user = req.user!;
@@ -705,11 +439,11 @@ export class ProjectController {
           ? new Date(dueDate)
           : (undefined as unknown as Date);
       }
-      if (status && Object.values(TaskStatus).includes(status)) {
-        project.status = status;
+      if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
+        project.status = status as TaskStatus;
       }
-      if (priority && Object.values(TaskPriority).includes(priority)) {
-        project.priority = priority;
+      if (priority && Object.values(TaskPriority).includes(priority as TaskPriority)) {
+        project.priority = priority as TaskPriority;
       }
       if (assigneeIds && Array.isArray(assigneeIds)) {
         project.assignees = await userRepository.findBy({

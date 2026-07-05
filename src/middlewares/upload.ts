@@ -28,7 +28,7 @@ export const upload = multer({
   },
 });
 
-// Project documents (Documents tab) — stored per-project under uploads/projects/<projectId>/
+// Project documents (Documents tab) stored per-project under uploads/projects/<projectId>/
 const sanitizeFilename = (originalname: string): string => {
   const base = path.basename(originalname).replace(/[^a-zA-Z0-9.\-_ ]/g, "_");
   return base || "file";

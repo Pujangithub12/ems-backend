@@ -19,6 +19,7 @@ const LeaveRequest_1 = require("./LeaveRequest");
 const MyTask_1 = require("./MyTask");
 const CalendarEvent_1 = require("./CalendarEvent");
 const Activity_1 = require("./Activity");
+const HierarchyNode_1 = require("./HierarchyNode");
 let Workspace = class Workspace {
     id;
     name;
@@ -31,6 +32,7 @@ let Workspace = class Workspace {
     myTasks;
     calendarEvents;
     activities;
+    hierarchyNodes;
     createdAt;
 };
 exports.Workspace = Workspace;
@@ -79,6 +81,10 @@ __decorate([
     (0, typeorm_1.OneToMany)(() => Activity_1.Activity, (act) => act.workspace, { cascade: true }),
     __metadata("design:type", Array)
 ], Workspace.prototype, "activities", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => HierarchyNode_1.HierarchyNode, (node) => node.workspace, { cascade: true }),
+    __metadata("design:type", Array)
+], Workspace.prototype, "hierarchyNodes", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)(),
     __metadata("design:type", Date)

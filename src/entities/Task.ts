@@ -21,9 +21,6 @@ export class Task {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @Column({ nullable: true })
-  companyName?: string;
-
   @Column()
   title!: string;
 
