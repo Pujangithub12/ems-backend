@@ -4,6 +4,8 @@ import dotenv from "dotenv";
 import { AppDataSource } from "../config/data-source";
 import { Workspace } from "../entities/Workspace";
 import { User } from "../entities/User";
+import { PermissionKey } from "../config/permissions";
+import { roleHasPermission } from "../utils/permissionService";
 
 dotenv.config();
 
@@ -137,18 +139,26 @@ export const authMiddleware = async (
         req.workspace = firstWorkspace;
       }
     } else {
-      // Get workspace from cookie
-      const workspace = await workspaceRepo.findOne({
-        where: { id: Number(workspaceId) },
+      // Get workspace from cookie — re-verified against this user's actual
+      // memberships on every request. The cookie is client-controlled, so
+      // trusting its id alone would let anyone read/write another
+      // workspace's data just by setting workspaceId to its id.
+      const user = await userRepo.findOne({
+        where: { id: req.user.id },
+        relations: ["workspaces"],
       });
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
 
-      if (!workspace) {
-        // Invalid workspace cookie, fallback to first
-        const user = await userRepo.findOne({
-          where: { id: req.user.id },
-          relations: ["workspaces"],
-        });
-        if (user && user.workspaces.length > 0) {
+      const cookieWorkspace = user.workspaces.find(
+        (w) => w.id === Number(workspaceId),
+      );
+
+      if (!cookieWorkspace) {
+        // Cookie is stale, invalid, or points to a workspace this user is
+        // no longer (or never was) a member of — fall back to their first.
+        if (user.workspaces.length > 0) {
           const fallbackWorkspace = user.workspaces[0];
           if (!fallbackWorkspace) {
             return res.status(404).json({ message: "Workspace not found" });
@@ -165,7 +175,7 @@ export const authMiddleware = async (
           return res.status(404).json({ message: "Workspace not found" });
         }
       } else {
-        req.workspace = workspace;
+        req.workspace = cookieWorkspace;
       }
     }
 
@@ -182,6 +192,25 @@ export const roleMiddleware = (roles: string[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     console.log("roleMiddleware:", req.user?.role, roles);
     if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Forbidden: Access denied" });
+    }
+    next();
+  };
+};
+
+/**
+ * Gates a route by a dynamic, DB-backed permission instead of a hardcoded
+ * role list — see config/permissions.ts and utils/permissionService.ts.
+ * A super admin can grant/revoke these per role from the Roles & Permissions
+ * settings tab; this middleware is what actually enforces the change.
+ */
+export const permissionMiddleware = (key: PermissionKey) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const allowed = await roleHasPermission(req.user.role, key);
+    if (!allowed) {
       return res.status(403).json({ message: "Forbidden: Access denied" });
     }
     next();

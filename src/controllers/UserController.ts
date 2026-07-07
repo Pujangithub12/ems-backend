@@ -48,9 +48,13 @@ export class UserController {
       let finalRole = (role as UserRole) || UserRole.USER;
 
       if (currentUserRole === UserRole.ADMIN) {
-        // Admin can create users or admins, but not super admins
-        if (finalRole === UserRole.USER || finalRole === UserRole.ADMIN) {
-          // Keep the requested role (user or admin)
+        // Admin can create users, finance, or admins, but not super admins
+        if (
+          finalRole === UserRole.USER ||
+          finalRole === UserRole.FINANCE ||
+          finalRole === UserRole.ADMIN
+        ) {
+          // Keep the requested role (user, finance, or admin)
         } else {
           // Fallback to user if invalid role
           finalRole = UserRole.USER;
@@ -203,8 +207,12 @@ export class UserController {
       const currentUserRole = req.user?.role;
       if (role) {
         if (currentUserRole === UserRole.ADMIN) {
-          // Admin can set role to user or admin, but not super admin
-          if (role === UserRole.USER || role === UserRole.ADMIN) {
+          // Admin can set role to user, finance, or admin, but not super admin
+          if (
+            role === UserRole.USER ||
+            role === UserRole.FINANCE ||
+            role === UserRole.ADMIN
+          ) {
             user.role = role as UserRole;
           }
         } else if (currentUserRole === UserRole.SUPER_ADMIN) {

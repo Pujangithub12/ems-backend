@@ -23,6 +23,13 @@ import {
   UpdateTaskStatusDto,
 } from "../dto/task.dto";
 
+const sanitizeCreatedBy = (task: Task) => {
+  if (task.createdBy) {
+    const { id, fullName, email } = task.createdBy;
+    task.createdBy = { id, fullName, email } as User;
+  }
+};
+
 export class TaskController {
   static createTask = async (req: AuthRequest, res: Response) => {
     const {
@@ -328,6 +335,8 @@ EMS Management
         );
       }
 
+      sanitizeCreatedBy(newTask);
+
       return res.status(201).json({
         message: "Task created and assigned successfully",
         task: newTask,
@@ -350,7 +359,7 @@ EMS Management
       ) {
         // Super admin and regular admin can see all tasks in current workspace
         tasks = await taskRepository.find({
-          relations: ["assignedUsers", "project", "comments"],
+          relations: ["assignedUsers", "project", "comments", "createdBy"],
           where: { workspace: { id: workspace.id } },
           order: { createdAt: "DESC" },
         });
@@ -361,6 +370,7 @@ EMS Management
           .leftJoinAndSelect("task.assignedUsers", "user")
           .leftJoinAndSelect("task.project", "project")
           .leftJoinAndSelect("task.comments", "comment")
+          .leftJoinAndSelect("task.createdBy", "createdByUser")
           .where("user.id = :userId", { userId: req.user?.id })
           .andWhere("task.workspace.id = :workspaceId", {
             workspaceId: workspace.id,
@@ -368,6 +378,8 @@ EMS Management
           .orderBy("task.createdAt", "DESC")
           .getMany();
       }
+
+      tasks.forEach((t) => sanitizeCreatedBy(t));
 
       if (tasks.length > 0) {
         const taskIds = tasks.map((t) => t.id);
@@ -447,7 +459,13 @@ EMS Management
       const taskRepository = AppDataSource.getRepository(Task);
       const task = await taskRepository.findOne({
         where: { id: parseInt(id as string) },
-        relations: ["assignedUsers", "project", "comments", "comments.author"],
+        relations: [
+          "assignedUsers",
+          "project",
+          "comments",
+          "comments.author",
+          "createdBy",
+        ],
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
@@ -466,6 +484,7 @@ EMS Management
       const allSubTasks = await fetchSubTasksForTask(task.id);
       task.subTasks = buildSubTaskTree(allSubTasks);
       task.progress = computeAverageLeafProgress(task.subTasks);
+      sanitizeCreatedBy(task);
 
       return res.status(200).json(task);
     } catch (error) {
@@ -635,7 +654,13 @@ EMS Management
       // 4. Refetch task WITHOUT subTasks relations (we will build it manually)
       const updatedTask = await taskRepository.findOne({
         where: { id: task.id },
-        relations: ["assignedUsers", "project", "comments", "comments.author"],
+        relations: [
+          "assignedUsers",
+          "project",
+          "comments",
+          "comments.author",
+          "createdBy",
+        ],
       });
 
       // 5. Fetch ALL subtasks and build the complete tree
@@ -647,6 +672,7 @@ EMS Management
         await taskRepository.update(task.id, {
           progress: updatedTask.progress,
         });
+        sanitizeCreatedBy(updatedTask);
       }
 
       // Log activity if status changed
@@ -738,7 +764,7 @@ EMS Management
       const projectIdInt = parseInt(projectId as string);
       const projectTasks = await taskRepository.find({
         where: { project: { id: projectIdInt } },
-        relations: ["assignedUsers", "project", "comments"],
+        relations: ["assignedUsers", "project", "comments", "createdBy"],
         order: { createdAt: "DESC" },
       });
 
@@ -751,6 +777,8 @@ EMS Management
           task.assignedUsers.some((user) => user.id === req.user?.id),
         );
       }
+
+      tasksToReturn.forEach((t) => sanitizeCreatedBy(t));
 
       if (tasksToReturn.length > 0) {
         const taskIds = tasksToReturn.map((t) => t.id);
