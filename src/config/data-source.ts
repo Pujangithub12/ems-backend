@@ -16,6 +16,7 @@ import { Activity } from "../entities/Activity";
 import { Workspace } from "../entities/Workspace";
 import { HierarchyNode } from "../entities/HierarchyNode";
 import { ScheduleTask } from "../entities/ScheduleTask";
+import { RolePermission } from "../entities/RolePermission";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -43,6 +44,7 @@ const entityList = isProduction
       Workspace,
       HierarchyNode,
       ScheduleTask,
+      RolePermission,
     ];
 
 const baseOptions: DataSourceOptions = {

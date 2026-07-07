@@ -16,7 +16,8 @@ import { ActivityController } from "../controllers/ActivityController";
 import { HierarchyController } from "../controllers/HierarchyController";
 import { ScheduleController } from "../controllers/ScheduleController";
 import { ScheduleService } from "../services/schedule.service";
-import { authMiddleware, roleMiddleware } from "../middlewares/auth";
+import { PermissionController } from "../controllers/PermissionController";
+import { authMiddleware, roleMiddleware, permissionMiddleware } from "../middlewares/auth";
 import { upload, uploadProjectFile } from "../middlewares/upload";
 import { UserRole } from "../entities/User";
 
@@ -28,6 +29,7 @@ const scheduleController = new ScheduleController(new ScheduleService());
 router.post("/login", AuthController.login);
 router.post("/logout", AuthController.logout);
 router.get("/me", authMiddleware, AuthController.getMe);
+router.put("/me/password", authMiddleware, AuthController.changePassword);
 router.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
 });
@@ -44,24 +46,34 @@ router.get(
 router.put("/workspaces/:id", authMiddleware, WorkspaceController.update);
 router.delete("/workspaces/:id", authMiddleware, WorkspaceController.remove);
 
+// Permission routes — matrix is viewable by anyone, but only a super admin
+// can edit it (hardcoded, not itself a toggleable permission).
+router.get("/permissions", authMiddleware, PermissionController.getMatrix);
+router.put(
+  "/permissions",
+  authMiddleware,
+  roleMiddleware([UserRole.SUPER_ADMIN]),
+  PermissionController.updateMatrix,
+);
+
 // User routes - Admin only for adding and deleting users
 router.post(
   "/users",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("members.manage"),
   UserController.addUser,
 );
 router.get("/users", authMiddleware, UserController.getAllUsers);
 router.delete(
   "/users/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("members.manage"),
   UserController.deleteUser,
 );
 router.put(
   "/users/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("members.manage"),
   UserController.updateUser,
 );
 
@@ -69,14 +81,14 @@ router.put(
 router.post(
   "/announcements",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("announcements.manage"),
   AnnouncementController.createAnnouncement,
 );
 router.get("/announcements", authMiddleware, AnnouncementController.getHistory);
 router.delete(
   "/announcements/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("announcements.manage"),
   AnnouncementController.deleteAnnouncement,
 );
 
@@ -84,7 +96,7 @@ router.delete(
 router.post(
   "/projects",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.manage"),
   ProjectController.createProject,
 );
 router.get("/projects", authMiddleware, ProjectController.getAllProjects);
@@ -92,13 +104,13 @@ router.get("/projects/:id", authMiddleware, ProjectController.getProjectById);
 router.put(
   "/projects/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.manage"),
   ProjectController.updateProject,
 );
 router.delete(
   "/projects/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.manage"),
   ProjectController.deleteProject,
 );
 
@@ -106,19 +118,19 @@ router.delete(
 router.post(
   "/projects/:projectId/tasks",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.manage"),
   ProjectController.addProjectTask,
 );
 router.put(
   "/projects/tasks/:taskId",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.manage"),
   ProjectController.updateProjectTask,
 );
 router.delete(
   "/projects/tasks/:taskId",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.manage"),
   ProjectController.deleteProjectTask,
 );
 router.get(
@@ -131,7 +143,7 @@ router.get(
 router.post(
   "/projects/:projectId/headings",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.manage"),
   ProjectController.addProjectHeading,
 );
 
@@ -144,13 +156,13 @@ router.get(
 router.post(
   "/projects/:projectId/folders",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.documents"),
   ProjectFileController.addProjectFolder,
 );
 router.post(
   "/projects/:projectId/files",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.documents"),
   uploadProjectFile.single("file"),
   ProjectFileController.addProjectFile,
 );
@@ -162,13 +174,13 @@ router.get(
 router.put(
   "/projects/files/:fileId",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.documents"),
   ProjectFileController.renameProjectFile,
 );
 router.delete(
   "/projects/files/:fileId",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.documents"),
   ProjectFileController.deleteProjectFile,
 );
 
@@ -197,7 +209,7 @@ router.put(
 router.put(
   "/tasks/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("tasks.edit"),
   upload.array("files"),
   TaskController.updateTask,
 );
@@ -209,7 +221,7 @@ router.put(
 router.delete(
   "/tasks/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("tasks.delete"),
   TaskController.deleteTask,
 );
 
@@ -246,7 +258,7 @@ router.get(
 router.put(
   "/tasks/:taskId/comments/:commentId/feedback",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("tasks.feedback"),
   TaskCommentController.addFeedback,
 );
 
@@ -289,7 +301,7 @@ router.get(
 router.put(
   "/leaverequest/:id/status",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("leave.manage"),
   LeaveRequestController.updateStatus,
 );
 
@@ -302,7 +314,7 @@ router.put(
 router.delete(
   "/leaverequest/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("leave.manage"),
   LeaveRequestController.deleteLeaveRequest,
 );
 
@@ -311,13 +323,13 @@ router.get("/events", authMiddleware, CalendarEventController.getAllEvents);
 router.post(
   "/events",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("calendar.manage"),
   CalendarEventController.createEvent,
 );
 router.delete(
   "/events/:id",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("calendar.manage"),
   CalendarEventController.deleteEvent,
 );
 
@@ -326,7 +338,12 @@ router.get("/activities", authMiddleware, ActivityController.getAllActivities);
 
 // Hierarchy routes
 router.get("/hierarchy", authMiddleware, HierarchyController.getHierarchy);
-router.put("/hierarchy", authMiddleware, HierarchyController.saveHierarchy);
+router.put(
+  "/hierarchy",
+  authMiddleware,
+  permissionMiddleware("hierarchy.manage"),
+  HierarchyController.saveHierarchy,
+);
 
 // Project schedule (Gantt) routes — full replace on save
 router.get(
@@ -337,7 +354,7 @@ router.get(
 router.put(
   "/projects/:projectId/schedule",
   authMiddleware,
-  roleMiddleware([UserRole.ADMIN]),
+  permissionMiddleware("projects.schedule"),
   scheduleController.saveSchedule,
 );
 

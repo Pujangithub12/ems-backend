@@ -14,5 +14,6 @@ export enum TaskStatus {
 export enum UserRole {
   SUPER_ADMIN = "super_admin",
   ADMIN = "admin",
+  FINANCE = "finance",
   USER = "user",
 }

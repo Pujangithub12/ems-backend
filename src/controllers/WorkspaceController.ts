@@ -14,11 +14,9 @@ import {
   UpdateWorkspaceDto,
   DeleteWorkspaceDto,
 } from "../dto/workspace.dto";
+import { roleHasPermission } from "../utils/permissionService";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
-
-const isWorkspaceAdmin = (role?: string) =>
-  role === "admin" || role === "super_admin";
 
 export class WorkspaceController {
   // Get all workspaces for the current user
@@ -156,7 +154,7 @@ export class WorkspaceController {
       if (!isMember) {
         return res.status(403).json({ message: "Not a member of this workspace" });
       }
-      if (!isWorkspaceAdmin(req.user!.role)) {
+      if (!(await roleHasPermission(req.user!.role, "workspace.manage"))) {
         return res
           .status(403)
           .json({ message: "Only an admin can edit this workspace" });
@@ -197,7 +195,7 @@ export class WorkspaceController {
       if (!isMember) {
         return res.status(403).json({ message: "Not a member of this workspace" });
       }
-      if (!isWorkspaceAdmin(req.user!.role)) {
+      if (!(await roleHasPermission(req.user!.role, "workspace.manage"))) {
         return res
           .status(403)
           .json({ message: "Only an admin can delete this workspace" });

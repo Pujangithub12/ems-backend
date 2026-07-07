@@ -4,7 +4,7 @@ import { User } from "../entities/User";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
-import { LoginDto } from "../dto/auth.dto";
+import { LoginDto, ChangePasswordDto } from "../dto/auth.dto";
 
 dotenv.config();
 
@@ -87,6 +87,45 @@ export class AuthController {
           role: user.role,
         },
       });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static changePassword = async (req: any, res: Response) => {
+    const { currentPassword, newPassword }: ChangePasswordDto = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res
+        .status(400)
+        .json({ message: "Current and new password are required" });
+    }
+    if (newPassword.length < 6) {
+      return res
+        .status(400)
+        .json({ message: "New password must be at least 6 characters" });
+    }
+
+    try {
+      const userRepository = AppDataSource.getRepository(User);
+      const user = await userRepository.findOne({ where: { id: req.user.id } });
+
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const isPasswordValid = await bcrypt.compare(
+        currentPassword,
+        user.password,
+      );
+      if (!isPasswordValid) {
+        return res.status(401).json({ message: "Current password is incorrect" });
+      }
+
+      user.password = await bcrypt.hash(newPassword, 10);
+      await userRepository.save(user);
+
+      return res.status(200).json({ message: "Password updated successfully" });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }

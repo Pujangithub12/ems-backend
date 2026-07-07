@@ -10,6 +10,7 @@ import { User, UserRole } from "./entities/User";
 import { Announcement } from "./entities/Announcement";
 import bcrypt from "bcrypt";
 import { backfillWorkspace } from "./utils/backfill-workspace";
+import { seedRolePermissions } from "./utils/permissionService";
 
 dotenv.config();
 
@@ -139,6 +140,7 @@ AppDataSource.initialize()
     await seedAdmin();
     await seedSuperAdmin();
     await backfillWorkspace(); // Backfill all existing data to default workspace!
+    await seedRolePermissions();
     
     // Delete old announcements immediately on startup
     await deleteOldAnnouncements();

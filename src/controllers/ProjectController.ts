@@ -15,6 +15,15 @@ import {
   UpdateProjectTaskDto,
 } from "../dto/project.dto";
 
+const sanitizeAssignees = (project: Project) => {
+  if (project.assignees) {
+    project.assignees = project.assignees.map((u) => {
+      const { password, ...rest } = u;
+      return rest as User;
+    });
+  }
+};
+
 export class ProjectController {
   static createProject = async (req: AuthRequest, res: Response) => {
     const { name, description, dueDate, status, priority, assigneeIds }: CreateProjectDto =
@@ -207,6 +216,8 @@ export class ProjectController {
           console.log(`    - Subheading ${sh.name}: ${sh.tasks?.length} tasks`);
         });
       });
+
+      sanitizeAssignees(project);
 
       return res.status(200).json(project);
     } catch (error) {
