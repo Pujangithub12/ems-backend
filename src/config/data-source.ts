@@ -17,6 +17,7 @@ import { Workspace } from "../entities/Workspace";
 import { HierarchyNode } from "../entities/HierarchyNode";
 import { ScheduleTask } from "../entities/ScheduleTask";
 import { RolePermission } from "../entities/RolePermission";
+import { PendingSignup } from "../entities/PendingSignup";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -45,6 +46,7 @@ const entityList = isProduction
       HierarchyNode,
       ScheduleTask,
       RolePermission,
+      PendingSignup,
     ];
 
 const baseOptions: DataSourceOptions = {
