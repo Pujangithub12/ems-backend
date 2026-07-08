@@ -29,6 +29,7 @@ const scheduleController = new ScheduleController(new ScheduleService());
 router.post("/login", AuthController.login);
 router.post("/logout", AuthController.logout);
 router.get("/me", authMiddleware, AuthController.getMe);
+router.put("/me", authMiddleware, AuthController.updateMe);
 router.put("/me/password", authMiddleware, AuthController.changePassword);
 router.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });

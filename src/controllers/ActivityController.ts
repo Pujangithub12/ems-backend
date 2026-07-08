@@ -5,7 +5,7 @@ import { AuthRequest } from "../middlewares/auth";
 import { Workspace } from "../entities/Workspace";
 
 export class ActivityController {
-  
+
   static getAllActivities = async (req: AuthRequest, res: Response) => {
     try {
       const activityRepository = AppDataSource.getRepository(Activity);
@@ -14,6 +14,14 @@ export class ActivityController {
         where: { workspace: { id: workspace.id } },
         relations: ["user", "task"],
         order: { createdAt: "DESC" },
+      });
+      // `relations: ["user"]` pulls the full User row — strip the password
+      // hash before sending activities to the client.
+      activities.forEach((a) => {
+        if (a.user) {
+          const { id, fullName, email } = a.user;
+          a.user = { id, fullName, email } as any;
+        }
       });
       return res.status(200).json(activities);
     } catch (error) {

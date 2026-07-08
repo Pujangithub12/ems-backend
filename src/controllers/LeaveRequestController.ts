@@ -9,6 +9,16 @@ import {
   UpdateLeaveRequestStatusDto,
 } from "../dto/leave-request.dto";
 
+// `user` is an eager relation on LeaveRequest, so it is always populated
+// (and includes the password hash) regardless of the `relations` option
+// passed to the query — strip it before sending requests to the client.
+const sanitizeUser = (lr: LeaveRequest) => {
+  if (lr.user) {
+    const { id, fullName, email } = lr.user;
+    lr.user = { id, fullName, email } as User;
+  }
+};
+
 export class LeaveRequestController {
   static createLeaveRequest = async (req: AuthRequest, res: Response) => {
     const { title, startDate, endDate, reason }: CreateLeaveRequestDto = req.body;
@@ -41,6 +51,7 @@ export class LeaveRequestController {
       });
 
       await lrRepository.save(newRequest);
+      sanitizeUser(newRequest);
 
       return res
         .status(201)
@@ -75,6 +86,7 @@ export class LeaveRequestController {
                 workspace: { id: workspace.id }
               },
             });
+            sanitizeUser(lr);
             return { ...lr, historyCount };
           }),
         );
@@ -83,12 +95,13 @@ export class LeaveRequestController {
       }
 
       const mine = await lrRepository.find({
-        where: { 
+        where: {
           user: { id: req.user?.id },
-          workspace: { id: workspace.id } 
+          workspace: { id: workspace.id }
         },
         order: { createdAt: "DESC" },
       } as any);
+      mine.forEach(sanitizeUser);
 
       return res.status(200).json(mine);
     } catch (error) {
@@ -126,6 +139,7 @@ export class LeaveRequestController {
 
       lr.status = status;
       await lrRepository.save(lr);
+      sanitizeUser(lr);
 
       return res
         .status(200)
@@ -158,6 +172,7 @@ export class LeaveRequestController {
         return res.status(403).json({ message: "Forbidden" });
       }
 
+      sanitizeUser(lr);
       return res.status(200).json(lr);
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -194,6 +209,7 @@ export class LeaveRequestController {
       if (reason) lr.reason = reason;
 
       await lrRepository.save(lr);
+      sanitizeUser(lr);
 
       return res
         .status(200)
