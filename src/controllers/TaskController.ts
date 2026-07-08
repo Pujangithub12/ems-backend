@@ -544,7 +544,7 @@ EMS Management
       }
 
       let parsedUserIds: number[] = [];
-      if (userIds) {
+      if (userIds !== undefined && userIds !== null) {
         if (Array.isArray(userIds)) {
           parsedUserIds = userIds.map((id) => parseInt(id.toString()));
         } else if (typeof userIds === "string") {
@@ -559,10 +559,12 @@ EMS Management
       if (assignAll === "true" || assignAll === true) {
         newAssignedUsers = await userRepository.find();
         task.assignedUsers = newAssignedUsers;
-      } else if (parsedUserIds.length > 0) {
-        newAssignedUsers = await userRepository.findBy({
-          id: In(parsedUserIds),
-        });
+      } else if (userIds !== undefined && userIds !== null) {
+        // Explicitly provided (possibly empty) — replace assignees, including clearing to none.
+        newAssignedUsers =
+          parsedUserIds.length > 0
+            ? await userRepository.findBy({ id: In(parsedUserIds) })
+            : [];
         task.assignedUsers = newAssignedUsers;
       }
 

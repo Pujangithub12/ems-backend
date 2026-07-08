@@ -8,6 +8,16 @@ import { User } from "../entities/User";
 import { AuthRequest } from "../middlewares/auth";
 import { AddCommentDto, AddFeedbackDto } from "../dto/task-comment.dto";
 
+// `author` is an eager relation on TaskComment/SubTaskComment, so it is always
+// populated (and includes the password hash) regardless of the `relations`
+// option passed to the query — strip it before sending comments to the client.
+const sanitizeAuthor = (comment: TaskComment | SubTaskComment) => {
+  if (comment.author) {
+    const { id, fullName, email } = comment.author;
+    comment.author = { id, fullName, email } as User;
+  }
+};
+
 /** Comments and admin feedback for both tasks and subtasks. */
 export class TaskCommentController {
   static addComment = async (req: AuthRequest, res: Response) => {
@@ -47,6 +57,7 @@ export class TaskCommentController {
         task,
       });
       await commentRepository.save(comment);
+      sanitizeAuthor(comment);
 
       return res.status(201).json({ message: "Comment added", comment });
     } catch (error) {
@@ -79,6 +90,7 @@ export class TaskCommentController {
         relations: ["author"],
         order: { createdAt: "ASC" },
       });
+      comments.forEach(sanitizeAuthor);
 
       return res.status(200).json(comments);
     } catch (error) {
@@ -106,6 +118,7 @@ export class TaskCommentController {
 
       comment.feedback = feedback;
       await commentRepository.save(comment);
+      sanitizeAuthor(comment);
 
       return res.status(200).json({ message: "Feedback added", comment });
     } catch (error) {
@@ -164,6 +177,7 @@ export class TaskCommentController {
         subTask,
       });
       await commentRepository.save(comment);
+      sanitizeAuthor(comment);
 
       return res.status(201).json({ message: "Comment added", comment });
     } catch (error) {
@@ -210,6 +224,7 @@ export class TaskCommentController {
         relations: ["author"],
         order: { createdAt: "ASC" },
       });
+      comments.forEach(sanitizeAuthor);
 
       return res.status(200).json(comments);
     } catch (error) {
@@ -245,6 +260,7 @@ export class TaskCommentController {
 
       comment.feedback = feedback;
       await commentRepository.save(comment);
+      sanitizeAuthor(comment);
 
       return res.status(200).json({ message: "Feedback added", comment });
     } catch (error) {

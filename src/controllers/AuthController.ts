@@ -4,7 +4,7 @@ import { User } from "../entities/User";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
-import { LoginDto, ChangePasswordDto } from "../dto/auth.dto";
+import { LoginDto, ChangePasswordDto, UpdateMeDto } from "../dto/auth.dto";
 
 dotenv.config();
 
@@ -53,6 +53,11 @@ export class AuthController {
           fullName: user.fullName,
           email: user.email,
           role: user.role,
+          phoneNumber: user.phoneNumber,
+          address: user.address,
+          jobPosition: user.jobPosition,
+          joinDate: user.joinDate,
+          createdAt: user.createdAt,
         },
       });
     } catch (error) {
@@ -85,6 +90,44 @@ export class AuthController {
           fullName: user.fullName,
           email: user.email,
           role: user.role,
+          phoneNumber: user.phoneNumber,
+          address: user.address,
+          jobPosition: user.jobPosition,
+          joinDate: user.joinDate,
+          createdAt: user.createdAt,
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  static updateMe = async (req: any, res: Response) => {
+    const { phoneNumber, address }: UpdateMeDto = req.body;
+
+    try {
+      const userRepository = AppDataSource.getRepository(User);
+      const user = await userRepository.findOne({ where: { id: req.user.id } });
+
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
+      if (address !== undefined) user.address = address;
+      await userRepository.save(user);
+
+      return res.status(200).json({
+        user: {
+          id: user.id,
+          fullName: user.fullName,
+          email: user.email,
+          role: user.role,
+          phoneNumber: user.phoneNumber,
+          address: user.address,
+          jobPosition: user.jobPosition,
+          joinDate: user.joinDate,
+          createdAt: user.createdAt,
         },
       });
     } catch (error) {

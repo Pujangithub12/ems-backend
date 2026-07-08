@@ -9,3 +9,9 @@ export interface ChangePasswordDto {
   currentPassword: string;
   newPassword: string;
 }
+
+/** Body shape for PUT /me. */
+export interface UpdateMeDto {
+  phoneNumber?: string;
+  address?: string;
+}
