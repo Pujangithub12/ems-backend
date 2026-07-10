@@ -17,7 +17,14 @@ dotenv.config();
 const JWT_SECRET: string = process.env.JWT_SECRET || "your_jwt_secret_key";
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+// Falls back by NODE_ENV (not just a single hardcoded default) so a missing
+// FRONTEND_URL env var still points production invite emails at the deployed
+// frontend instead of localhost.
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  (process.env.NODE_ENV === "production"
+    ? "https://www.jdnenergy.com.np"
+    : "http://localhost:5173");
 
 export class InviteController {
   // Admin/super admin action ("Invite Members"): creates a pending invite and
@@ -224,10 +231,16 @@ export class InviteController {
         where: { email: invite.email },
       });
       if (existingUser) {
-        await inviteRepository.remove(invite);
-        return res
-          .status(400)
-          .json({ message: "An account with this email already exists" });
+        // Only reachable via a race (the email self-registered elsewhere
+        // between invite-sent and invite-accepted — sendInvite already
+        // blocks inviting an email that already has an account). Leave the
+        // invite intact rather than deleting it: log in with the existing
+        // account instead, then ask your admin to resend the invite so it
+        // can be accepted correctly.
+        return res.status(400).json({
+          message:
+            "An account with this email already exists. Log in with that account, then ask your admin to resend the invite.",
+        });
       }
 
       const workspace = await workspaceRepository.findOne({
