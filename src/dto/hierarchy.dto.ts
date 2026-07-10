@@ -1,13 +1,25 @@
-/** Frontend org-chart tree node shape used to save the hierarchy. */
-export interface HierarchyTreeNodeDto {
-  id: string;
-  dbId?: number;
-  label?: string;
-  userId?: number;
-  children: HierarchyTreeNodeDto[];
+/**
+ * Flat, per-person shape — one entry per workspace member. There's no more
+ * nested tree or arbitrary label-only nodes; `primaryManagerId`/
+ * `secondaryManagerIds` reference other entries' `id` directly.
+ */
+export interface HierarchyPersonDto {
+  id: number;
+  userId: number;
+  fullName: string;
+  email: string;
+  jobPosition: string;
+  role: string;
+  joinDate: string;
+  primaryManagerId: number | null;
+  secondaryManagerIds: number[];
 }
 
 /** Body shape for PUT /hierarchy. */
 export interface SaveHierarchyDto {
-  tree: HierarchyTreeNodeDto;
+  people: Array<{
+    id: number;
+    primaryManagerId: number | null;
+    secondaryManagerIds: number[];
+  }>;
 }
