@@ -1,59 +1,27 @@
 import { Response } from "express";
 import { AppDataSource } from "../config/data-source";
 import { HierarchyNode } from "../entities/HierarchyNode";
-import { User } from "../entities/User";
-import { UserRole } from "../entities/TaskEnums";
+import { User, UserRole } from "../entities/User";
 import { AuthRequest } from "../middlewares/auth";
-import { HierarchyTreeNodeDto, SaveHierarchyDto } from "../dto/hierarchy.dto";
+import { HierarchyPersonDto, SaveHierarchyDto } from "../dto/hierarchy.dto";
 
-// Helper to build tree from flat DB list
-const buildTreeFromDB = (nodes: HierarchyNode[]): HierarchyTreeNodeDto | null => {
-  const nodeMap = new Map<number, HierarchyTreeNodeDto>();
-  const rootNodes: HierarchyTreeNodeDto[] = [];
-
-  // First pass: create all nodes
-  nodes.forEach((node) => {
-    const frontendNode: HierarchyTreeNodeDto = {
-      id: `node-${node.id}`,
-      dbId: node.id,
-      label: node.label || node.user?.fullName || "Unknown",
-      children: [],
-    };
-    if (node.userId !== undefined) {
-      frontendNode.userId = node.userId;
-    }
-    nodeMap.set(node.id, frontendNode);
-  });
-
-  // Second pass: build hierarchy
-  nodes.forEach((node) => {
-    const currentNode = nodeMap.get(node.id)!;
-    if (node.parentId) {
-      const parentNode = nodeMap.get(node.parentId);
-      if (parentNode) {
-        parentNode.children.push(currentNode);
-      }
-    } else {
-      rootNodes.push(currentNode);
-    }
-  });
-
-  // Sort children by orderIndex
-  const sortChildren = (nodeList: HierarchyTreeNodeDto[]) => {
-    nodeList.sort((a, b) => {
-      const nodeA = nodes.find((n) => n.id === a.dbId);
-      const nodeB = nodes.find((n) => n.id === b.dbId);
-      return (nodeA?.orderIndex || 0) - (nodeB?.orderIndex || 0);
-    });
-    nodeList.forEach((n) => sortChildren(n.children));
-  };
-  sortChildren(rootNodes);
-
-  return rootNodes.length > 0 ? rootNodes[0]! : null;
-};
+const toDto = (node: HierarchyNode): HierarchyPersonDto => ({
+  id: node.id,
+  userId: node.userId!,
+  fullName: node.user!.fullName,
+  email: node.user!.email,
+  jobPosition: node.user!.jobPosition,
+  role: node.user!.role,
+  joinDate: node.user!.joinDate as unknown as string,
+  primaryManagerId: node.parentId ?? null,
+  secondaryManagerIds: (node.secondaryManagers || []).map((n) => n.id),
+});
 
 export class HierarchyController {
-  // Get hierarchy tree for current workspace
+  // Every workspace member always has exactly one node — this reconciles
+  // the HierarchyNode table against current membership (creating nodes for
+  // new members, dropping nodes for members removed from the workspace)
+  // before returning, so callers never see it out of sync.
   static async getHierarchy(req: AuthRequest, res: Response) {
     try {
       const workspaceId = req.workspace?.id;
@@ -62,65 +30,65 @@ export class HierarchyController {
       }
 
       const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
+      const userRepo = AppDataSource.getRepository(User);
+
+      const members = await userRepo
+        .createQueryBuilder("user")
+        .innerJoin("user.workspaces", "workspace")
+        .where("workspace.id = :workspaceId", { workspaceId })
+        .getMany();
+      const memberIds = new Set(members.map((m) => m.id));
+
       let nodes = await hierarchyRepo.find({
         where: { workspaceId },
-        relations: ["user"],
-        order: { orderIndex: "ASC" },
+        relations: ["user", "secondaryManagers"],
       });
 
-      // If no hierarchy exists, create default one
-      if (nodes.length === 0) {
-        const userRepo = AppDataSource.getRepository(User);
+      // Drop nodes for users no longer in this workspace.
+      const staleNodes = nodes.filter(
+        (n) => n.userId === undefined || !memberIds.has(n.userId),
+      );
+      if (staleNodes.length > 0) {
+        await hierarchyRepo.remove(staleNodes);
+        nodes = nodes.filter((n) => !staleNodes.includes(n));
+      }
 
-        // Find super admin
-        let superAdmin = await userRepo.findOne({
-          where: { role: UserRole.SUPER_ADMIN },
-        });
-
-        // If no super admin, use current user
-        if (!superAdmin && req.user) {
-          superAdmin = await userRepo.findOne({
-            where: { id: req.user.id },
-          });
-        }
-
-        // Create root node
-        const rootNode = hierarchyRepo.create({
-          label: "Organization",
-          workspaceId,
-          orderIndex: 0,
-        });
-        const savedRoot = await hierarchyRepo.save(rootNode);
-
-        // Create super admin child node if we have a user
-        if (superAdmin) {
-          const adminNode = hierarchyRepo.create({
-            userId: superAdmin.id,
-            user: superAdmin,
-            parentId: savedRoot.id,
-            workspaceId,
-            orderIndex: 0,
-          });
-          await hierarchyRepo.save(adminNode);
-        }
-
-        // Fetch again to get all nodes
+      // Create nodes for members that don't have one yet.
+      const existingUserIds = new Set(nodes.map((n) => n.userId));
+      const missing = members.filter((m) => !existingUserIds.has(m.id));
+      if (missing.length > 0) {
+        await hierarchyRepo.save(
+          missing.map((m) =>
+            hierarchyRepo.create({ userId: m.id, workspaceId }),
+          ),
+        );
         nodes = await hierarchyRepo.find({
           where: { workspaceId },
-          relations: ["user"],
-          order: { orderIndex: "ASC" },
+          relations: ["user", "secondaryManagers"],
         });
       }
 
-      const tree = buildTreeFromDB(nodes);
-      return res.status(200).json(tree);
+      // A super admin always sits at the root — self-heal any node that
+      // somehow ended up with a manager (e.g. legacy data).
+      const misplacedSuperAdmins = nodes.filter(
+        (n) => n.user?.role === UserRole.SUPER_ADMIN && n.parentId != null,
+      );
+      if (misplacedSuperAdmins.length > 0) {
+        misplacedSuperAdmins.forEach((n) => (n.parentId = null));
+        await hierarchyRepo.save(misplacedSuperAdmins);
+      }
+
+      const people = nodes.map(toDto).sort((a, b) => a.id - b.id);
+      return res.status(200).json({ people });
     } catch (error) {
       console.error("Error fetching hierarchy:", error);
       return res.status(500).json({ message: "Failed to fetch hierarchy" });
     }
   }
 
-  // Save hierarchy tree for current workspace
+  // Updates reporting relationships in place (nodes are stable/1:1 with
+  // workspace members, so unlike Schedule/Project full-replace patterns
+  // elsewhere, there's nothing to delete-and-recreate here).
   static async saveHierarchy(req: AuthRequest, res: Response) {
     try {
       const workspaceId = req.workspace?.id;
@@ -128,64 +96,77 @@ export class HierarchyController {
         return res.status(400).json({ message: "Workspace not found" });
       }
 
-      const { tree }: SaveHierarchyDto = req.body;
-      if (!tree) {
-        return res.status(400).json({ message: "Tree is required" });
+      const { people }: SaveHierarchyDto = req.body;
+      if (!Array.isArray(people)) {
+        return res.status(400).json({ message: "people array is required" });
       }
 
       const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
-
-      // Delete all existing nodes for this workspace first
-      await hierarchyRepo.delete({ workspaceId });
-
-      // Function to recursively save nodes
-      const saveNode = async (
-        node: HierarchyTreeNodeDto,
-        parentDbId?: number,
-        orderIndex: number = 0,
-      ): Promise<HierarchyNode> => {
-        const newNodeData: Partial<HierarchyNode> = {
-          workspaceId,
-          orderIndex,
-        };
-        if (node.label !== undefined) {
-          newNodeData.label = node.label;
-        }
-        if (node.userId !== undefined) {
-          newNodeData.userId = node.userId;
-        }
-        if (parentDbId !== undefined) {
-          newNodeData.parentId = parentDbId;
-        }
-
-        const newNode = hierarchyRepo.create(newNodeData);
-
-        const savedNode = await hierarchyRepo.save(newNode);
-
-        // Save children
-        const children = node.children || [];
-        for (let i = 0; i < children.length; i++) {
-          const child = children[i];
-          if (child) {
-            await saveNode(child, savedNode.id, i);
-          }
-        }
-
-        return savedNode;
-      };
-
-      // Save root first, then children
-      await saveNode(tree);
-
-      // Return the updated tree
-      const allNodes = await hierarchyRepo.find({
+      const nodes = await hierarchyRepo.find({
         where: { workspaceId },
         relations: ["user"],
-        order: { orderIndex: "ASC" },
       });
-      const updatedTree = buildTreeFromDB(allNodes);
+      const nodeIds = new Set(nodes.map((n) => n.id));
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-      return res.status(200).json(updatedTree);
+      // Validate every referenced id (self, primary manager, secondary
+      // managers) actually belongs to this workspace before touching anything.
+      for (const p of people) {
+        if (!nodeIds.has(p.id)) {
+          return res.status(400).json({ message: "Unknown person in hierarchy update" });
+        }
+        if (p.primaryManagerId !== null && !nodeIds.has(p.primaryManagerId)) {
+          return res.status(400).json({ message: "Unknown primary manager referenced" });
+        }
+        for (const secId of p.secondaryManagerIds || []) {
+          if (!nodeIds.has(secId)) {
+            return res.status(400).json({ message: "Unknown secondary manager referenced" });
+          }
+        }
+      }
+
+      // A super admin always sits at the root of the hierarchy.
+      for (const p of people) {
+        const node = nodeById.get(p.id)!;
+        if (node.user?.role === UserRole.SUPER_ADMIN && p.primaryManagerId !== null) {
+          return res.status(400).json({
+            message: "A super admin can't be given a manager — they stay at the root",
+          });
+        }
+      }
+
+      // Reject a request that would introduce a primary-manager cycle.
+      const nextParent = new Map<number, number | null>();
+      nodes.forEach((n) => nextParent.set(n.id, n.parentId ?? null));
+      people.forEach((p) => nextParent.set(p.id, p.primaryManagerId));
+      for (const id of nextParent.keys()) {
+        let cur: number | null | undefined = id;
+        for (let steps = 0; steps <= nextParent.size; steps++) {
+          cur = cur === undefined || cur === null ? null : nextParent.get(cur) ?? null;
+          if (cur === null) break;
+          if (cur === id) {
+            return res.status(400).json({
+              message: "That change would create a reporting-line cycle",
+            });
+          }
+        }
+      }
+
+      for (const p of people) {
+        const node = nodeById.get(p.id)!;
+        node.parentId = p.primaryManagerId;
+        node.secondaryManagers = (p.secondaryManagerIds || [])
+          .map((id) => nodeById.get(id)!)
+          .filter(Boolean);
+        await hierarchyRepo.save(node);
+      }
+
+      const updated = await hierarchyRepo.find({
+        where: { workspaceId },
+        relations: ["user", "secondaryManagers"],
+      });
+      const result = updated.map(toDto).sort((a, b) => a.id - b.id);
+      return res.status(200).json({ people: result });
     } catch (error) {
       console.error("Error saving hierarchy:", error);
       return res.status(500).json({ message: "Failed to save hierarchy" });

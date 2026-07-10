@@ -4,98 +4,28 @@ import { User, UserRole } from "../entities/User";
 import { AuthRequest } from "../middlewares/auth";
 import bcrypt from "bcrypt";
 import { In } from "typeorm";
-import { CreateUserDto, UpdateUserDto } from "../dto/user.dto";
+import { UpdateUserDto } from "../dto/user.dto";
+
+// At most one super admin per workspace. `excludeUserId` lets an update check
+// exclude the user being updated (a no-op re-save of an existing super admin
+// shouldn't trip over itself). Exported for InviteController, which enforces
+// the same rule when sending/accepting an invite.
+export const countSuperAdminsInWorkspace = async (
+  workspaceId: number,
+  excludeUserId?: number,
+): Promise<number> => {
+  const qb = AppDataSource.getRepository(User)
+    .createQueryBuilder("user")
+    .innerJoin("user.workspaces", "workspace")
+    .where("workspace.id = :workspaceId", { workspaceId })
+    .andWhere("user.role = :role", { role: UserRole.SUPER_ADMIN });
+  if (excludeUserId !== undefined) {
+    qb.andWhere("user.id != :excludeUserId", { excludeUserId });
+  }
+  return qb.getCount();
+};
 
 export class UserController {
-  static addUser = async (req: AuthRequest, res: Response) => {
-    const {
-      fullName,
-      email,
-      password,
-      phoneNumber,
-      address,
-      jobPosition,
-      joinDate,
-      role,
-    }: CreateUserDto = req.body;
-
-    if (
-      !fullName ||
-      !email ||
-      !password ||
-      !phoneNumber ||
-      !address ||
-      !jobPosition ||
-      !joinDate
-    ) {
-      return res.status(400).json({ message: "All fields are required" });
-    }
-
-    try {
-      const userRepository = AppDataSource.getRepository(User);
-      const workspace = req.workspace!;
-
-      // Check if user already exists
-      const existingUser = await userRepository.findOne({ where: { email } });
-      if (existingUser) {
-        return res
-          .status(400)
-          .json({ message: "User with this email already exists" });
-      }
-
-      // Enforce role creation rules
-      const currentUserRole = req.user?.role;
-      let finalRole = (role as UserRole) || UserRole.USER;
-
-      if (currentUserRole === UserRole.ADMIN) {
-        // Admin can create users, finance, or admins, but not super admins
-        if (
-          finalRole === UserRole.USER ||
-          finalRole === UserRole.FINANCE ||
-          finalRole === UserRole.ADMIN
-        ) {
-          // Keep the requested role (user, finance, or admin)
-        } else {
-          // Fallback to user if invalid role
-          finalRole = UserRole.USER;
-        }
-      } else if (currentUserRole !== UserRole.SUPER_ADMIN) {
-        // Users can't create anyone
-        return res
-          .status(403)
-          .json({ message: "Not authorized to create users" });
-      }
-
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      const newUser = userRepository.create({
-        fullName,
-        email,
-        password: hashedPassword,
-        phoneNumber,
-        address,
-        jobPosition,
-        joinDate: new Date(joinDate),
-        role: finalRole,
-        workspaces: [workspace],
-      });
-
-      await userRepository.save(newUser);
-
-      return res.status(201).json({
-        message: "User created successfully",
-        user: {
-          id: newUser.id,
-          fullName: newUser.fullName,
-          email: newUser.email,
-          role: newUser.role,
-        },
-      });
-    } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
-    }
-  };
-
   static getAllUsers = async (req: AuthRequest, res: Response) => {
     try {
       const userRepository = AppDataSource.getRepository(User);
@@ -146,6 +76,18 @@ export class UserController {
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });
+      }
+
+      // Admins can remove regular users/finance, but not peers or super admins
+      // — only a super admin can remove another admin (or a user).
+      const currentUserRole = req.user?.role;
+      if (
+        currentUserRole === UserRole.ADMIN &&
+        (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN)
+      ) {
+        return res.status(403).json({
+          message: "Admins cannot remove other admins or super admins",
+        });
       }
 
       // Remove user from workspace
@@ -216,7 +158,19 @@ export class UserController {
             user.role = role as UserRole;
           }
         } else if (currentUserRole === UserRole.SUPER_ADMIN) {
-          // Super admin can set any role
+          // Super admin can set any role, but only one super admin is
+          // allowed per workspace.
+          if (role === UserRole.SUPER_ADMIN && user.role !== UserRole.SUPER_ADMIN) {
+            const existingSuperAdmins = await countSuperAdminsInWorkspace(
+              workspace.id,
+              user.id,
+            );
+            if (existingSuperAdmins > 0) {
+              return res
+                .status(400)
+                .json({ message: "This workspace already has a super admin" });
+            }
+          }
           user.role = role as UserRole;
         }
         // Regular users can't change roles

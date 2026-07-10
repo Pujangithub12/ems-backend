@@ -2,6 +2,7 @@ import { Router } from "express";
 import { AuthController } from "../controllers/AuthController";
 import { WorkspaceController } from "../controllers/WorkspaceController";
 import { UserController } from "../controllers/UserController";
+import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
@@ -59,14 +60,18 @@ router.put(
   PermissionController.updateMatrix,
 );
 
-// User routes - Admin only for adding and deleting users
+// User routes - Admin only for inviting and deleting users
 router.post(
-  "/users",
+  "/users/invite",
   authMiddleware,
   permissionMiddleware("members.manage"),
-  UserController.addUser,
+  InviteController.sendInvite,
 );
 router.get("/users", authMiddleware, UserController.getAllUsers);
+
+// Invite accept flow — public, the invitee isn't logged in yet.
+router.get("/invites/:token", InviteController.getInvite);
+router.post("/invites/:token/accept", InviteController.acceptInvite);
 router.delete(
   "/users/:id",
   authMiddleware,
