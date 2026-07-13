@@ -10,11 +10,18 @@ export class ActivityController {
     try {
       const activityRepository = AppDataSource.getRepository(Activity);
       const workspace = req.workspace!;
-      const activities = await activityRepository.find({
+      const projectId = req.query.projectId ? Number(req.query.projectId) : null;
+
+      let activities = await activityRepository.find({
         where: { workspace: { id: workspace.id } },
-        relations: ["user", "task"],
+        relations: projectId ? ["user", "task", "task.project"] : ["user", "task"],
         order: { createdAt: "DESC" },
       });
+
+      if (projectId) {
+        activities = activities.filter((a) => a.task?.project?.id === projectId);
+      }
+
       // `relations: ["user"]` pulls the full User row — strip the password
       // hash before sending activities to the client.
       activities.forEach((a) => {

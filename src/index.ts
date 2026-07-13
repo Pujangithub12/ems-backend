@@ -8,6 +8,10 @@ import { AppDataSource } from "./config/data-source";
 import routes from "./routes";
 import { User, UserRole } from "./entities/User";
 import { Announcement } from "./entities/Announcement";
+import { LeaveRequest } from "./entities/LeaveRequest";
+import { SiteVisitRequest } from "./entities/SiteVisitRequest";
+import { ExpenseRequest } from "./entities/ExpenseRequest";
+import { LessThan } from "typeorm";
 import bcrypt from "bcrypt";
 import { backfillWorkspace } from "./utils/backfill-workspace";
 import { seedRolePermissions } from "./utils/permissionService";
@@ -118,19 +122,46 @@ const deleteOldAnnouncements = async () => {
     const announcementRepository = AppDataSource.getRepository(Announcement);
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
+
     const result = await announcementRepository
       .createQueryBuilder()
       .delete()
       .from(Announcement)
       .where("createdAt < :sevenDaysAgo", { sevenDaysAgo })
       .execute();
-      
+
     if (result.affected && result.affected > 0) {
       console.log(`Deleted ${result.affected} old announcement(s) (older than 7 days)`);
     }
   } catch (error) {
     console.error("Error deleting old announcements:", error);
+  }
+};
+
+const deleteOldApprovedRequests = async () => {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  const requestTypes = [
+    { label: "leave request", entity: LeaveRequest },
+    { label: "site visit request", entity: SiteVisitRequest },
+    { label: "expense request", entity: ExpenseRequest },
+  ] as const;
+
+  for (const { label, entity } of requestTypes) {
+    try {
+      const repository = AppDataSource.getRepository(entity);
+      const result = await repository.delete({
+        status: "approved",
+        approvedAt: LessThan(sevenDaysAgo),
+      });
+
+      if (result.affected && result.affected > 0) {
+        console.log(`Deleted ${result.affected} old approved ${label}(s) (approved over 7 days ago)`);
+      }
+    } catch (error) {
+      console.error(`Error deleting old approved ${label}s:`, error);
+    }
   }
 };
 
@@ -144,11 +175,13 @@ AppDataSource.initialize()
     
     // Delete old announcements immediately on startup
     await deleteOldAnnouncements();
-    
+    await deleteOldApprovedRequests();
+
     // Schedule to run every day at midnight (0 0 * * *)
     cron.schedule("0 0 * * *", () => {
       console.log("Running scheduled task to delete old announcements...");
       deleteOldAnnouncements();
+      deleteOldApprovedRequests();
     });
     
     app.listen(PORT, () => {

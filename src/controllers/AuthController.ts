@@ -3,6 +3,7 @@ import { AppDataSource } from "../config/data-source";
 import { User, UserRole } from "../entities/User";
 import { Workspace } from "../entities/Workspace";
 import { PendingSignup } from "../entities/PendingSignup";
+import { PasswordResetOtp } from "../entities/PasswordResetOtp";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
@@ -12,6 +13,8 @@ import {
   UpdateMeDto,
   RegisterStartDto,
   RegisterVerifyDto,
+  ForgotPasswordStartDto,
+  ForgotPasswordResetDto,
 } from "../dto/auth.dto";
 import { sendEmail } from "../utils/emailService";
 
@@ -70,6 +73,7 @@ export class AuthController {
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
+          homeWorkspaceId: user.homeWorkspaceId,
         },
       });
     } catch (error) {
@@ -246,12 +250,153 @@ export class AuthController {
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
+          homeWorkspaceId: user.homeWorkspaceId,
         },
         workspace: {
           id: workspace.id,
           name: workspace.name,
           description: workspace.description,
           createdAt: workspace.createdAt,
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  // Forgot-password, step 1: emails a 6-digit OTP if the address has an
+  // account. Always returns the same generic message regardless of whether
+  // the email exists, so this can't be used to enumerate accounts.
+  static forgotPasswordStart = async (req: Request, res: Response) => {
+    const { email }: ForgotPasswordStartDto = req.body;
+
+    if (!email?.trim()) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const genericResponse = {
+      message: "If an account exists for this email, a verification code has been sent.",
+    };
+
+    try {
+      const userRepository = AppDataSource.getRepository(User);
+      const otpRepository = AppDataSource.getRepository(PasswordResetOtp);
+      const normalizedEmail = email.trim();
+
+      const user = await userRepository.findOne({ where: { email: normalizedEmail } });
+      if (!user) {
+        // Don't reveal whether the account exists — just respond as if it worked.
+        return res.status(200).json(genericResponse);
+      }
+
+      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+      let otpRecord = await otpRepository.findOne({ where: { email: normalizedEmail } });
+      if (!otpRecord) {
+        otpRecord = otpRepository.create({ email: normalizedEmail });
+      }
+      otpRecord.otpCode = otpCode;
+      otpRecord.otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
+      otpRecord.attempts = 0;
+      await otpRepository.save(otpRecord);
+
+      const sent = await sendEmail(
+        [normalizedEmail],
+        "Your EMS password reset code",
+        `Your password reset code is ${otpCode}. It expires in 10 minutes. If you didn't request this, you can ignore this email.`,
+      );
+      if (!sent) {
+        return res.status(502).json({
+          message: "Failed to send the verification email. Please try again.",
+        });
+      }
+
+      return res.status(200).json(genericResponse);
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  // Forgot-password, step 2: confirms the OTP and sets the new password in
+  // one call, then logs the user in immediately (same cookie pattern as
+  // login/registerVerify) so they land straight in the app.
+  static forgotPasswordReset = async (req: Request, res: Response) => {
+    const { email, otp, newPassword }: ForgotPasswordResetDto = req.body;
+
+    if (!email?.trim() || !otp?.trim()) {
+      return res
+        .status(400)
+        .json({ message: "Email and verification code are required" });
+    }
+    if (!newPassword || newPassword.length < 6) {
+      return res
+        .status(400)
+        .json({ message: "New password must be at least 6 characters" });
+    }
+
+    try {
+      const otpRepository = AppDataSource.getRepository(PasswordResetOtp);
+      const userRepository = AppDataSource.getRepository(User);
+      const normalizedEmail = email.trim();
+
+      const otpRecord = await otpRepository.findOne({ where: { email: normalizedEmail } });
+      if (!otpRecord) {
+        return res.status(400).json({
+          message: "No password reset requested for this email. Please start again.",
+        });
+      }
+      if (otpRecord.otpExpiresAt.getTime() < Date.now()) {
+        await otpRepository.remove(otpRecord);
+        return res
+          .status(400)
+          .json({ message: "Verification code expired. Please start again." });
+      }
+      if (otpRecord.attempts >= MAX_OTP_ATTEMPTS) {
+        await otpRepository.remove(otpRecord);
+        return res.status(400).json({
+          message: "Too many incorrect attempts. Please start again.",
+        });
+      }
+      if (otpRecord.otpCode !== otp.trim()) {
+        otpRecord.attempts += 1;
+        await otpRepository.save(otpRecord);
+        return res.status(400).json({ message: "Incorrect verification code" });
+      }
+
+      const user = await userRepository.findOne({ where: { email: normalizedEmail } });
+      if (!user) {
+        await otpRepository.remove(otpRecord);
+        return res.status(404).json({ message: "Account no longer exists" });
+      }
+
+      user.password = await bcrypt.hash(newPassword, 10);
+      await userRepository.save(user);
+      await otpRepository.remove(otpRecord);
+
+      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
+        expiresIn: "3h",
+      });
+      const isProduction = process.env.NODE_ENV === "production";
+      res.cookie("token", token, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? "none" : "lax",
+        maxAge: THREE_HOURS_MS,
+      });
+
+      return res.status(200).json({
+        message: "Password reset successfully",
+        user: {
+          id: user.id,
+          fullName: user.fullName,
+          email: user.email,
+          role: user.role,
+          phoneNumber: user.phoneNumber,
+          address: user.address,
+          jobPosition: user.jobPosition,
+          joinDate: user.joinDate,
+          createdAt: user.createdAt,
+          homeWorkspaceId: user.homeWorkspaceId,
         },
       });
     } catch (error) {
@@ -289,6 +434,7 @@ export class AuthController {
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
+          homeWorkspaceId: user.homeWorkspaceId,
         },
       });
     } catch (error) {

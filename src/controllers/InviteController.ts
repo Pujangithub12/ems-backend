@@ -56,17 +56,14 @@ export class InviteController {
     try {
       const userRepository = AppDataSource.getRepository(User);
       const inviteRepository = AppDataSource.getRepository(WorkspaceInvite);
+      const workspaceRepository = AppDataSource.getRepository(Workspace);
       const workspace = req.workspace!;
       const normalizedEmail = email.trim();
 
       const existingUser = await userRepository.findOne({
         where: { email: normalizedEmail },
+        relations: ["workspaces"],
       });
-      if (existingUser) {
-        return res
-          .status(400)
-          .json({ message: "User with this email already exists" });
-      }
 
       // Enforce role assignment rules (identical to the old direct-create
       // flow: admins can't invite a super admin; only one super admin/workspace).
@@ -96,6 +93,63 @@ export class InviteController {
             .status(400)
             .json({ message: "This workspace already has a super admin" });
         }
+      }
+
+      if (existingUser) {
+        // This email already has an account — created either by this same
+        // person self-registering, or by a completely unrelated workspace's
+        // admin inviting them. Rather than blocking the invite, add them as
+        // a member of *this* workspace too: same login, now shows up in
+        // their workspace switcher alongside any others (exactly like a
+        // self-registered "owner" account already can belong to several
+        // workspaces). No new password/accept-invite step is needed since
+        // the account already exists.
+        const alreadyMember = existingUser.workspaces.some(
+          (w) => w.id === workspace.id,
+        );
+        if (alreadyMember) {
+          return res
+            .status(400)
+            .json({ message: "This user is already a member of this workspace" });
+        }
+
+        const fullWorkspace = await workspaceRepository.findOne({
+          where: { id: workspace.id },
+          relations: ["members"],
+        });
+        if (!fullWorkspace) {
+          return res.status(404).json({ message: "Workspace not found" });
+        }
+
+        existingUser.role = finalRole;
+        // Unlock: once an account belongs to more than one workspace it
+        // behaves like a self-registered "owner" account and gets the
+        // normal workspace switcher, instead of staying pinned to a single
+        // home workspace (see authMiddleware's homeWorkspaceId check).
+        existingUser.homeWorkspaceId = null;
+        await userRepository.save(existingUser);
+
+        fullWorkspace.members = [...fullWorkspace.members, existingUser];
+        await workspaceRepository.save(fullWorkspace);
+
+        const roleText = finalRole.replace("_", " ");
+        await sendEmail(
+          [normalizedEmail],
+          `You've been added to ${workspace.name} on EMS`,
+          `Hi ${existingUser.fullName},\n\nYou've been added to ${workspace.name} on EMS as ${roleText}.\n\nLog in with your existing account and use the workspace switcher to access it.`,
+          `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #333;">You've been added to ${workspace.name} on EMS</h2>
+            <p style="color: #555; line-height: 1.6;">
+              Hi ${existingUser.fullName},<br /><br />
+              You've been added to <strong>${workspace.name}</strong> on EMS as <strong>${roleText}</strong>.
+              Log in with your existing account and use the workspace switcher to access it.
+            </p>
+          </div>
+          `,
+        );
+
+        return res.status(200).json({ message: "Existing user added to workspace" });
       }
 
       const token = crypto.randomBytes(32).toString("hex");
@@ -274,6 +328,9 @@ export class InviteController {
         joinDate: invite.joinDate,
         role: invite.role,
         workspaces: [workspace],
+        // Permanently locks this account to the workspace it was invited
+        // into — see authMiddleware and WorkspaceController.create/switch.
+        homeWorkspaceId: workspace.id,
       });
       await userRepository.save(user);
       await inviteRepository.remove(invite);
@@ -307,6 +364,7 @@ export class InviteController {
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
+          homeWorkspaceId: user.homeWorkspaceId,
         },
         workspace: {
           id: workspace.id,

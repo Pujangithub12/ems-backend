@@ -8,6 +8,7 @@ import {
   UpdateLeaveRequestDto,
   UpdateLeaveRequestStatusDto,
 } from "../dto/leave-request.dto";
+import { canApprove } from "../utils/hierarchyAuthority";
 
 // `user` is an eager relation on LeaveRequest, so it is always populated
 // (and includes the password hash) regardless of the `relations` option
@@ -137,7 +138,20 @@ export class LeaveRequestController {
       if (!lr)
         return res.status(404).json({ message: "Leave request not found" });
 
+      const allowed = await canApprove(
+        workspace.id,
+        req.user!.id,
+        req.user!.role,
+        lr.user.id,
+      );
+      if (!allowed) {
+        return res.status(403).json({
+          message: "Only this person's manager can approve this request",
+        });
+      }
+
       lr.status = status;
+      lr.approvedAt = status === "approved" ? new Date() : null;
       await lrRepository.save(lr);
       sanitizeUser(lr);
 

@@ -12,6 +12,8 @@ import { DashboardController } from "../controllers/DashboardController";
 import { SubTaskController } from "../controllers/SubTaskController";
 import { TaskCommentController } from "../controllers/TaskCommentController";
 import { LeaveRequestController } from "../controllers/LeaveRequestController";
+import { SiteVisitRequestController } from "../controllers/SiteVisitRequestController";
+import { ExpenseRequestController } from "../controllers/ExpenseRequestController";
 import { CalendarEventController } from "../controllers/CalendarEventController";
 import { ActivityController } from "../controllers/ActivityController";
 import { HierarchyController } from "../controllers/HierarchyController";
@@ -29,6 +31,8 @@ const scheduleController = new ScheduleController(new ScheduleService());
 // Auth routes
 router.post("/register/start", AuthController.registerStart);
 router.post("/register/verify", AuthController.registerVerify);
+router.post("/forgot-password/start", AuthController.forgotPasswordStart);
+router.post("/forgot-password/reset", AuthController.forgotPasswordReset);
 router.post("/login", AuthController.login);
 router.post("/logout", AuthController.logout);
 router.get("/me", authMiddleware, AuthController.getMe);
@@ -49,6 +53,28 @@ router.get(
 );
 router.put("/workspaces/:id", authMiddleware, WorkspaceController.update);
 router.delete("/workspaces/:id", authMiddleware, WorkspaceController.remove);
+
+// Cross-workspace member access matrix (Settings > Workspace tab) — lets a
+// caller who belongs to more than one of their own workspaces manage which
+// of those workspaces each employee can access, from one place.
+router.get(
+  "/workspaces/access-matrix",
+  authMiddleware,
+  permissionMiddleware("members.manage"),
+  WorkspaceController.getAccessMatrix,
+);
+router.put(
+  "/workspaces/:id/members/:userId",
+  authMiddleware,
+  permissionMiddleware("members.manage"),
+  WorkspaceController.grantMemberAccess,
+);
+router.delete(
+  "/workspaces/:id/members/:userId",
+  authMiddleware,
+  permissionMiddleware("members.manage"),
+  WorkspaceController.revokeMemberAccess,
+);
 
 // Permission routes — matrix is viewable by anyone, but only a super admin
 // can edit it (hardcoded, not itself a toggleable permission).
@@ -324,6 +350,84 @@ router.delete(
   authMiddleware,
   permissionMiddleware("leave.manage"),
   LeaveRequestController.deleteLeaveRequest,
+);
+
+// Site visit request routes
+router.post(
+  "/sitevisit",
+  authMiddleware,
+  SiteVisitRequestController.createSiteVisitRequest,
+);
+
+router.get(
+  "/sitevisit",
+  authMiddleware,
+  SiteVisitRequestController.getAllSiteVisitRequests,
+);
+
+router.get(
+  "/sitevisit/:id",
+  authMiddleware,
+  SiteVisitRequestController.getSiteVisitRequestById,
+);
+
+router.put(
+  "/sitevisit/:id/status",
+  authMiddleware,
+  permissionMiddleware("sitevisit.manage"),
+  SiteVisitRequestController.updateStatus,
+);
+
+router.put(
+  "/sitevisit/:id",
+  authMiddleware,
+  SiteVisitRequestController.updateSiteVisitRequest,
+);
+
+router.delete(
+  "/sitevisit/:id",
+  authMiddleware,
+  permissionMiddleware("sitevisit.manage"),
+  SiteVisitRequestController.deleteSiteVisitRequest,
+);
+
+// Expense request routes
+router.post(
+  "/expense",
+  authMiddleware,
+  ExpenseRequestController.createExpenseRequest,
+);
+
+router.get(
+  "/expense",
+  authMiddleware,
+  ExpenseRequestController.getAllExpenseRequests,
+);
+
+router.get(
+  "/expense/:id",
+  authMiddleware,
+  ExpenseRequestController.getExpenseRequestById,
+);
+
+router.put(
+  "/expense/:id/status",
+  authMiddleware,
+  permissionMiddleware("expense.manage"),
+  ExpenseRequestController.updateStatus,
+);
+
+router.put(
+  "/expense/:id",
+  authMiddleware,
+  ExpenseRequestController.updateExpenseRequest,
+);
+
+router.delete(
+  "/expense/:id",
+  authMiddleware,
+  permissionMiddleware("expense.manage"),
+  ExpenseRequestController.deleteExpenseRequest,
 );
 
 // Calendar Event routes

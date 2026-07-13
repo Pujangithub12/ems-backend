@@ -9,21 +9,21 @@ import { User } from "./User";
 import { Workspace } from "./Workspace";
 
 @Entity()
-export class LeaveRequest {
+export class SiteVisitRequest {
   @PrimaryGeneratedColumn()
   id!: number;
 
   @ManyToOne(() => User, { eager: true, onDelete: "CASCADE" })
   user!: User;
 
-  @Column({ default: "Leave Request" })
+  @Column({ default: "Site Visit" })
   title!: string;
 
-  @Column()
-  startDate!: Date;
+  @Column("text")
+  location!: string;
 
   @Column()
-  endDate!: Date;
+  visitDate!: Date;
 
   @Column("text")
   reason!: string;
@@ -35,7 +35,7 @@ export class LeaveRequest {
   })
   status!: string;
 
-  @ManyToOne(() => Workspace, (workspace) => workspace.leaveRequests, {
+  @ManyToOne(() => Workspace, (workspace) => workspace.siteVisitRequests, {
     onDelete: "CASCADE",
     nullable: true,
   })

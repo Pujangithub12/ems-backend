@@ -9,21 +9,24 @@ import { User } from "./User";
 import { Workspace } from "./Workspace";
 
 @Entity()
-export class LeaveRequest {
+export class ExpenseRequest {
   @PrimaryGeneratedColumn()
   id!: number;
 
   @ManyToOne(() => User, { eager: true, onDelete: "CASCADE" })
   user!: User;
 
-  @Column({ default: "Leave Request" })
+  @Column({ default: "Expense" })
   title!: string;
 
-  @Column()
-  startDate!: Date;
+  @Column("numeric")
+  amount!: number;
+
+  @Column({ default: "Other" })
+  category!: string;
 
   @Column()
-  endDate!: Date;
+  expenseDate!: Date;
 
   @Column("text")
   reason!: string;
@@ -35,7 +38,7 @@ export class LeaveRequest {
   })
   status!: string;
 
-  @ManyToOne(() => Workspace, (workspace) => workspace.leaveRequests, {
+  @ManyToOne(() => Workspace, (workspace) => workspace.expenseRequests, {
     onDelete: "CASCADE",
     nullable: true,
   })

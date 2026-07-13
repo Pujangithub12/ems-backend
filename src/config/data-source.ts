@@ -4,6 +4,8 @@ import { User } from "../entities/User";
 import { Announcement } from "../entities/Announcement";
 import { Task } from "../entities/Task";
 import { LeaveRequest } from "../entities/LeaveRequest";
+import { SiteVisitRequest } from "../entities/SiteVisitRequest";
+import { ExpenseRequest } from "../entities/ExpenseRequest";
 import { Project } from "../entities/Project";
 import { ProjectFile } from "../entities/ProjectFile";
 import { ProjectHeading } from "../entities/ProjectHeading";
@@ -18,6 +20,7 @@ import { HierarchyNode } from "../entities/HierarchyNode";
 import { ScheduleTask } from "../entities/ScheduleTask";
 import { RolePermission } from "../entities/RolePermission";
 import { PendingSignup } from "../entities/PendingSignup";
+import { PasswordResetOtp } from "../entities/PasswordResetOtp";
 import { WorkspaceInvite } from "../entities/WorkspaceInvite";
 import dotenv from "dotenv";
 
@@ -34,6 +37,8 @@ const entityList = isProduction
       Announcement,
       Task,
       LeaveRequest,
+      SiteVisitRequest,
+      ExpenseRequest,
       Project,
       ProjectFile,
       ProjectHeading,
@@ -48,6 +53,7 @@ const entityList = isProduction
       ScheduleTask,
       RolePermission,
       PendingSignup,
+      PasswordResetOtp,
       WorkspaceInvite,
     ];
 
