@@ -14,6 +14,8 @@ export type PermissionKey =
   | "announcements.manage"
   | "members.manage"
   | "leave.manage"
+  | "sitevisit.manage"
+  | "expense.manage"
   | "calendar.manage"
   | "workspace.manage"
   | "hierarchy.manage";
@@ -28,6 +30,8 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   "announcements.manage",
   "members.manage",
   "leave.manage",
+  "sitevisit.manage",
+  "expense.manage",
   "calendar.manage",
   "workspace.manage",
   "hierarchy.manage",
@@ -54,7 +58,7 @@ export type PermissionRole = (typeof ALL_PERMISSION_ROLES)[number];
 export const DEFAULT_ROLE_PERMISSIONS: Record<PermissionRole, PermissionKey[]> = {
   super_admin: [...ALL_PERMISSION_KEYS],
   admin: [...ALL_PERMISSION_KEYS],
-  finance: ["projects.documents"],
+  finance: ["projects.documents", "expense.manage"],
   user: [],
 };
 

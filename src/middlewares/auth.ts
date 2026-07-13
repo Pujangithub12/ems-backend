@@ -46,27 +46,71 @@ export const authMiddleware = async (
     const workspaceRepo = AppDataSource.getRepository(Workspace);
     const userRepo = AppDataSource.getRepository(User);
 
+    const user = await userRepo.findOne({
+      where: { id: req.user.id },
+      relations: ["workspaces"],
+    });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const headerWorkspaceId = req.headers["x-workspace-id"];
+    const rawHeader = Array.isArray(headerWorkspaceId)
+      ? headerWorkspaceId[0]
+      : headerWorkspaceId;
+
+    // Accounts created via an accepted workspace invite are permanently
+    // pinned to the one workspace they were invited into — resolved here,
+    // before any header/cookie logic, so nothing below can ever put them in
+    // a different workspace's context.
+    if (user.homeWorkspaceId != null) {
+      const home = user.workspaces.find((w) => w.id === user.homeWorkspaceId);
+      if (!home) {
+        // Home workspace was deleted, or this account's membership in it was
+        // otherwise removed — never fall through to the "no workspace ->
+        // create a default one" path below, which would hand a restricted
+        // account a workspace of its own.
+        return res
+          .status(403)
+          .json({ message: "Access Forbidden", code: "WORKSPACE_ACCESS_FORBIDDEN" });
+      }
+
+      const requestedId =
+        rawHeader != null
+          ? Number(rawHeader)
+          : req.cookies.workspaceId
+            ? Number(req.cookies.workspaceId)
+            : null;
+      if (
+        requestedId != null &&
+        Number.isInteger(requestedId) &&
+        requestedId !== home.id
+      ) {
+        return res
+          .status(403)
+          .json({ message: "Access Forbidden", code: "WORKSPACE_ACCESS_FORBIDDEN" });
+      }
+
+      req.workspace = home;
+      const isProduction = process.env.NODE_ENV === "production";
+      res.cookie("workspaceId", home.id.toString(), {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? "none" : "lax",
+        maxAge: THREE_HOURS_MS,
+      });
+      return next();
+    }
+
     // The frontend is URL-driven: each request declares which workspace it's
     // operating on via this header (derived from the route, not shared cookie
     // state), so switching workspaces takes effect on the very next request
     // instead of racing a cookie update. Falls back to the cookie below for
     // requests that can't set custom headers (e.g. the static /uploads route).
-    const headerWorkspaceId = req.headers["x-workspace-id"];
     if (headerWorkspaceId) {
-      const raw = Array.isArray(headerWorkspaceId)
-        ? headerWorkspaceId[0]
-        : headerWorkspaceId;
-      const parsedId = Number(raw);
+      const parsedId = Number(rawHeader);
       if (!Number.isInteger(parsedId) || parsedId <= 0) {
         return res.status(400).json({ message: "Invalid workspace id" });
-      }
-
-      const user = await userRepo.findOne({
-        where: { id: req.user.id },
-        relations: ["workspaces"],
-      });
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
       }
 
       const targetWorkspace = user.workspaces.find((w) => w.id === parsedId);
@@ -95,16 +139,6 @@ export const authMiddleware = async (
     let workspaceId = req.cookies.workspaceId;
 
     if (!workspaceId) {
-      // Try to get user's first workspace or create default
-      const user = await userRepo.findOne({
-        where: { id: req.user.id },
-        relations: ["workspaces"],
-      });
-
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
       if (user.workspaces.length === 0) {
         // Create default workspace
         const defaultWorkspace = workspaceRepo.create({
@@ -143,14 +177,6 @@ export const authMiddleware = async (
       // memberships on every request. The cookie is client-controlled, so
       // trusting its id alone would let anyone read/write another
       // workspace's data just by setting workspaceId to its id.
-      const user = await userRepo.findOne({
-        where: { id: req.user.id },
-        relations: ["workspaces"],
-      });
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
       const cookieWorkspace = user.workspaces.find(
         (w) => w.id === Number(workspaceId),
       );

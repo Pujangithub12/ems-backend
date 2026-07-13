@@ -33,3 +33,15 @@ export interface UpdateMeDto {
   phoneNumber?: string;
   address?: string;
 }
+
+/** Body shape for POST /forgot-password/start. Sends a 6-digit OTP if the email has an account. */
+export interface ForgotPasswordStartDto {
+  email: string;
+}
+
+/** Body shape for POST /forgot-password/reset — confirms the OTP and sets the new password in one step. */
+export interface ForgotPasswordResetDto {
+  email: string;
+  otp: string;
+  newPassword: string;
+}

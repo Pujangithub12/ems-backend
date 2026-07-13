@@ -22,6 +22,7 @@ import {
   UpdateTaskProgressDto,
   UpdateTaskStatusDto,
 } from "../dto/task.dto";
+import { getDescendantUserIds } from "../utils/hierarchyAuthority";
 
 const sanitizeCreatedBy = (task: Task) => {
   if (task.createdBy) {
@@ -74,9 +75,38 @@ export class TaskController {
         }
       }
 
+      const actorId = req.user!.id;
+      const actorRole = req.user!.role;
+      const workspaceId = req.workspace!.id;
+      const isSuperAdmin = actorRole === UserRole.SUPER_ADMIN;
+
       if (assignAll === "true" || assignAll === true) {
-        assignedUsers = await userRepository.find();
+        if (isSuperAdmin) {
+          assignedUsers = await userRepository
+            .createQueryBuilder("user")
+            .innerJoin("user.workspaces", "workspace")
+            .where("workspace.id = :workspaceId", { workspaceId })
+            .getMany();
+        } else {
+          // Non-root actors can only ever assign within their own reporting
+          // line — "all" means "all of my descendants", not the workspace.
+          const descendantIds = await getDescendantUserIds(workspaceId, actorId);
+          const ids = Array.from(new Set([actorId, ...descendantIds]));
+          assignedUsers = await userRepository.findBy({ id: In(ids) });
+        }
       } else if (parsedUserIds.length > 0) {
+        if (!isSuperAdmin) {
+          const descendantIds = new Set(await getDescendantUserIds(workspaceId, actorId));
+          const invalidIds = parsedUserIds.filter(
+            (id) => id !== actorId && !descendantIds.has(id),
+          );
+          if (invalidIds.length > 0) {
+            return res.status(403).json({
+              message:
+                "You can only assign a task to yourself or someone below you in the hierarchy",
+            });
+          }
+        }
         assignedUsers = await userRepository.findBy({ id: In(parsedUserIds) });
       }
 
@@ -555,11 +585,38 @@ EMS Management
         }
       }
 
+      const actorId = req.user!.id;
+      const actorRole = req.user!.role;
+      const workspaceId = req.workspace!.id;
+      const isSuperAdmin = actorRole === UserRole.SUPER_ADMIN;
+
       let newAssignedUsers: User[] = [...task.assignedUsers];
       if (assignAll === "true" || assignAll === true) {
-        newAssignedUsers = await userRepository.find();
+        if (isSuperAdmin) {
+          newAssignedUsers = await userRepository
+            .createQueryBuilder("user")
+            .innerJoin("user.workspaces", "workspace")
+            .where("workspace.id = :workspaceId", { workspaceId })
+            .getMany();
+        } else {
+          const descendantIds = await getDescendantUserIds(workspaceId, actorId);
+          const ids = Array.from(new Set([actorId, ...descendantIds]));
+          newAssignedUsers = await userRepository.findBy({ id: In(ids) });
+        }
         task.assignedUsers = newAssignedUsers;
       } else if (userIds !== undefined && userIds !== null) {
+        if (!isSuperAdmin && parsedUserIds.length > 0) {
+          const descendantIds = new Set(await getDescendantUserIds(workspaceId, actorId));
+          const invalidIds = parsedUserIds.filter(
+            (uid) => uid !== actorId && !descendantIds.has(uid),
+          );
+          if (invalidIds.length > 0) {
+            return res.status(403).json({
+              message:
+                "You can only assign a task to yourself or someone below you in the hierarchy",
+            });
+          }
+        }
         // Explicitly provided (possibly empty) — replace assignees, including clearing to none.
         newAssignedUsers =
           parsedUserIds.length > 0

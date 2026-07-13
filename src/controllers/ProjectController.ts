@@ -14,6 +14,7 @@ import {
   AddProjectTaskDto,
   UpdateProjectTaskDto,
 } from "../dto/project.dto";
+import { getDescendantUserIds } from "../utils/hierarchyAuthority";
 
 const sanitizeAssignees = (project: Project) => {
   if (project.assignees) {
@@ -334,6 +335,20 @@ export class ProjectController {
 
       let assignedUsers: User[] = [];
       if (assignedUserIds && Array.isArray(assignedUserIds)) {
+        if (user.role !== "super_admin") {
+          const descendantIds = new Set(
+            await getDescendantUserIds(req.workspace!.id, user.id),
+          );
+          const invalidIds = assignedUserIds.filter(
+            (uid) => uid !== user.id && !descendantIds.has(uid),
+          );
+          if (invalidIds.length > 0) {
+            return res.status(403).json({
+              message:
+                "You can only assign a task to yourself or someone below you in the hierarchy",
+            });
+          }
+        }
         assignedUsers = await userRepository.findBy({
           id: In(assignedUserIds),
         });
