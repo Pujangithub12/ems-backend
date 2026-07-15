@@ -1,9 +1,9 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import { AppDataSource } from "../config/data-source";
 import { User, UserRole } from "../entities/User";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { AuthRequest } from "../middlewares/auth";
 import bcrypt from "bcrypt";
-import { In } from "typeorm";
 import { UpdateUserDto } from "../dto/user.dto";
 
 // At most one super admin per workspace. `excludeUserId` lets an update check
@@ -14,13 +14,12 @@ export const countSuperAdminsInWorkspace = async (
   workspaceId: number,
   excludeUserId?: number,
 ): Promise<number> => {
-  const qb = AppDataSource.getRepository(User)
-    .createQueryBuilder("user")
-    .innerJoin("user.workspaces", "workspace")
-    .where("workspace.id = :workspaceId", { workspaceId })
-    .andWhere("user.role = :role", { role: UserRole.SUPER_ADMIN });
+  const qb = AppDataSource.getRepository(WorkspaceMembership)
+    .createQueryBuilder("membership")
+    .where("membership.workspaceId = :workspaceId", { workspaceId })
+    .andWhere("membership.role = :role", { role: UserRole.SUPER_ADMIN });
   if (excludeUserId !== undefined) {
-    qb.andWhere("user.id != :excludeUserId", { excludeUserId });
+    qb.andWhere("membership.userId != :excludeUserId", { excludeUserId });
   }
   return qb.getCount();
 };
@@ -28,26 +27,26 @@ export const countSuperAdminsInWorkspace = async (
 export class UserController {
   static getAllUsers = async (req: AuthRequest, res: Response) => {
     try {
-      const userRepository = AppDataSource.getRepository(User);
       const workspace = req.workspace!;
+      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
 
-      // Get all users that are members of the current workspace
-      const users = await userRepository
-        .createQueryBuilder("user")
-        .innerJoin("user.workspaces", "workspace")
-        .where("workspace.id = :workspaceId", { workspaceId: workspace.id })
-        .select([
-          "user.id",
-          "user.fullName",
-          "user.email",
-          "user.phoneNumber",
-          "user.address",
-          "user.jobPosition",
-          "user.joinDate",
-          "user.role",
-          "user.createdAt",
-        ])
-        .getMany();
+      // Get all members of the current workspace, with their role in it.
+      const memberships = await membershipRepo.find({
+        where: { workspace: { id: workspace.id } },
+        relations: ["user"],
+      });
+
+      const users = memberships.map((m) => ({
+        id: m.user.id,
+        fullName: m.user.fullName,
+        email: m.user.email,
+        phoneNumber: m.user.phoneNumber,
+        address: m.user.address,
+        jobPosition: m.user.jobPosition,
+        joinDate: m.user.joinDate,
+        role: m.role,
+        createdAt: m.user.createdAt,
+      }));
 
       return res.status(200).json(users);
     } catch (error) {
@@ -63,18 +62,19 @@ export class UserController {
     }
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
       const workspace = req.workspace!;
+      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
 
-      // Find user only if they are in current workspace
-      const user = await userRepository
-        .createQueryBuilder("user")
-        .innerJoin("user.workspaces", "workspace")
-        .where("user.id = :id", { id: parseInt(id as string) })
-        .andWhere("workspace.id = :workspaceId", { workspaceId: workspace.id })
-        .getOne();
+      // Find the membership only if they are in the current workspace
+      const membership = await membershipRepo.findOne({
+        where: {
+          user: { id: parseInt(id as string) },
+          workspace: { id: workspace.id },
+        },
+        relations: ["user"],
+      });
 
-      if (!user) {
+      if (!membership) {
         return res.status(404).json({ message: "User not found" });
       }
 
@@ -83,19 +83,16 @@ export class UserController {
       const currentUserRole = req.user?.role;
       if (
         currentUserRole === UserRole.ADMIN &&
-        (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN)
+        (membership.role === UserRole.ADMIN || membership.role === UserRole.SUPER_ADMIN)
       ) {
         return res.status(403).json({
           message: "Admins cannot remove other admins or super admins",
         });
       }
 
-      // Remove user from workspace
-      await userRepository
-        .createQueryBuilder()
-        .relation(User, "workspaces")
-        .of(user)
-        .remove(workspace);
+      // Remove user from workspace (their membership in any other workspace
+      // is untouched).
+      await membershipRepo.remove(membership);
 
       return res
         .status(200)
@@ -124,19 +121,24 @@ export class UserController {
 
     try {
       const userRepository = AppDataSource.getRepository(User);
+      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
       const workspace = req.workspace!;
 
-      // Find user only if they are in current workspace
-      const user = await userRepository
-        .createQueryBuilder("user")
-        .innerJoin("user.workspaces", "workspace")
-        .where("user.id = :id", { id: parseInt(id as string) })
-        .andWhere("workspace.id = :workspaceId", { workspaceId: workspace.id })
-        .getOne();
+      // Find the membership (and its user) only if they are in the current
+      // workspace — role updates below apply to this membership, i.e. this
+      // workspace only.
+      const membership = await membershipRepo.findOne({
+        where: {
+          user: { id: parseInt(id as string) },
+          workspace: { id: workspace.id },
+        },
+        relations: ["user"],
+      });
 
-      if (!user) {
+      if (!membership) {
         return res.status(404).json({ message: "User not found" });
       }
+      const user = membership.user;
 
       if (fullName) user.fullName = fullName;
       if (email) user.email = email;
@@ -155,12 +157,12 @@ export class UserController {
             role === UserRole.FINANCE ||
             role === UserRole.ADMIN
           ) {
-            user.role = role as UserRole;
+            membership.role = role as UserRole;
           }
         } else if (currentUserRole === UserRole.SUPER_ADMIN) {
           // Super admin can set any role, but only one super admin is
           // allowed per workspace.
-          if (role === UserRole.SUPER_ADMIN && user.role !== UserRole.SUPER_ADMIN) {
+          if (role === UserRole.SUPER_ADMIN && membership.role !== UserRole.SUPER_ADMIN) {
             const existingSuperAdmins = await countSuperAdminsInWorkspace(
               workspace.id,
               user.id,
@@ -171,7 +173,7 @@ export class UserController {
                 .json({ message: "This workspace already has a super admin" });
             }
           }
-          user.role = role as UserRole;
+          membership.role = role as UserRole;
         }
         // Regular users can't change roles
       }
@@ -181,6 +183,7 @@ export class UserController {
       }
 
       await userRepository.save(user);
+      await membershipRepo.save(membership);
 
       return res.status(200).json({ message: "User updated successfully" });
     } catch (error) {

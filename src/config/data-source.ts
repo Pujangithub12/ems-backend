@@ -16,6 +16,7 @@ import { MyTask } from "../entities/MyTask";
 import { CalendarEvent } from "../entities/CalendarEvent";
 import { Activity } from "../entities/Activity";
 import { Workspace } from "../entities/Workspace";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { HierarchyNode } from "../entities/HierarchyNode";
 import { ScheduleTask } from "../entities/ScheduleTask";
 import { RolePermission } from "../entities/RolePermission";
@@ -49,6 +50,7 @@ const entityList = isProduction
       CalendarEvent,
       Activity,
       Workspace,
+      WorkspaceMembership,
       HierarchyNode,
       ScheduleTask,
       RolePermission,

@@ -3,14 +3,15 @@ import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import { AppDataSource } from "../config/data-source";
 import { Workspace } from "../entities/Workspace";
-import { User } from "../entities/User";
+import { User, UserRole } from "../entities/User";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { PermissionKey } from "../config/permissions";
 import { roleHasPermission } from "../utils/permissionService";
 
 dotenv.config();
 
 const JWT_SECRET: string = process.env.JWT_SECRET || "your_jwt_secret_key";
-const THREE_HOURS_MS = 3 * 60 * 60 * 1000; 
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 
 export interface AuthRequest extends Request {
   user?: {
@@ -37,34 +38,42 @@ export const authMiddleware = async (
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    // The JWT only ever carries the user id now — role is per-workspace (see
+    // WorkspaceMembership), so it can't be baked into a token that outlives
+    // any single workspace context. `req.user.role` is filled in below once
+    // `req.workspace` is resolved.
+    const decoded = jwt.verify(token, JWT_SECRET) as { id: number };
     req.user = {
       id: decoded.id,
-      role: decoded.role,
+      role: "",
     };
 
     const workspaceRepo = AppDataSource.getRepository(Workspace);
     const userRepo = AppDataSource.getRepository(User);
+    const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
 
     const user = await userRepo.findOne({
       where: { id: req.user.id },
-      relations: ["workspaces"],
+      relations: ["memberships", "memberships.workspace"],
     });
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+    const userWorkspaces = user.memberships.map((m) => m.workspace);
 
     const headerWorkspaceId = req.headers["x-workspace-id"];
     const rawHeader = Array.isArray(headerWorkspaceId)
       ? headerWorkspaceId[0]
       : headerWorkspaceId;
 
+    let resolvedWorkspace: Workspace | null = null;
+
     // Accounts created via an accepted workspace invite are permanently
     // pinned to the one workspace they were invited into — resolved here,
     // before any header/cookie logic, so nothing below can ever put them in
     // a different workspace's context.
     if (user.homeWorkspaceId != null) {
-      const home = user.workspaces.find((w) => w.id === user.homeWorkspaceId);
+      const home = userWorkspaces.find((w) => w.id === user.homeWorkspaceId);
       if (!home) {
         // Home workspace was deleted, or this account's membership in it was
         // otherwise removed — never fall through to the "no workspace ->
@@ -91,119 +100,100 @@ export const authMiddleware = async (
           .json({ message: "Access Forbidden", code: "WORKSPACE_ACCESS_FORBIDDEN" });
       }
 
-      req.workspace = home;
-      const isProduction = process.env.NODE_ENV === "production";
-      res.cookie("workspaceId", home.id.toString(), {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? "none" : "lax",
-        maxAge: THREE_HOURS_MS,
-      });
-      return next();
-    }
-
-    // The frontend is URL-driven: each request declares which workspace it's
-    // operating on via this header (derived from the route, not shared cookie
-    // state), so switching workspaces takes effect on the very next request
-    // instead of racing a cookie update. Falls back to the cookie below for
-    // requests that can't set custom headers (e.g. the static /uploads route).
-    if (headerWorkspaceId) {
+      resolvedWorkspace = home;
+    } else if (headerWorkspaceId) {
+      // The frontend is URL-driven: each request declares which workspace
+      // it's operating on via this header (derived from the route, not
+      // shared cookie state), so switching workspaces takes effect on the
+      // very next request instead of racing a cookie update. Falls back to
+      // the cookie below for requests that can't set custom headers (e.g.
+      // the static /uploads route).
       const parsedId = Number(rawHeader);
       if (!Number.isInteger(parsedId) || parsedId <= 0) {
         return res.status(400).json({ message: "Invalid workspace id" });
       }
 
-      const targetWorkspace = user.workspaces.find((w) => w.id === parsedId);
+      const targetWorkspace = userWorkspaces.find((w) => w.id === parsedId);
       if (!targetWorkspace) {
         return res
           .status(403)
           .json({ message: "Not a member of this workspace" });
       }
 
-      req.workspace = targetWorkspace;
-
-      // Keep the cookie in sync as the "last used" default for requests
-      // without the header.
-      const isProduction = process.env.NODE_ENV === "production";
-      res.cookie("workspaceId", targetWorkspace.id.toString(), {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? "none" : "lax",
-        maxAge: THREE_HOURS_MS,
-      });
-
-      return next();
-    }
-
-    // Now get the current workspace
-    let workspaceId = req.cookies.workspaceId;
-
-    if (!workspaceId) {
-      if (user.workspaces.length === 0) {
-        // Create default workspace
-        const defaultWorkspace = workspaceRepo.create({
-          name: "EMS Workspace",
-          members: [user],
-        });
-        await workspaceRepo.save(defaultWorkspace);
-        workspaceId = defaultWorkspace.id.toString();
-        // Set cookie
-        const isProduction = process.env.NODE_ENV === "production";
-        res.cookie("workspaceId", workspaceId, {
-          httpOnly: true,
-          secure: isProduction,
-          sameSite: isProduction ? "none" : "lax",
-          maxAge: THREE_HOURS_MS, // 3 hours
-        });
-        req.workspace = defaultWorkspace;
-      } else {
-        const firstWorkspace = user.workspaces[0];
-        if (!firstWorkspace) {
-          return res.status(404).json({ message: "Workspace not found" });
-        }
-        workspaceId = firstWorkspace.id.toString();
-        // Set cookie
-        const isProduction = process.env.NODE_ENV === "production";
-        res.cookie("workspaceId", workspaceId, {
-          httpOnly: true,
-          secure: isProduction,
-          sameSite: isProduction ? "none" : "lax",
-          maxAge: THREE_HOURS_MS, // 3 hours
-        });
-        req.workspace = firstWorkspace;
-      }
+      resolvedWorkspace = targetWorkspace;
     } else {
-      // Get workspace from cookie — re-verified against this user's actual
-      // memberships on every request. The cookie is client-controlled, so
-      // trusting its id alone would let anyone read/write another
-      // workspace's data just by setting workspaceId to its id.
-      const cookieWorkspace = user.workspaces.find(
-        (w) => w.id === Number(workspaceId),
-      );
+      // Now get the current workspace
+      const workspaceId = req.cookies.workspaceId;
 
-      if (!cookieWorkspace) {
-        // Cookie is stale, invalid, or points to a workspace this user is
-        // no longer (or never was) a member of — fall back to their first.
-        if (user.workspaces.length > 0) {
-          const fallbackWorkspace = user.workspaces[0];
-          if (!fallbackWorkspace) {
+      if (!workspaceId) {
+        if (userWorkspaces.length === 0) {
+          // Brand new account with no workspace at all — create a default
+          // one and make them its super admin (mirrors
+          // WorkspaceController.create / AuthController.registerVerify).
+          const defaultWorkspace = workspaceRepo.create({
+            name: "EMS Workspace",
+          });
+          await workspaceRepo.save(defaultWorkspace);
+          const membership = membershipRepo.create({
+            user,
+            workspace: defaultWorkspace,
+            role: UserRole.SUPER_ADMIN,
+          });
+          await membershipRepo.save(membership);
+          user.memberships.push(membership);
+          resolvedWorkspace = defaultWorkspace;
+        } else {
+          resolvedWorkspace = userWorkspaces[0]!;
+        }
+      } else {
+        // Get workspace from cookie — re-verified against this user's actual
+        // memberships on every request. The cookie is client-controlled, so
+        // trusting its id alone would let anyone read/write another
+        // workspace's data just by setting workspaceId to its id.
+        const cookieWorkspace = userWorkspaces.find(
+          (w) => w.id === Number(workspaceId),
+        );
+
+        if (!cookieWorkspace) {
+          // Cookie is stale, invalid, or points to a workspace this user is
+          // no longer (or never was) a member of — fall back to their first.
+          if (userWorkspaces.length > 0) {
+            resolvedWorkspace = userWorkspaces[0]!;
+          } else {
             return res.status(404).json({ message: "Workspace not found" });
           }
-          req.workspace = fallbackWorkspace;
-          const isProduction = process.env.NODE_ENV === "production";
-          res.cookie("workspaceId", fallbackWorkspace.id.toString(), {
-            httpOnly: true,
-            secure: isProduction,
-            sameSite: isProduction ? "none" : "lax",
-            maxAge: THREE_HOURS_MS, // 3 hours
-          });
         } else {
-          return res.status(404).json({ message: "Workspace not found" });
+          resolvedWorkspace = cookieWorkspace;
         }
-      } else {
-        req.workspace = cookieWorkspace;
       }
     }
+
+    if (!resolvedWorkspace) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
+    const membership = user.memberships.find(
+      (m) => m.workspace.id === resolvedWorkspace!.id,
+    );
+    if (!membership) {
+      // Shouldn't happen — resolvedWorkspace is always derived from
+      // userWorkspaces/user.memberships above — but never let a request
+      // through with an unresolved role.
+      return res
+        .status(403)
+        .json({ message: "Access Forbidden", code: "WORKSPACE_ACCESS_FORBIDDEN" });
+    }
+
+    req.user.role = membership.role;
+    req.workspace = resolvedWorkspace;
+
+    const isProduction = process.env.NODE_ENV === "production";
+    res.cookie("workspaceId", resolvedWorkspace.id.toString(), {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: THREE_HOURS_MS,
+    });
 
     next();
   } catch (error) {
@@ -242,4 +232,3 @@ export const permissionMiddleware = (key: PermissionKey) => {
     next();
   };
 };
-

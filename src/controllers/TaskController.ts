@@ -3,6 +3,7 @@ import { AppDataSource } from "../config/data-source";
 import { Task } from "../entities/Task";
 import { TaskPriority, TaskStatus, UserRole } from "../entities/TaskEnums";
 import { User } from "../entities/User";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { Project } from "../entities/Project";
 import { SubTask } from "../entities/SubTask";
 import { In } from "typeorm";
@@ -82,11 +83,12 @@ export class TaskController {
 
       if (assignAll === "true" || assignAll === true) {
         if (isSuperAdmin) {
-          assignedUsers = await userRepository
-            .createQueryBuilder("user")
-            .innerJoin("user.workspaces", "workspace")
-            .where("workspace.id = :workspaceId", { workspaceId })
-            .getMany();
+          assignedUsers = (
+            await AppDataSource.getRepository(WorkspaceMembership).find({
+              where: { workspace: { id: workspaceId } },
+              relations: ["user"],
+            })
+          ).map((m) => m.user);
         } else {
           // Non-root actors can only ever assign within their own reporting
           // line — "all" means "all of my descendants", not the workspace.
@@ -593,11 +595,12 @@ EMS Management
       let newAssignedUsers: User[] = [...task.assignedUsers];
       if (assignAll === "true" || assignAll === true) {
         if (isSuperAdmin) {
-          newAssignedUsers = await userRepository
-            .createQueryBuilder("user")
-            .innerJoin("user.workspaces", "workspace")
-            .where("workspace.id = :workspaceId", { workspaceId })
-            .getMany();
+          newAssignedUsers = (
+            await AppDataSource.getRepository(WorkspaceMembership).find({
+              where: { workspace: { id: workspaceId } },
+              relations: ["user"],
+            })
+          ).map((m) => m.user);
         } else {
           const descendantIds = await getDescendantUserIds(workspaceId, actorId);
           const ids = Array.from(new Set([actorId, ...descendantIds]));

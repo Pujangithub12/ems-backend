@@ -3,11 +3,9 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
-  ManyToMany,
   OneToMany,
-  JoinTable,
 } from "typeorm";
-import { User } from "./User";
+import { WorkspaceMembership } from "./WorkspaceMembership";
 import { Task } from "./Task";
 import { Project } from "./Project";
 import { Announcement } from "./Announcement";
@@ -30,9 +28,10 @@ export class Workspace {
   @Column({ nullable: true })
   description?: string;
 
-  @ManyToMany(() => User, (user) => user.workspaces)
-  @JoinTable()
-  members!: User[];
+  // Membership (and each member's role in this workspace) lives on
+  // WorkspaceMembership — see the matching comment on User.memberships.
+  @OneToMany(() => WorkspaceMembership, (m) => m.workspace)
+  memberships!: WorkspaceMembership[];
 
   @OneToMany(() => Task, (task) => task.workspace, { cascade: true })
   tasks!: Task[];
