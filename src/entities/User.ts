@@ -3,10 +3,10 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
-  ManyToMany,
+  OneToMany,
 } from "typeorm";
 import { UserRole } from "./TaskEnums";
-import { Workspace } from "./Workspace";
+import { WorkspaceMembership } from "./WorkspaceMembership";
 
 export { UserRole };
 
@@ -36,14 +36,12 @@ export class User {
   @Column()
   joinDate!: Date;
 
-  @Column({
-    type: "varchar",
-    default: UserRole.USER,
-  })
-  role!: UserRole;
-
-  @ManyToMany(() => Workspace, (workspace) => workspace.members)
-  workspaces!: Workspace[];
+  // Role lives on WorkspaceMembership, not here — the same account can be
+  // `USER` in one workspace and `SUPER_ADMIN` in another. `req.user.role` is
+  // resolved per-request by authMiddleware from the membership row matching
+  // (this user, req.workspace); there is no longer a single global role.
+  @OneToMany(() => WorkspaceMembership, (m) => m.user)
+  memberships!: WorkspaceMembership[];
 
   // Set once, at account-creation time, for users created via an accepted
   // workspace invite (see InviteController.acceptInvite) — the one workspace

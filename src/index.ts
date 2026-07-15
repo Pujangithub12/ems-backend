@@ -7,6 +7,8 @@ import cron from "node-cron";
 import { AppDataSource } from "./config/data-source";
 import routes from "./routes";
 import { User, UserRole } from "./entities/User";
+import { Workspace } from "./entities/Workspace";
+import { WorkspaceMembership } from "./entities/WorkspaceMembership";
 import { Announcement } from "./entities/Announcement";
 import { LeaveRequest } from "./entities/LeaveRequest";
 import { SiteVisitRequest } from "./entities/SiteVisitRequest";
@@ -57,16 +59,52 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 app.use("/api", routes);
 
+// Role lives on WorkspaceMembership now, not User — both seed functions
+// find-or-create the same default "EMS Workspace" that backfillWorkspace
+// (called right after these) also ensures exists, then upsert their
+// membership row's role in it. Safe to call before backfillWorkspace runs:
+// the workspace only needs to exist once, whichever of these creates it.
+const ensureMembershipRole = async (user: User, role: UserRole) => {
+  const workspaceRepository = AppDataSource.getRepository(Workspace);
+  const membershipRepository = AppDataSource.getRepository(WorkspaceMembership);
+
+  let workspace = await workspaceRepository.findOne({
+    where: { name: "EMS Workspace" },
+  });
+  if (!workspace) {
+    workspace = workspaceRepository.create({
+      name: "EMS Workspace",
+      description: "Default workspace for all EMS data",
+    });
+    await workspaceRepository.save(workspace);
+  }
+
+  let membership = await membershipRepository.findOne({
+    where: { user: { id: user.id }, workspace: { id: workspace.id } },
+  });
+  if (!membership) {
+    membership = membershipRepository.create({ user, workspace, role });
+    await membershipRepository.save(membership);
+    return true;
+  }
+  if (membership.role !== role) {
+    membership.role = role;
+    await membershipRepository.save(membership);
+    return true;
+  }
+  return false;
+};
+
 const seedAdmin = async () => {
   const userRepository = AppDataSource.getRepository(User);
   const adminEmail = "admin@ems.com";
-  const adminExists = await userRepository.findOne({
+  let adminExists = await userRepository.findOne({
     where: { email: adminEmail },
   });
 
   if (!adminExists) {
     const hashedPassword = await bcrypt.hash("admin123", 10);
-    const admin = userRepository.create({
+    adminExists = userRepository.create({
       fullName: "System Admin",
       email: adminEmail,
       password: hashedPassword,
@@ -74,15 +112,15 @@ const seedAdmin = async () => {
       address: "System",
       jobPosition: "Administrator",
       joinDate: new Date(),
-      role: UserRole.ADMIN,
     });
-    await userRepository.save(admin);
-    console.log(`Default admin created: ${adminEmail} / admin123`);
-  } else if (adminExists.role !== UserRole.ADMIN) {
-    adminExists.role = UserRole.ADMIN;
     await userRepository.save(adminExists);
+    console.log(`Default admin created: ${adminEmail} / admin123`);
+  }
+
+  const changed = await ensureMembershipRole(adminExists, UserRole.ADMIN);
+  if (changed) {
     console.log(
-      `Existing admin account updated to role admin for: ${adminEmail}`,
+      `Admin membership in EMS Workspace ensured (role admin) for: ${adminEmail}`,
     );
   }
 };
@@ -90,13 +128,13 @@ const seedAdmin = async () => {
 const seedSuperAdmin = async () => {
   const userRepository = AppDataSource.getRepository(User);
   const superAdminEmail = "superadmin@ems.com";
-  const superAdminExists = await userRepository.findOne({
+  let superAdminExists = await userRepository.findOne({
     where: { email: superAdminEmail },
   });
 
   if (!superAdminExists) {
     const hashedPassword = await bcrypt.hash("superadmin123", 10);
-    const superAdmin = userRepository.create({
+    superAdminExists = userRepository.create({
       fullName: "Super Admin",
       email: superAdminEmail,
       password: hashedPassword,
@@ -104,15 +142,15 @@ const seedSuperAdmin = async () => {
       address: "System",
       jobPosition: "Super Administrator",
       joinDate: new Date(),
-      role: UserRole.SUPER_ADMIN,
     });
-    await userRepository.save(superAdmin);
-    console.log(`Default super admin created: ${superAdminEmail} / superadmin123`);
-  } else if (superAdminExists.role !== UserRole.SUPER_ADMIN) {
-    superAdminExists.role = UserRole.SUPER_ADMIN;
     await userRepository.save(superAdminExists);
+    console.log(`Default super admin created: ${superAdminEmail} / superadmin123`);
+  }
+
+  const changed = await ensureMembershipRole(superAdminExists, UserRole.SUPER_ADMIN);
+  if (changed) {
     console.log(
-      `Existing account updated to role super_admin for: ${superAdminEmail}`,
+      `Super admin membership in EMS Workspace ensured (role super_admin) for: ${superAdminEmail}`,
     );
   }
 };

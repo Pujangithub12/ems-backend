@@ -2,8 +2,10 @@ import { Request, Response } from "express";
 import { AppDataSource } from "../config/data-source";
 import { User, UserRole } from "../entities/User";
 import { Workspace } from "../entities/Workspace";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { PendingSignup } from "../entities/PendingSignup";
 import { PasswordResetOtp } from "../entities/PasswordResetOtp";
+import { AuthRequest } from "../middlewares/auth";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
@@ -17,6 +19,7 @@ import {
   ForgotPasswordResetDto,
 } from "../dto/auth.dto";
 import { sendEmail } from "../utils/emailService";
+import { getPasswordStrengthError } from "../utils/passwordPolicy";
 
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_OTP_ATTEMPTS = 5;
@@ -49,7 +52,10 @@ export class AuthController {
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
-      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
+      // Role is per-workspace now (see WorkspaceMembership), so it can't be
+      // baked into a token that outlives any single workspace context —
+      // authMiddleware resolves req.user.role fresh on every request instead.
+      const token = jwt.sign({ id: user.id }, JWT_SECRET, {
         expiresIn: "3h",
       });
 
@@ -67,7 +73,6 @@ export class AuthController {
           id: user.id,
           fullName: user.fullName,
           email: user.email,
-          role: user.role,
           phoneNumber: user.phoneNumber,
           address: user.address,
           jobPosition: user.jobPosition,
@@ -93,10 +98,9 @@ export class AuthController {
         message: "Full name, email, and password are required",
       });
     }
-    if (password.length < 6) {
-      return res
-        .status(400)
-        .json({ message: "Password must be at least 6 characters" });
+    const passwordError = getPasswordStrengthError(password);
+    if (passwordError) {
+      return res.status(400).json({ message: passwordError });
     }
 
     try {
@@ -209,19 +213,27 @@ export class AuthController {
         address: "",
         jobPosition: "Owner",
         joinDate: new Date(),
-        role: UserRole.SUPER_ADMIN,
       });
       await userRepository.save(user);
 
       const workspace = workspaceRepository.create({
         name: `${pending.fullName}'s Workspace`,
-        members: [user],
       });
       await workspaceRepository.save(workspace);
 
+      const membershipRepository = AppDataSource.getRepository(WorkspaceMembership);
+      await membershipRepository.save(
+        membershipRepository.create({
+          user,
+          workspace,
+          role: UserRole.SUPER_ADMIN,
+        }),
+      );
+
       await pendingRepository.remove(pending);
 
-      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
+      // Role is per-workspace now — see the matching comment in login().
+      const token = jwt.sign({ id: user.id }, JWT_SECRET, {
         expiresIn: "3h",
       });
       const isProduction = process.env.NODE_ENV === "production";
@@ -244,7 +256,6 @@ export class AuthController {
           id: user.id,
           fullName: user.fullName,
           email: user.email,
-          role: user.role,
           phoneNumber: user.phoneNumber,
           address: user.address,
           jobPosition: user.jobPosition,
@@ -328,10 +339,12 @@ export class AuthController {
         .status(400)
         .json({ message: "Email and verification code are required" });
     }
-    if (!newPassword || newPassword.length < 6) {
-      return res
-        .status(400)
-        .json({ message: "New password must be at least 6 characters" });
+    if (!newPassword) {
+      return res.status(400).json({ message: "New password is required" });
+    }
+    const passwordError = getPasswordStrengthError(newPassword);
+    if (passwordError) {
+      return res.status(400).json({ message: passwordError });
     }
 
     try {
@@ -373,7 +386,8 @@ export class AuthController {
       await userRepository.save(user);
       await otpRepository.remove(otpRecord);
 
-      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
+      // Role is per-workspace now — see the matching comment in login().
+      const token = jwt.sign({ id: user.id }, JWT_SECRET, {
         expiresIn: "3h",
       });
       const isProduction = process.env.NODE_ENV === "production";
@@ -390,7 +404,6 @@ export class AuthController {
           id: user.id,
           fullName: user.fullName,
           email: user.email,
-          role: user.role,
           phoneNumber: user.phoneNumber,
           address: user.address,
           jobPosition: user.jobPosition,
@@ -414,10 +427,10 @@ export class AuthController {
     return res.status(200).json({ message: "Logged out successfully" });
   };
 
-  static getMe = async (req: any, res: Response) => {
+  static getMe = async (req: AuthRequest, res: Response) => {
     try {
       const userRepository = AppDataSource.getRepository(User);
-      const user = await userRepository.findOne({ where: { id: req.user.id } });
+      const user = await userRepository.findOne({ where: { id: req.user!.id } });
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -428,7 +441,9 @@ export class AuthController {
           id: user.id,
           fullName: user.fullName,
           email: user.email,
-          role: user.role,
+          // Already resolved by authMiddleware for the active workspace —
+          // role no longer lives on User (see WorkspaceMembership).
+          role: req.user!.role,
           phoneNumber: user.phoneNumber,
           address: user.address,
           jobPosition: user.jobPosition,
@@ -442,12 +457,12 @@ export class AuthController {
     }
   };
 
-  static updateMe = async (req: any, res: Response) => {
+  static updateMe = async (req: AuthRequest, res: Response) => {
     const { phoneNumber, address }: UpdateMeDto = req.body;
 
     try {
       const userRepository = AppDataSource.getRepository(User);
-      const user = await userRepository.findOne({ where: { id: req.user.id } });
+      const user = await userRepository.findOne({ where: { id: req.user!.id } });
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -462,7 +477,7 @@ export class AuthController {
           id: user.id,
           fullName: user.fullName,
           email: user.email,
-          role: user.role,
+          role: req.user!.role,
           phoneNumber: user.phoneNumber,
           address: user.address,
           jobPosition: user.jobPosition,
@@ -483,10 +498,9 @@ export class AuthController {
         .status(400)
         .json({ message: "Current and new password are required" });
     }
-    if (newPassword.length < 6) {
-      return res
-        .status(400)
-        .json({ message: "New password must be at least 6 characters" });
+    const changePasswordError = getPasswordStrengthError(newPassword);
+    if (changePasswordError) {
+      return res.status(400).json({ message: changePasswordError });
     }
 
     try {

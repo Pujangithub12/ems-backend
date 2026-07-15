@@ -1,6 +1,7 @@
 import { AppDataSource } from "../config/data-source";
 import { Workspace } from "../entities/Workspace";
-import { User } from "../entities/User";
+import { User, UserRole } from "../entities/User";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { Project } from "../entities/Project";
 import { Task } from "../entities/Task";
 import { ProjectHeading } from "../entities/ProjectHeading";
@@ -22,14 +23,12 @@ export async function backfillWorkspace() {
     // Step 1: Get or create default workspace
     let workspace = await AppDataSource.getRepository(Workspace).findOne({
       where: { name: "EMS Workspace" },
-      relations: ["members"],
     });
 
     if (!workspace) {
       workspace = AppDataSource.getRepository(Workspace).create({
         name: "EMS Workspace",
         description: "Default workspace for all EMS data",
-        members: [],
       });
       await AppDataSource.getRepository(Workspace).save(workspace);
       console.log("Created default EMS Workspace");
@@ -37,11 +36,24 @@ export async function backfillWorkspace() {
       console.log("Found existing EMS Workspace");
     }
 
-    // Step 2: Add all existing users as members
+    // Step 2: Add all existing users as members — default role `user`;
+    // anyone who should have a stronger role gets it via seedAdmin/
+    // seedSuperAdmin, an invite, or WorkspaceController.grantMemberAccess.
+    const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
     const users = await AppDataSource.getRepository(User).find();
-    workspace.members = [...new Set([...workspace.members, ...users])];
-    await AppDataSource.getRepository(Workspace).save(workspace);
-    console.log(`Added ${users.length} users to workspace`);
+    const existingMemberships = await membershipRepo.find({
+      where: { workspace: { id: workspace.id } },
+    });
+    const memberUserIds = new Set(existingMemberships.map((m) => m.userId));
+    const newMemberships = users
+      .filter((u) => !memberUserIds.has(u.id))
+      .map((u) =>
+        membershipRepo.create({ user: u, workspace: workspace!, role: UserRole.USER }),
+      );
+    if (newMemberships.length > 0) {
+      await membershipRepo.save(newMemberships);
+    }
+    console.log(`Added ${newMemberships.length} users to workspace`);
 
     // Step 3: Backfill all existing data to use this workspace
     const workspaceId = workspace.id;

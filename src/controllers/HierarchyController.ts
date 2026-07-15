@@ -1,17 +1,21 @@
 import { Response } from "express";
 import { AppDataSource } from "../config/data-source";
 import { HierarchyNode } from "../entities/HierarchyNode";
-import { User, UserRole } from "../entities/User";
+import { UserRole } from "../entities/User";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { AuthRequest } from "../middlewares/auth";
 import { HierarchyPersonDto, SaveHierarchyDto } from "../dto/hierarchy.dto";
 
-const toDto = (node: HierarchyNode): HierarchyPersonDto => ({
+const toDto = (
+  node: HierarchyNode,
+  roleByUserId: Map<number, UserRole>,
+): HierarchyPersonDto => ({
   id: node.id,
   userId: node.userId!,
   fullName: node.user!.fullName,
   email: node.user!.email,
   jobPosition: node.user!.jobPosition,
-  role: node.user!.role,
+  role: roleByUserId.get(node.userId!) ?? UserRole.USER,
   joinDate: node.user!.joinDate as unknown as string,
   primaryManagerId: node.parentId ?? null,
   secondaryManagerIds: (node.secondaryManagers || []).map((n) => n.id),
@@ -30,14 +34,18 @@ export class HierarchyController {
       }
 
       const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
-      const userRepo = AppDataSource.getRepository(User);
+      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
 
-      const members = await userRepo
-        .createQueryBuilder("user")
-        .innerJoin("user.workspaces", "workspace")
-        .where("workspace.id = :workspaceId", { workspaceId })
-        .getMany();
+      const memberships = await membershipRepo.find({
+        where: { workspace: { id: workspaceId } },
+        relations: ["user"],
+      });
+      const members = memberships.map((m) => m.user);
       const memberIds = new Set(members.map((m) => m.id));
+      // Role is scoped to this one workspace already, so a plain userId ->
+      // role map is unambiguous here (unlike WorkspaceController.getAccessMatrix,
+      // which spans several workspaces at once).
+      const roleByUserId = new Map(memberships.map((m) => [m.user.id, m.role]));
 
       let nodes = await hierarchyRepo.find({
         where: { workspaceId },
@@ -71,14 +79,19 @@ export class HierarchyController {
       // A super admin always sits at the root — self-heal any node that
       // somehow ended up with a manager (e.g. legacy data).
       const misplacedSuperAdmins = nodes.filter(
-        (n) => n.user?.role === UserRole.SUPER_ADMIN && n.parentId != null,
+        (n) =>
+          n.userId != null &&
+          roleByUserId.get(n.userId) === UserRole.SUPER_ADMIN &&
+          n.parentId != null,
       );
       if (misplacedSuperAdmins.length > 0) {
         misplacedSuperAdmins.forEach((n) => (n.parentId = null));
         await hierarchyRepo.save(misplacedSuperAdmins);
       }
 
-      const people = nodes.map(toDto).sort((a, b) => a.id - b.id);
+      const people = nodes
+        .map((n) => toDto(n, roleByUserId))
+        .sort((a, b) => a.id - b.id);
       return res.status(200).json({ people });
     } catch (error) {
       console.error("Error fetching hierarchy:", error);
@@ -102,12 +115,18 @@ export class HierarchyController {
       }
 
       const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
+      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
       const nodes = await hierarchyRepo.find({
         where: { workspaceId },
         relations: ["user"],
       });
       const nodeIds = new Set(nodes.map((n) => n.id));
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
+
+      const memberships = await membershipRepo.find({
+        where: { workspace: { id: workspaceId } },
+      });
+      const roleByUserId = new Map(memberships.map((m) => [m.userId, m.role]));
 
       // Validate every referenced id (self, primary manager, secondary
       // managers) actually belongs to this workspace before touching anything.
@@ -128,7 +147,11 @@ export class HierarchyController {
       // A super admin always sits at the root of the hierarchy.
       for (const p of people) {
         const node = nodeById.get(p.id)!;
-        if (node.user?.role === UserRole.SUPER_ADMIN && p.primaryManagerId !== null) {
+        if (
+          node.userId != null &&
+          roleByUserId.get(node.userId) === UserRole.SUPER_ADMIN &&
+          p.primaryManagerId !== null
+        ) {
           return res.status(400).json({
             message: "A super admin can't be given a manager — they stay at the root",
           });
@@ -165,7 +188,9 @@ export class HierarchyController {
         where: { workspaceId },
         relations: ["user", "secondaryManagers"],
       });
-      const result = updated.map(toDto).sort((a, b) => a.id - b.id);
+      const result = updated
+        .map((n) => toDto(n, roleByUserId))
+        .sort((a, b) => a.id - b.id);
       return res.status(200).json({ people: result });
     } catch (error) {
       console.error("Error saving hierarchy:", error);

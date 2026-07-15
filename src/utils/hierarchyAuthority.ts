@@ -1,6 +1,7 @@
 import { AppDataSource } from "../config/data-source";
 import { HierarchyNode } from "../entities/HierarchyNode";
 import { UserRole } from "../entities/User";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 
 /**
  * Loads every HierarchyNode for a workspace once and returns the ordered
@@ -17,7 +18,6 @@ export async function getAncestorChain(
   const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
   const nodes = await hierarchyRepo.find({
     where: { workspaceId },
-    relations: ["user"],
   });
   const nodeByUserId = new Map(nodes.map((n) => [n.userId, n]));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
@@ -91,8 +91,19 @@ export async function getApprover(
   requesterUserId: number,
 ): Promise<{ userId: number } | null> {
   const chain = await getAncestorChain(workspaceId, requesterUserId);
+  if (chain.length === 0) return null;
+
+  // Role is scoped to this one workspace already (see WorkspaceMembership),
+  // so a plain userId -> role map is unambiguous here.
+  const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
+  const memberships = await membershipRepo.find({ where: { workspace: { id: workspaceId } } });
+  const roleByUserId = new Map(memberships.map((m) => [m.userId, m.role]));
+
   const approver = chain.find(
-    (n) => n.user?.role === UserRole.ADMIN || n.user?.role === UserRole.SUPER_ADMIN,
+    (n) =>
+      n.userId != null &&
+      (roleByUserId.get(n.userId) === UserRole.ADMIN ||
+        roleByUserId.get(n.userId) === UserRole.SUPER_ADMIN),
   );
   return approver?.userId != null ? { userId: approver.userId } : null;
 }

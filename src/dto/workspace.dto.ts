@@ -19,3 +19,11 @@ export interface UpdateWorkspaceDto {
 export interface DeleteWorkspaceDto {
   confirmName: string;
 }
+
+/** Body shape for PUT /workspaces/:id/members/:userId. Role is optional and
+ * defaults to UserRole.USER — there's no global role to inherit anymore
+ * (role is per-workspace, see WorkspaceMembership), and older frontend
+ * callers that don't send a role should still get a sane default. */
+export interface GrantMemberAccessDto {
+  role?: string;
+}

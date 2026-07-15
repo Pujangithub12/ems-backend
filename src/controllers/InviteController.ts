@@ -6,11 +6,13 @@ import dotenv from "dotenv";
 import { AppDataSource } from "../config/data-source";
 import { User, UserRole } from "../entities/User";
 import { Workspace } from "../entities/Workspace";
+import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { WorkspaceInvite } from "../entities/WorkspaceInvite";
 import { AuthRequest } from "../middlewares/auth";
 import { CreateInviteDto, AcceptInviteDto } from "../dto/invite.dto";
 import { sendEmail } from "../utils/emailService";
 import { countSuperAdminsInWorkspace } from "./UserController";
+import { getPasswordStrengthError } from "../utils/passwordPolicy";
 
 dotenv.config();
 
@@ -60,9 +62,9 @@ export class InviteController {
       const workspace = req.workspace!;
       const normalizedEmail = email.trim();
 
+      const membershipRepository = AppDataSource.getRepository(WorkspaceMembership);
       const existingUser = await userRepository.findOne({
         where: { email: normalizedEmail },
-        relations: ["workspaces"],
       });
 
       // Enforce role assignment rules (identical to the old direct-create
@@ -104,9 +106,9 @@ export class InviteController {
         // self-registered "owner" account already can belong to several
         // workspaces). No new password/accept-invite step is needed since
         // the account already exists.
-        const alreadyMember = existingUser.workspaces.some(
-          (w) => w.id === workspace.id,
-        );
+        const alreadyMember = await membershipRepository.findOne({
+          where: { workspace: { id: workspace.id }, user: { id: existingUser.id } },
+        });
         if (alreadyMember) {
           return res
             .status(400)
@@ -115,22 +117,31 @@ export class InviteController {
 
         const fullWorkspace = await workspaceRepository.findOne({
           where: { id: workspace.id },
-          relations: ["members"],
         });
         if (!fullWorkspace) {
           return res.status(404).json({ message: "Workspace not found" });
         }
 
-        existingUser.role = finalRole;
+        // Only creates a membership in *this* workspace — the invited
+        // user's role in any other workspace they already belong to is
+        // untouched (previously `existingUser.role = finalRole` clobbered
+        // their role everywhere, since role was a single global column).
+        await membershipRepository.save(
+          membershipRepository.create({
+            user: existingUser,
+            workspace: fullWorkspace,
+            role: finalRole,
+          }),
+        );
+
         // Unlock: once an account belongs to more than one workspace it
         // behaves like a self-registered "owner" account and gets the
         // normal workspace switcher, instead of staying pinned to a single
         // home workspace (see authMiddleware's homeWorkspaceId check).
-        existingUser.homeWorkspaceId = null;
-        await userRepository.save(existingUser);
-
-        fullWorkspace.members = [...fullWorkspace.members, existingUser];
-        await workspaceRepository.save(fullWorkspace);
+        if (existingUser.homeWorkspaceId != null) {
+          existingUser.homeWorkspaceId = null;
+          await userRepository.save(existingUser);
+        }
 
         const roleText = finalRole.replace("_", " ");
         await sendEmail(
@@ -257,10 +268,12 @@ export class InviteController {
     const token = req.params.token as string;
     const { password }: AcceptInviteDto = req.body;
 
-    if (!password || password.length < 6) {
-      return res
-        .status(400)
-        .json({ message: "Password must be at least 6 characters" });
+    if (!password) {
+      return res.status(400).json({ message: "Password is required" });
+    }
+    const passwordError = getPasswordStrengthError(password);
+    if (passwordError) {
+      return res.status(400).json({ message: passwordError });
     }
 
     try {
@@ -326,16 +339,26 @@ export class InviteController {
         address: invite.address,
         jobPosition: invite.jobPosition,
         joinDate: invite.joinDate,
-        role: invite.role,
-        workspaces: [workspace],
         // Permanently locks this account to the workspace it was invited
         // into — see authMiddleware and WorkspaceController.create/switch.
         homeWorkspaceId: workspace.id,
       });
       await userRepository.save(user);
+
+      const membershipRepository = AppDataSource.getRepository(WorkspaceMembership);
+      await membershipRepository.save(
+        membershipRepository.create({
+          user,
+          workspace,
+          role: invite.role,
+        }),
+      );
+
       await inviteRepository.remove(invite);
 
-      const jwtToken = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
+      // Role is per-workspace now (see WorkspaceMembership), so it can't be
+      // baked into a token that outlives any single workspace context.
+      const jwtToken = jwt.sign({ id: user.id }, JWT_SECRET, {
         expiresIn: "3h",
       });
       const isProduction = process.env.NODE_ENV === "production";
@@ -358,7 +381,6 @@ export class InviteController {
           id: user.id,
           fullName: user.fullName,
           email: user.email,
-          role: user.role,
           phoneNumber: user.phoneNumber,
           address: user.address,
           jobPosition: user.jobPosition,
