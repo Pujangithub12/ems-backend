@@ -40,10 +40,18 @@ export class ProjectFile {
   @ManyToOne(() => User, { nullable: true, onDelete: "SET NULL" })
   uploadedBy?: User;
 
-  @ManyToOne(() => Project, (project) => project.id, { onDelete: "CASCADE" })
-  project!: Project;
+  // Nullable: workspace-level documents (the sidebar Documents page) have no
+  // project — only files/folders created from a project's Documents tab set this.
+  @ManyToOne(() => Project, (project) => project.files, {
+    nullable: true,
+    onDelete: "CASCADE",
+  })
+  project?: Project;
 
-  @ManyToOne(() => Workspace, { nullable: true })
+  @ManyToOne(() => Workspace, (workspace) => workspace.files, {
+    nullable: true,
+    onDelete: "CASCADE",
+  })
   workspace?: Workspace;
 
   @CreateDateColumn()
