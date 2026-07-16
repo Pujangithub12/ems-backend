@@ -6,6 +6,7 @@ import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
+import { WorkspaceFileController } from "../controllers/WorkspaceFileController";
 import { MyTaskController } from "../controllers/MyTaskController";
 import { TaskController } from "../controllers/TaskController";
 import { DashboardController } from "../controllers/DashboardController";
@@ -21,7 +22,7 @@ import { ScheduleController } from "../controllers/ScheduleController";
 import { ScheduleService } from "../services/schedule.service";
 import { PermissionController } from "../controllers/PermissionController";
 import { authMiddleware, roleMiddleware, permissionMiddleware } from "../middlewares/auth";
-import { upload, uploadProjectFile } from "../middlewares/upload";
+import { upload, uploadProjectFile, uploadWorkspaceFile } from "../middlewares/upload";
 import { UserRole } from "../entities/User";
 
 const router = Router();
@@ -216,6 +217,28 @@ router.delete(
   authMiddleware,
   permissionMiddleware("projects.documents"),
   ProjectFileController.deleteProjectFile,
+);
+
+// Workspace-level document routes (sidebar Documents page). Rename/download/delete
+// reuse the same /projects/files/:fileId endpoints above — they resolve ownership
+// via whichever of project/workspace is set on the row.
+router.get(
+  "/workspace/files",
+  authMiddleware,
+  WorkspaceFileController.getWorkspaceFiles,
+);
+router.post(
+  "/workspace/folders",
+  authMiddleware,
+  permissionMiddleware("projects.documents"),
+  WorkspaceFileController.addWorkspaceFolder,
+);
+router.post(
+  "/workspace/files",
+  authMiddleware,
+  permissionMiddleware("projects.documents"),
+  uploadWorkspaceFile.single("file"),
+  WorkspaceFileController.addWorkspaceFile,
 );
 
 // Personal task routes

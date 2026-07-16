@@ -55,3 +55,28 @@ export const uploadProjectFile = multer({
     fileSize: 25 * 1024 * 1024, // 25MB limit
   },
 });
+
+// Workspace-level documents (sidebar Documents page) stored under
+// uploads/workspaces/<workspaceId>/ — req.workspace is set by authMiddleware,
+// which always runs before this in the route chain.
+const workspaceFileStorage = multer.diskStorage({
+  destination: (req: any, file, cb) => {
+    const workspaceId = req.workspace?.id;
+    const dir = path.join("uploads", "workspaces", String(workspaceId));
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
+  },
+});
+
+export const uploadWorkspaceFile = multer({
+  storage: workspaceFileStorage,
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB limit
+  },
+});

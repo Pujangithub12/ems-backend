@@ -164,11 +164,9 @@ export class TaskCommentController {
       const isAssigned = task.assignedUsers.some(
         (assigned) => assigned.id === user.id,
       );
-      if (
-        !isAssigned &&
-        req.user?.role !== "admin" &&
-        req.user?.role !== "super_admin"
-      )
+      // Writing a subtask update is the assignee's job — the assigner reviews
+      // it and gives feedback instead (see addSubTaskFeedback below).
+      if (!isAssigned && req.user?.role !== "super_admin")
         return res.status(403).json({ message: "Forbidden" });
 
       const comment = commentRepository.create({
@@ -197,7 +195,7 @@ export class TaskCommentController {
 
       const task = await taskRepository.findOne({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers"],
+        relations: ["assignedUsers", "createdBy"],
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
@@ -212,11 +210,14 @@ export class TaskCommentController {
       if (!subTask)
         return res.status(404).json({ message: "Subtask not found" });
 
-      if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
-        const isAssigned = task.assignedUsers.some(
-          (assigned) => assigned.id === req.user?.id,
-        );
-        if (!isAssigned) return res.status(403).json({ message: "Forbidden" });
+      // Viewable by the assignee (who wrote the update) and the assigner (who
+      // reviews it and gives feedback), plus super_admin as a fallback.
+      const isAssigned = task.assignedUsers.some(
+        (assigned) => assigned.id === req.user?.id,
+      );
+      const isAssigner = task.createdBy?.id === req.user?.id;
+      if (!isAssigned && !isAssigner && req.user?.role !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden" });
       }
 
       const comments = await commentRepository.find({
@@ -243,7 +244,7 @@ export class TaskCommentController {
       const commentRepository = AppDataSource.getRepository(SubTaskComment);
       const comment = await commentRepository.findOne({
         where: { id: parseInt(commentId as string) },
-        relations: ["subTask", "subTask.task", "subTask.task.assignedUsers"],
+        relations: ["subTask", "subTask.task", "subTask.task.createdBy"],
       });
 
       if (
@@ -254,8 +255,11 @@ export class TaskCommentController {
         return res.status(404).json({ message: "Comment not found" });
       }
 
-      // Only allow admin/super_admin to add feedback
-      if (req.user?.role !== "admin" && req.user?.role !== "super_admin")
+      // Only the person who assigned this task may give feedback on the
+      // assignee's update — a super_admin can too, as a fallback in case the
+      // original assigner's account was removed.
+      const isAssigner = comment.subTask.task.createdBy?.id === req.user?.id;
+      if (!isAssigner && req.user?.role !== "super_admin")
         return res.status(403).json({ message: "Forbidden" });
 
       comment.feedback = feedback;

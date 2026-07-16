@@ -1,12 +1,17 @@
 import { Response } from "express";
 import path from "path";
 import fs from "fs";
+import { IsNull } from "typeorm";
 import { AppDataSource } from "../config/data-source";
 import { Project } from "../entities/Project";
 import { User } from "../entities/User";
 import { ProjectFile } from "../entities/ProjectFile";
 import { AuthRequest } from "../middlewares/auth";
 import { AddProjectFolderDto, RenameProjectFileDto } from "../dto/project-file.dto";
+
+/** A file/folder is either project-scoped (Documents tab) or workspace-scoped (sidebar Documents page, project null) — resolve whichever workspace actually owns it. */
+const ownerWorkspaceId = (file: ProjectFile): number | undefined =>
+  file.project ? file.project.workspace?.id : file.workspace?.id;
 
 /** Documents tab: files and folders scoped to a project. */
 export class ProjectFileController {
@@ -168,14 +173,14 @@ export class ProjectFileController {
       const fileRepository = AppDataSource.getRepository(ProjectFile);
       const file = await fileRepository.findOne({
         where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace"],
+        relations: ["project", "project.workspace", "workspace"],
       });
 
       if (
         !file ||
         file.isFolder ||
         !file.path ||
-        file.project?.workspace?.id !== req.workspace!.id
+        ownerWorkspaceId(file) !== req.workspace!.id
       ) {
         return res.status(404).json({ message: "File not found" });
       }
@@ -201,17 +206,21 @@ export class ProjectFileController {
       const fileRepository = AppDataSource.getRepository(ProjectFile);
       const file = await fileRepository.findOne({
         where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace"],
+        relations: ["project", "project.workspace", "workspace"],
       });
 
-      if (!file || file.project?.workspace?.id !== req.workspace!.id) {
+      if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
         return res.status(404).json({ message: "File not found" });
       }
 
       if (file.isFolder) {
         const duplicate = await fileRepository
           .createQueryBuilder("f")
-          .where("f.projectId = :projectId", { projectId: file.project.id })
+          .where(
+            file.project ? "f.projectId = :scopeId" : "f.workspaceId = :scopeId",
+            { scopeId: file.project ? file.project.id : file.workspace!.id },
+          )
+          .andWhere(file.project ? "1=1" : "f.projectId IS NULL")
           .andWhere("f.isFolder = true")
           .andWhere("f.id != :id", { id: file.id })
           .andWhere("LOWER(f.name) = LOWER(:name)", { name: trimmedName })
@@ -247,21 +256,25 @@ export class ProjectFileController {
       const fileRepository = AppDataSource.getRepository(ProjectFile);
       const file = await fileRepository.findOne({
         where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace"],
+        relations: ["project", "project.workspace", "workspace"],
       });
-      if (!file || file.project?.workspace?.id !== req.workspace!.id) {
+      if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
         return res.status(404).json({ message: "File not found" });
       }
 
-      // Gather this node plus all descendants (folders can be nested arbitrarily deep).
-      const allInProject = await fileRepository.find({
-        where: { project: { id: file.project.id } },
+      // Gather this node plus all descendants (folders can be nested arbitrarily deep),
+      // scoped to the same project (Documents tab) or the same workspace with no
+      // project (sidebar Documents page) — whichever this file belongs to.
+      const allInScope = await fileRepository.find({
+        where: file.project
+          ? { project: { id: file.project.id } }
+          : { workspace: { id: file.workspace!.id }, project: IsNull() },
       });
       const toDelete: ProjectFile[] = [];
       const collect = (nodeId: number) => {
-        const node = allInProject.find((f) => f.id === nodeId);
+        const node = allInScope.find((f) => f.id === nodeId);
         if (node) toDelete.push(node);
-        allInProject
+        allInScope
           .filter((f) => f.parentId === nodeId)
           .forEach((child) => collect(child.id));
       };

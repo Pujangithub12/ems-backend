@@ -16,6 +16,7 @@ import { MyTask } from "./MyTask";
 import { CalendarEvent } from "./CalendarEvent";
 import { Activity } from "./Activity";
 import { HierarchyNode } from "./HierarchyNode";
+import { ProjectFile } from "./ProjectFile";
 
 @Entity()
 export class Workspace {
@@ -62,6 +63,10 @@ export class Workspace {
 
   @OneToMany(() => HierarchyNode, (node) => node.workspace, { cascade: true })
   hierarchyNodes!: HierarchyNode[];
+
+  // Workspace-level Documents page files/folders (project is null on these rows).
+  @OneToMany(() => ProjectFile, (file) => file.workspace, { cascade: true })
+  files!: ProjectFile[];
 
   @CreateDateColumn()
   createdAt!: Date;
