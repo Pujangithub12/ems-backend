@@ -44,6 +44,13 @@ export class WorkspaceInvite {
   @Column()
   workspaceId!: number;
 
+  // Who sent this invite — used to place the new member under them in the
+  // hierarchy org chart once accepted (see InviteController.acceptInvite).
+  // Nullable so pre-existing invite rows from before this column existed
+  // don't break; those just skip auto-placement.
+  @Column({ type: "int", nullable: true })
+  invitedByUserId!: number | null;
+
   @Column({ unique: true })
   token!: string;
 
