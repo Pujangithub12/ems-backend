@@ -8,6 +8,7 @@ import { User, UserRole } from "../entities/User";
 import { Workspace } from "../entities/Workspace";
 import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { WorkspaceInvite } from "../entities/WorkspaceInvite";
+import { HierarchyNode } from "../entities/HierarchyNode";
 import { AuthRequest } from "../middlewares/auth";
 import { CreateInviteDto, AcceptInviteDto } from "../dto/invite.dto";
 import { sendEmail } from "../utils/emailService";
@@ -19,6 +20,38 @@ dotenv.config();
 const JWT_SECRET: string = process.env.JWT_SECRET || "your_jwt_secret_key";
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// Find-or-create this user's hierarchy node in the workspace — mirrors the
+// same auto-heal HierarchyController.getHierarchy does, so a node always
+// exists to attach a manager to (or be attached under one) on demand.
+const ensureHierarchyNode = async (userId: number, workspaceId: number) => {
+  const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
+  let node = await hierarchyRepo.findOne({ where: { userId, workspaceId } });
+  if (!node) {
+    node = hierarchyRepo.create({ userId, workspaceId });
+    await hierarchyRepo.save(node);
+  }
+  return node;
+};
+
+// Places a newly-invited member under whoever invited them in the workspace's
+// org chart, so they immediately show up in the inviter's "Assigned To"
+// picker instead of requiring a manual Settings > Hierarchy edit. Skipped if
+// we don't know who invited them (legacy invite rows) or the invitee is the
+// workspace's super admin, who always stays at the root.
+const placeUnderInviter = async (
+  inviterUserId: number | null | undefined,
+  inviteeUserId: number,
+  inviteeRole: UserRole,
+  workspaceId: number,
+) => {
+  if (inviterUserId == null || inviteeRole === UserRole.SUPER_ADMIN) return;
+  const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
+  const inviterNode = await ensureHierarchyNode(inviterUserId, workspaceId);
+  const inviteeNode = await ensureHierarchyNode(inviteeUserId, workspaceId);
+  inviteeNode.parentId = inviterNode.id;
+  await hierarchyRepo.save(inviteeNode);
+};
 // Falls back by NODE_ENV (not just a single hardcoded default) so a missing
 // FRONTEND_URL env var still points production invite emails at the deployed
 // frontend instead of localhost.
@@ -143,6 +176,8 @@ export class InviteController {
           await userRepository.save(existingUser);
         }
 
+        await placeUnderInviter(req.user?.id, existingUser.id, finalRole, workspace.id);
+
         const roleText = finalRole.replace("_", " ");
         await sendEmail(
           [normalizedEmail],
@@ -179,6 +214,7 @@ export class InviteController {
       invite.joinDate = new Date(joinDate);
       invite.role = finalRole;
       invite.workspaceId = workspace.id;
+      invite.invitedByUserId = req.user?.id ?? null;
       invite.token = token;
       invite.expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       await inviteRepository.save(invite);
@@ -353,6 +389,8 @@ export class InviteController {
           role: invite.role,
         }),
       );
+
+      await placeUnderInviter(invite.invitedByUserId, user.id, invite.role, workspace.id);
 
       await inviteRepository.remove(invite);
 
