@@ -129,7 +129,7 @@ export class SiteVisitRequestController {
       }
 
       sv.status = status;
-      sv.approvedAt = status === "approved" ? new Date() : null;
+      sv.approvedAt = new Date();
       await svRepository.save(sv);
       sanitizeUser(sv);
 

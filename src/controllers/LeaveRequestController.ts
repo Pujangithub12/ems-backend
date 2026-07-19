@@ -151,7 +151,7 @@ export class LeaveRequestController {
       }
 
       lr.status = status;
-      lr.approvedAt = status === "approved" ? new Date() : null;
+      lr.approvedAt = new Date();
       await lrRepository.save(lr);
       sanitizeUser(lr);
 

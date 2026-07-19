@@ -47,6 +47,7 @@ export class ExpenseRequest {
   @CreateDateColumn()
   createdAt!: Date;
 
+  /** Set on both approve and reject — doubles as "resolvedAt" for the 7-day cleanup cron in index.ts. */
   @Column({ type: "timestamp", nullable: true })
   approvedAt?: Date | null;
 }

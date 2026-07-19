@@ -137,7 +137,7 @@ export class ExpenseRequestController {
       }
 
       er.status = status;
-      er.approvedAt = status === "approved" ? new Date() : null;
+      er.approvedAt = new Date();
       await erRepository.save(er);
       sanitizeUser(er);
 

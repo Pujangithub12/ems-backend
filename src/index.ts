@@ -13,7 +13,7 @@ import { Announcement } from "./entities/Announcement";
 import { LeaveRequest } from "./entities/LeaveRequest";
 import { SiteVisitRequest } from "./entities/SiteVisitRequest";
 import { ExpenseRequest } from "./entities/ExpenseRequest";
-import { LessThan } from "typeorm";
+import { In, LessThan } from "typeorm";
 import bcrypt from "bcrypt";
 import { backfillWorkspace } from "./utils/backfill-workspace";
 import { seedRolePermissions } from "./utils/permissionService";
@@ -190,15 +190,15 @@ const deleteOldApprovedRequests = async () => {
     try {
       const repository = AppDataSource.getRepository(entity);
       const result = await repository.delete({
-        status: "approved",
+        status: In(["approved", "rejected"]),
         approvedAt: LessThan(sevenDaysAgo),
       });
 
       if (result.affected && result.affected > 0) {
-        console.log(`Deleted ${result.affected} old approved ${label}(s) (approved over 7 days ago)`);
+        console.log(`Deleted ${result.affected} old resolved ${label}(s) (approved/rejected over 7 days ago)`);
       }
     } catch (error) {
-      console.error(`Error deleting old approved ${label}s:`, error);
+      console.error(`Error deleting old resolved ${label}s:`, error);
     }
   }
 };

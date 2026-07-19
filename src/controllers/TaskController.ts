@@ -25,6 +25,15 @@ import {
 } from "../dto/task.dto";
 import { getDescendantUserIds } from "../utils/hierarchyAuthority";
 
+// Falls back by NODE_ENV (not just a single hardcoded default) so a missing
+// FRONTEND_URL env var still points production task-assignment emails at the
+// deployed frontend instead of localhost — same pattern as InviteController.
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  (process.env.NODE_ENV === "production"
+    ? "https://www.jdnenergy.com.np"
+    : "http://localhost:5173");
+
 const sanitizeCreatedBy = (task: Task) => {
   if (task.createdBy) {
     const { id, fullName, email } = task.createdBy;
@@ -163,6 +172,7 @@ export class TaskController {
         );
         const assignedBy = user?.fullName || "EMS Administrator";
         const emailSubject = `New Task Assigned: ${title}`;
+        const dashboardUrl = `${FRONTEND_URL}/${req.workspace!.id}/dashboard`;
         const priorityColors = {
           LOW: "#10b981",
           MEDIUM: "#f59e0b",
@@ -285,7 +295,7 @@ EMS Management
                         <table role="presentation" style="width: 100%; margin-bottom: 24px;">
                           <tr>
                             <td align="center">
-                              <a href="#" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: #ffffff; font-size: 15px; font-weight: 600; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">
+                              <a href="${dashboardUrl}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: #ffffff; font-size: 15px; font-weight: 600; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">
                                 View Task in Dashboard
                               </a>
                             </td>
