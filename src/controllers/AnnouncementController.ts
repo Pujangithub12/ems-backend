@@ -51,7 +51,7 @@ export class AnnouncementController {
       });
       await announcementRepository.save(newAnnouncement);
 
-      sendEmail(recipientEmails, subject, message).catch((err) => {
+      sendEmail(recipientEmails, subject, message, undefined, "announcement").catch((err) => {
         console.error("Failed to send announcement emails:", err);
       });
 

@@ -137,6 +137,8 @@ export class AuthController {
         [normalizedEmail],
         "Your EMS verification code",
         `Your verification code is ${otpCode}. It expires in 10 minutes.`,
+        undefined,
+        "otp-verification",
       );
       if (!sent) {
         return res.status(502).json({
@@ -315,6 +317,8 @@ export class AuthController {
         [normalizedEmail],
         "Your EMS password reset code",
         `Your password reset code is ${otpCode}. It expires in 10 minutes. If you didn't request this, you can ignore this email.`,
+        undefined,
+        "password-reset",
       );
       if (!sent) {
         return res.status(502).json({
