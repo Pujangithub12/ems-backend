@@ -193,6 +193,7 @@ export class InviteController {
             </p>
           </div>
           `,
+          "workspace-added",
         );
 
         return res.status(200).json({ message: "Existing user added to workspace" });
@@ -245,6 +246,7 @@ export class InviteController {
         `You're invited to join ${workspace.name} on EMS`,
         `Hi ${fullName},\n\nYou've been invited to join ${workspace.name} on EMS as ${roleText}.\n\nAccept your invite: ${acceptUrl}\n\nThis link expires in 7 days.`,
         inviteHtml,
+        "invite",
       );
       if (!sent) {
         return res.status(502).json({

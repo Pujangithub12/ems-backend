@@ -12,6 +12,7 @@ export const sendEmail = async (
   subject: string,
   text: string,
   customHtml?: string,
+  category: string = "notification",
 ): Promise<boolean> => {
   const validEmails = to.filter((email) => email && email.trim() !== "");
 
@@ -41,13 +42,15 @@ export const sendEmail = async (
     try {
       const result = await resend.emails.send({
         from: `EMS Management <${process.env.RESEND_FROM_EMAIL}>`,
+        replyTo: process.env.RESEND_FROM_EMAIL!,
         to: [email],
         subject,
         text,
         html,
         headers: {
-          "X-Entity-Ref-ID": `ems-announcement-${Date.now()}`,
+          "X-Entity-Ref-ID": `ems-${category}-${Date.now()}`,
         },
+        tags: [{ name: "category", value: category }],
       });
 
       if (result.error) {

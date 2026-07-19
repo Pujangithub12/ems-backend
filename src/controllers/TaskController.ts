@@ -327,7 +327,7 @@ EMS Management
         `;
 
         console.log("[Task Create] Calling sendEmail...");
-        sendEmail(recipientEmails, emailSubject, emailText, emailHtml)
+        sendEmail(recipientEmails, emailSubject, emailText, emailHtml, "task-assignment")
           .then((success) => {
             console.log("[Task Create] sendEmail returned success:", success);
           })
