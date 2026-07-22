@@ -6,6 +6,10 @@ export interface CreateProjectDto {
   status?: string;
   priority?: string;
   assigneeIds?: number[];
+  contractDate?: string;
+  kickoffDate?: string;
+  estimatedTotalCost?: number;
+  sellingPrice?: number;
 }
 
 /** Body shape for PUT /projects/:id. */
@@ -16,6 +20,10 @@ export interface UpdateProjectDto {
   status?: string;
   priority?: string;
   assigneeIds?: number[];
+  contractDate?: string | null;
+  kickoffDate?: string | null;
+  estimatedTotalCost?: number | null;
+  sellingPrice?: number | null;
 }
 
 /** Body shape for POST /projects/:projectId/headings. */

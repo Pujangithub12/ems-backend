@@ -6,6 +6,9 @@ import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
+import { ProcurementController } from "../controllers/ProcurementController";
+import { MonthlyPerformanceController } from "../controllers/MonthlyPerformanceController";
+import { InventoryController } from "../controllers/InventoryController";
 import { WorkspaceFileController } from "../controllers/WorkspaceFileController";
 import { MyTaskController } from "../controllers/MyTaskController";
 import { TaskController } from "../controllers/TaskController";
@@ -21,8 +24,15 @@ import { HierarchyController } from "../controllers/HierarchyController";
 import { ScheduleController } from "../controllers/ScheduleController";
 import { ScheduleService } from "../services/schedule.service";
 import { PermissionController } from "../controllers/PermissionController";
+import { ReportsController } from "../controllers/ReportsController";
 import { authMiddleware, roleMiddleware, permissionMiddleware } from "../middlewares/auth";
-import { upload, uploadProjectFile, uploadWorkspaceFile } from "../middlewares/upload";
+import {
+  upload,
+  uploadProjectFile,
+  uploadWorkspaceFile,
+  uploadInventoryFile,
+  uploadProcurementFile,
+} from "../middlewares/upload";
 import { UserRole } from "../entities/User";
 
 const router = Router();
@@ -217,6 +227,215 @@ router.delete(
   authMiddleware,
   permissionMiddleware("projects.documents"),
   ProjectFileController.deleteProjectFile,
+);
+
+// Project procurement routes (Procurement tab) — view is open to any workspace
+// member with project access; add/edit/delete are admin-gated.
+router.get(
+  "/workspace/procurement",
+  authMiddleware,
+  ProcurementController.getWorkspaceProcurement,
+);
+router.get(
+  "/projects/:projectId/procurement",
+  authMiddleware,
+  ProcurementController.getProcurementItems,
+);
+router.post(
+  "/projects/:projectId/procurement",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProcurementController.addProcurementItem,
+);
+router.put(
+  "/projects/procurement/:itemId",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProcurementController.updateProcurementItem,
+);
+router.delete(
+  "/projects/procurement/:itemId",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProcurementController.deleteProcurementItem,
+);
+router.get(
+  "/projects/procurement/:itemId/detail",
+  authMiddleware,
+  ProcurementController.getProcurementItemDetail,
+);
+router.post(
+  "/projects/procurement/:itemId/attachments",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  uploadProcurementFile.single("file"),
+  ProcurementController.addAttachment,
+);
+router.delete(
+  "/projects/procurement/:itemId/attachments/:attachmentId",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProcurementController.deleteAttachment,
+);
+
+// Project energy performance routes (Energy Performance tab) — view is open to
+// any workspace member with project access; upsert is admin-gated.
+router.get(
+  "/projects/:projectId/performance",
+  authMiddleware,
+  MonthlyPerformanceController.getMonthlyPerformance,
+);
+router.put(
+  "/projects/:projectId/performance",
+  authMiddleware,
+  permissionMiddleware("projects.performance"),
+  MonthlyPerformanceController.upsertMonthlyPerformance,
+);
+
+// Project inventory routes (Inventory tab) — view is open to any workspace
+// member with project access; add/edit/delete are admin-gated.
+router.get(
+  "/workspace/inventory",
+  authMiddleware,
+  InventoryController.getWorkspaceInventory,
+);
+router.get(
+  "/projects/:projectId/inventory",
+  authMiddleware,
+  InventoryController.getInventoryItems,
+);
+router.post(
+  "/projects/:projectId/inventory",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.addInventoryItem,
+);
+router.put(
+  "/projects/inventory/:itemId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.updateInventoryItem,
+);
+router.delete(
+  "/projects/inventory/:itemId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.deleteInventoryItem,
+);
+router.get(
+  "/projects/inventory/:itemId/detail",
+  authMiddleware,
+  InventoryController.getInventoryItemDetail,
+);
+router.post(
+  "/projects/inventory/:itemId/adjust",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.adjustStock,
+);
+router.post(
+  "/projects/inventory/:itemId/transfers",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.createTransfer,
+);
+router.put(
+  "/projects/inventory/:itemId/transfers/:transferId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.updateTransferStatus,
+);
+router.post(
+  "/projects/inventory/:itemId/batches",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.addBatch,
+);
+router.delete(
+  "/projects/inventory/:itemId/batches/:batchId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.deleteBatch,
+);
+router.post(
+  "/projects/inventory/:itemId/serials",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.addSerial,
+);
+router.delete(
+  "/projects/inventory/:itemId/serials/:serialId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.deleteSerial,
+);
+router.post(
+  "/projects/inventory/:itemId/attachments",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  uploadInventoryFile.single("file"),
+  InventoryController.addAttachment,
+);
+router.delete(
+  "/projects/inventory/:itemId/attachments/:attachmentId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.deleteAttachment,
+);
+router.get(
+  "/workspace/inventory/transfers",
+  authMiddleware,
+  InventoryController.getWorkspacePendingTransfers,
+);
+router.get(
+  "/workspace/inventory/transactions",
+  authMiddleware,
+  InventoryController.getWorkspaceInventoryTransactions,
+);
+router.get(
+  "/workspace/warehouses",
+  authMiddleware,
+  InventoryController.getWorkspaceWarehouses,
+);
+router.post(
+  "/workspace/warehouses",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.createWarehouse,
+);
+router.get(
+  "/workspace/vendors",
+  authMiddleware,
+  InventoryController.getWorkspaceVendors,
+);
+router.post(
+  "/workspace/vendors",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.createVendor,
+);
+router.put(
+  "/workspace/vendors/:vendorId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.updateVendor,
+);
+
+// Reports dashboard
+router.get("/workspace/reports/summary", authMiddleware, ReportsController.getSummary);
+router.get("/workspace/reports/activity", authMiddleware, ReportsController.getReportActivity);
+router.post(
+  "/workspace/reports/activity",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  ReportsController.logReportActivity,
+);
+router.get("/workspace/reports/comments", authMiddleware, ReportsController.getReportComments);
+router.post(
+  "/workspace/reports/comments",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  ReportsController.addReportComment,
 );
 
 // Workspace-level document routes (sidebar Documents page). Rename/download/delete

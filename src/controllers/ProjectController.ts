@@ -27,8 +27,18 @@ const sanitizeAssignees = (project: Project) => {
 
 export class ProjectController {
   static createProject = async (req: AuthRequest, res: Response) => {
-    const { name, description, dueDate, status, priority, assigneeIds }: CreateProjectDto =
-      req.body;
+    const {
+      name,
+      description,
+      dueDate,
+      status,
+      priority,
+      assigneeIds,
+      contractDate,
+      kickoffDate,
+      estimatedTotalCost,
+      sellingPrice,
+    }: CreateProjectDto = req.body;
 
     if (!name) {
       return res.status(400).json({ message: "Project name is required" });
@@ -70,6 +80,18 @@ export class ProjectController {
 
       if (dueDate) {
         projectPayload.dueDate = new Date(dueDate);
+      }
+      if (contractDate) {
+        projectPayload.contractDate = new Date(contractDate);
+      }
+      if (kickoffDate) {
+        projectPayload.kickoffDate = new Date(kickoffDate);
+      }
+      if (estimatedTotalCost !== undefined) {
+        projectPayload.estimatedTotalCost = estimatedTotalCost;
+      }
+      if (sellingPrice !== undefined) {
+        projectPayload.sellingPrice = sellingPrice;
       }
 
       const project = projectRepository.create(projectPayload);
@@ -432,8 +454,18 @@ export class ProjectController {
 
   static updateProject = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { name, description, dueDate, status, priority, assigneeIds }: UpdateProjectDto =
-      req.body;
+    const {
+      name,
+      description,
+      dueDate,
+      status,
+      priority,
+      assigneeIds,
+      contractDate,
+      kickoffDate,
+      estimatedTotalCost,
+      sellingPrice,
+    }: UpdateProjectDto = req.body;
     try {
       const user = req.user!;
 
@@ -475,6 +507,22 @@ export class ProjectController {
         project.assignees = await userRepository.findBy({
           id: In(assigneeIds),
         });
+      }
+      if (contractDate !== undefined) {
+        // null (not undefined) is required here so TypeORM actually issues
+        // `SET contractDate = NULL` — an undefined property is excluded from
+        // the UPDATE entirely and silently leaves the old value in place.
+        project.contractDate = contractDate ? new Date(contractDate) : (null as unknown as Date);
+      }
+      if (kickoffDate !== undefined) {
+        project.kickoffDate = kickoffDate ? new Date(kickoffDate) : (null as unknown as Date);
+      }
+      if (estimatedTotalCost !== undefined) {
+        project.estimatedTotalCost =
+          estimatedTotalCost === null ? (null as unknown as number) : estimatedTotalCost;
+      }
+      if (sellingPrice !== undefined) {
+        project.sellingPrice = sellingPrice === null ? (null as unknown as number) : sellingPrice;
       }
 
       await projectRepository.save(project);

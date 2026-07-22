@@ -80,3 +80,51 @@ export const uploadWorkspaceFile = multer({
     fileSize: 25 * 1024 * 1024, // 25MB limit
   },
 });
+
+// Inventory item attachments (drawer Documents section), stored under
+// uploads/inventory/<itemId>/
+const inventoryFileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const itemId = req.params.itemId;
+    const dir = path.join("uploads", "inventory", String(itemId));
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
+  },
+});
+
+export const uploadInventoryFile = multer({
+  storage: inventoryFileStorage,
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB limit
+  },
+});
+
+// Procurement item attachments (drawer Documents section), stored under
+// uploads/procurement/<itemId>/
+const procurementFileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const itemId = req.params.itemId;
+    const dir = path.join("uploads", "procurement", String(itemId));
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
+  },
+});
+
+export const uploadProcurementFile = multer({
+  storage: procurementFileStorage,
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB limit
+  },
+});
