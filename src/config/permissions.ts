@@ -8,6 +8,9 @@ export type PermissionKey =
   | "projects.manage"
   | "projects.schedule"
   | "projects.documents"
+  | "projects.procurement"
+  | "projects.performance"
+  | "projects.inventory"
   | "tasks.edit"
   | "tasks.delete"
   | "tasks.feedback"
@@ -24,6 +27,9 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   "projects.manage",
   "projects.schedule",
   "projects.documents",
+  "projects.procurement",
+  "projects.performance",
+  "projects.inventory",
   "tasks.edit",
   "tasks.delete",
   "tasks.feedback",

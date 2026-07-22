@@ -23,6 +23,20 @@ import { RolePermission } from "../entities/RolePermission";
 import { PendingSignup } from "../entities/PendingSignup";
 import { PasswordResetOtp } from "../entities/PasswordResetOtp";
 import { WorkspaceInvite } from "../entities/WorkspaceInvite";
+import { ProcurementItem } from "../entities/ProcurementItem";
+import { MonthlyPerformance } from "../entities/MonthlyPerformance";
+import { InventoryItem } from "../entities/InventoryItem";
+import { Warehouse } from "../entities/Warehouse";
+import { Vendor } from "../entities/Vendor";
+import { ReportComment } from "../entities/ReportComment";
+import { ReportActivity } from "../entities/ReportActivity";
+import { InventoryBatch } from "../entities/InventoryBatch";
+import { InventorySerial } from "../entities/InventorySerial";
+import { InventoryTransaction } from "../entities/InventoryTransaction";
+import { StockTransfer } from "../entities/StockTransfer";
+import { InventoryAttachment } from "../entities/InventoryAttachment";
+import { ProcurementStatusHistory } from "../entities/ProcurementStatusHistory";
+import { ProcurementAttachment } from "../entities/ProcurementAttachment";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -57,6 +71,20 @@ const entityList = isProduction
       PendingSignup,
       PasswordResetOtp,
       WorkspaceInvite,
+      ProcurementItem,
+      MonthlyPerformance,
+      InventoryItem,
+      Warehouse,
+      Vendor,
+      ReportComment,
+      ReportActivity,
+      InventoryBatch,
+      InventorySerial,
+      InventoryTransaction,
+      StockTransfer,
+      InventoryAttachment,
+      ProcurementStatusHistory,
+      ProcurementAttachment,
     ];
 
 const baseOptions: DataSourceOptions = {

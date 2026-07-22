@@ -10,16 +10,71 @@ import { AddWorkspaceFolderDto } from "../dto/workspace-file.dto";
 
 /** Sidebar Documents page: files and folders scoped directly to a workspace (no project). */
 export class WorkspaceFileController {
-  /** GET /workspace/files — flat list of all workspace-level files/folders. */
+  /**
+   * GET /workspace/files — flat list of all workspace-level files/folders,
+   * plus a read-only mirror of every project's Documents tab: each project
+   * that owns at least one file/folder gets a synthetic folder (id = -projectId,
+   * not a real row) named after the project, and its files are reparented
+   * under it for display. The underlying rows aren't duplicated — download/
+   * rename/delete on a mirrored row still hits the real ProjectFile via the
+   * shared /projects/files/:fileId endpoints.
+   */
   static getWorkspaceFiles = async (req: AuthRequest, res: Response) => {
     try {
       const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const files = await fileRepository.find({
+
+      const rootFiles = await fileRepository.find({
         where: { workspace: { id: req.workspace!.id }, project: IsNull() },
         relations: ["uploadedBy"],
         order: { isFolder: "DESC", createdAt: "ASC" },
       });
-      return res.status(200).json({ files });
+
+      const projectFiles = await fileRepository.find({
+        where: { project: { workspace: { id: req.workspace!.id } } },
+        relations: ["uploadedBy", "project"],
+        order: { isFolder: "DESC", createdAt: "ASC" },
+      });
+
+      const projectsById = new Map<number, { id: number; name: string; createdAt: Date }>();
+      for (const file of projectFiles) {
+        const project = file.project!;
+        if (!projectsById.has(project.id)) {
+          projectsById.set(project.id, {
+            id: project.id,
+            name: project.name,
+            createdAt: project.createdAt,
+          });
+        }
+      }
+
+      const virtualProjectRoots = Array.from(projectsById.values()).map((project) => ({
+        id: -project.id,
+        name: project.name,
+        isFolder: true,
+        parentId: null,
+        version: "v1.0",
+        createdAt: project.createdAt,
+        isProjectRoot: true,
+        projectId: project.id,
+      }));
+
+      const mirroredFiles = projectFiles.map((file) => ({
+        id: file.id,
+        name: file.name,
+        isFolder: file.isFolder,
+        type: file.type,
+        size: file.size,
+        path: file.path,
+        version: file.version,
+        uploadedBy: file.uploadedBy,
+        createdAt: file.createdAt,
+        projectId: file.project!.id,
+        parentId: file.parentId ?? -file.project!.id,
+      }));
+
+      return res
+        .status(200)
+        .json({ files: [...rootFiles, ...virtualProjectRoots, ...mirroredFiles] });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
