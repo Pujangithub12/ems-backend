@@ -6,6 +6,7 @@ import { ProcurementStatusHistory } from "../entities/ProcurementStatusHistory";
 import { ProcurementAttachment } from "../entities/ProcurementAttachment";
 import { User } from "../entities/User";
 import { Vendor } from "../entities/Vendor";
+import { CatalogItem } from "../entities/CatalogItem";
 import { AuthRequest } from "../middlewares/auth";
 import { AddProcurementItemDto, UpdateProcurementItemDto } from "../dto/procurement.dto";
 
@@ -18,13 +19,14 @@ export class ProcurementController {
 
       const items = await itemRepository.find({
         where: { project: { workspace: { id: req.workspace!.id } } },
-        relations: ["requestedBy", "project", "vendor"],
+        relations: ["requestedBy", "project", "vendor", "item"],
         order: { createdAt: "DESC" },
       });
 
       const result = items.map((item) => ({
         id: item.id,
         itemName: item.itemName,
+        item: item.item ? { id: item.item.id, name: item.item.name, code: item.item.code } : null,
         poNumber: item.poNumber,
         category: item.category,
         quantity: item.quantity,
@@ -66,7 +68,7 @@ export class ProcurementController {
 
       const items = await itemRepository.find({
         where: { project: { id: project.id } },
-        relations: ["requestedBy", "vendor"],
+        relations: ["requestedBy", "vendor", "item"],
         order: { createdAt: "DESC" },
       });
 
@@ -81,6 +83,7 @@ export class ProcurementController {
     const { projectId } = req.params;
     const {
       itemName,
+      itemId,
       category,
       quantity,
       estimatedCost,
@@ -91,15 +94,11 @@ export class ProcurementController {
       notes,
     }: AddProcurementItemDto = req.body;
 
-    const trimmedName = typeof itemName === "string" ? itemName.trim() : "";
-    if (!trimmedName) {
-      return res.status(400).json({ message: "Item name is required" });
-    }
-
     try {
       const projectRepository = AppDataSource.getRepository(Project);
       const userRepository = AppDataSource.getRepository(User);
       const itemRepository = AppDataSource.getRepository(ProcurementItem);
+      const catalogItemRepository = AppDataSource.getRepository(CatalogItem);
 
       const project = await projectRepository.findOne({
         where: {
@@ -109,6 +108,28 @@ export class ProcurementController {
       });
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
+      }
+
+      // Prefer the catalog reference when given, so item naming stays
+      // consistent with the shared catalog instead of trusting a freehand
+      // itemName — itemName is still required on the DTO for legacy callers
+      // (e.g. CSV import) that don't go through the catalog.
+      let catalogItem: CatalogItem | null = null;
+      if (itemId) {
+        catalogItem = await catalogItemRepository.findOne({
+          where: { id: itemId, workspace: { id: req.workspace!.id } },
+        });
+        if (!catalogItem) {
+          return res.status(400).json({ message: "Selected item not found" });
+        }
+      }
+      const trimmedName = catalogItem
+        ? catalogItem.name
+        : typeof itemName === "string"
+          ? itemName.trim()
+          : "";
+      if (!trimmedName) {
+        return res.status(400).json({ message: "Item name is required" });
       }
 
       const requestedBy = await userRepository.findOneBy({ id: req.user!.id });
@@ -128,6 +149,7 @@ export class ProcurementController {
         ...(unitCost !== undefined ? { unitCost } : {}),
         ...(vendorName ? { vendorName } : {}),
         ...(vendor ? { vendor } : {}),
+        ...(catalogItem ? { item: catalogItem } : {}),
         ...(neededByDate ? { neededByDate: new Date(neededByDate) } : {}),
         ...(notes ? { notes } : {}),
         ...(requestedBy ? { requestedBy } : {}),
@@ -159,6 +181,7 @@ export class ProcurementController {
     const { itemId } = req.params;
     const {
       itemName,
+      itemId: catalogItemId,
       category,
       quantity,
       estimatedCost,
@@ -174,9 +197,10 @@ export class ProcurementController {
       const itemRepository = AppDataSource.getRepository(ProcurementItem);
       const userRepository = AppDataSource.getRepository(User);
       const vendorRepository = AppDataSource.getRepository(Vendor);
+      const catalogItemRepository = AppDataSource.getRepository(CatalogItem);
       const item = await itemRepository.findOne({
         where: { id: parseInt(itemId as string) },
-        relations: ["project", "project.workspace", "vendor"],
+        relations: ["project", "project.workspace", "vendor", "item"],
       });
 
       if (!item || item.project.workspace?.id !== req.workspace!.id) {
@@ -218,6 +242,24 @@ export class ProcurementController {
       }
       if (status !== undefined) item.status = status;
       if (notes !== undefined) item.notes = notes;
+
+      // Applied last so a catalog reference wins over any conflicting
+      // freeform itemName sent in the same request — the catalog is the
+      // source of truth once an item is linked to it.
+      if (catalogItemId !== undefined) {
+        if (catalogItemId === null) {
+          item.item = null;
+        } else {
+          const catalogItem = await catalogItemRepository.findOne({
+            where: { id: catalogItemId, workspace: { id: req.workspace!.id } },
+          });
+          if (!catalogItem) {
+            return res.status(400).json({ message: "Selected item not found" });
+          }
+          item.item = catalogItem;
+          item.itemName = catalogItem.name;
+        }
+      }
 
       await itemRepository.save(item);
 
@@ -265,7 +307,7 @@ export class ProcurementController {
     const itemRepository = AppDataSource.getRepository(ProcurementItem);
     const item = await itemRepository.findOne({
       where: { id: parseInt(itemId) },
-      relations: ["project", "project.workspace", "vendor"],
+      relations: ["project", "project.workspace", "vendor", "item"],
     });
     if (!item || item.project.workspace?.id !== workspaceId) return null;
     return item;

@@ -5,6 +5,7 @@ import { InventoryItem } from "../entities/InventoryItem";
 import { User } from "../entities/User";
 import { Warehouse } from "../entities/Warehouse";
 import { Vendor } from "../entities/Vendor";
+import { CatalogItem } from "../entities/CatalogItem";
 import { InventoryBatch } from "../entities/InventoryBatch";
 import { InventorySerial } from "../entities/InventorySerial";
 import { InventoryTransaction, InventoryTransactionType } from "../entities/InventoryTransaction";
@@ -57,13 +58,14 @@ export class InventoryController {
 
       const items = await itemRepository.find({
         where: { project: { workspace: { id: req.workspace!.id } } },
-        relations: ["updatedBy", "project", "warehouse", "vendor"],
+        relations: ["updatedBy", "project", "warehouse", "vendor", "item"],
         order: { createdAt: "DESC" },
       });
 
       const result = items.map((item) => ({
         id: item.id,
         itemName: item.itemName,
+        item: item.item ? { id: item.item.id, name: item.item.name, code: item.item.code } : null,
         category: item.category,
         quantity: item.quantity,
         unit: item.unit,
@@ -110,7 +112,7 @@ export class InventoryController {
 
       const items = await itemRepository.find({
         where: { project: { id: project.id } },
-        relations: ["updatedBy", "warehouse", "vendor"],
+        relations: ["updatedBy", "warehouse", "vendor", "item"],
         order: { createdAt: "DESC" },
       });
 
@@ -125,6 +127,7 @@ export class InventoryController {
     const { projectId } = req.params;
     const {
       itemName,
+      itemId,
       category,
       quantity,
       unit,
@@ -142,17 +145,13 @@ export class InventoryController {
       warrantyExpiryDate,
     }: AddInventoryItemDto = req.body;
 
-    const trimmedName = typeof itemName === "string" ? itemName.trim() : "";
-    if (!trimmedName) {
-      return res.status(400).json({ message: "Item name is required" });
-    }
-
     try {
       const projectRepository = AppDataSource.getRepository(Project);
       const userRepository = AppDataSource.getRepository(User);
       const itemRepository = AppDataSource.getRepository(InventoryItem);
       const warehouseRepository = AppDataSource.getRepository(Warehouse);
       const vendorRepository = AppDataSource.getRepository(Vendor);
+      const catalogItemRepository = AppDataSource.getRepository(CatalogItem);
 
       const project = await projectRepository.findOne({
         where: {
@@ -162,6 +161,28 @@ export class InventoryController {
       });
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
+      }
+
+      // Prefer the catalog reference when given, so name/SKU stay consistent
+      // with the shared catalog instead of trusting a freehand itemName/sku —
+      // itemName is still required on the DTO for legacy callers (e.g. CSV
+      // import) that don't go through the catalog.
+      let catalogItem: CatalogItem | null = null;
+      if (itemId) {
+        catalogItem = await catalogItemRepository.findOne({
+          where: { id: itemId, workspace: { id: req.workspace!.id } },
+        });
+        if (!catalogItem) {
+          return res.status(400).json({ message: "Selected item not found" });
+        }
+      }
+      const trimmedName = catalogItem
+        ? catalogItem.name
+        : typeof itemName === "string"
+          ? itemName.trim()
+          : "";
+      if (!trimmedName) {
+        return res.status(400).json({ message: "Item name is required" });
       }
 
       const updatedBy = await userRepository.findOneBy({ id: req.user!.id });
@@ -188,7 +209,11 @@ export class InventoryController {
         ...(status ? { status } : {}),
         ...(lastRestockedDate ? { lastRestockedDate: new Date(lastRestockedDate) } : {}),
         ...(notes ? { notes } : {}),
-        ...(sku ? { sku } : {}),
+        ...(catalogItem
+          ? { item: catalogItem, ...(catalogItem.code !== undefined ? { sku: catalogItem.code } : {}) }
+          : sku
+            ? { sku }
+            : {}),
         ...(warehouse ? { warehouse } : {}),
         ...(reservedQuantity !== undefined ? { reservedQuantity: Math.max(0, Math.round(reservedQuantity)) } : {}),
         ...(incomingQuantity !== undefined ? { incomingQuantity: Math.max(0, Math.round(incomingQuantity)) } : {}),
@@ -218,6 +243,7 @@ export class InventoryController {
     const { itemId } = req.params;
     const {
       itemName,
+      itemId: catalogItemId,
       category,
       quantity,
       unit,
@@ -240,9 +266,10 @@ export class InventoryController {
       const userRepository = AppDataSource.getRepository(User);
       const warehouseRepository = AppDataSource.getRepository(Warehouse);
       const vendorRepository = AppDataSource.getRepository(Vendor);
+      const catalogItemRepository = AppDataSource.getRepository(CatalogItem);
       const item = await itemRepository.findOne({
         where: { id: parseInt(itemId as string) },
-        relations: ["project", "project.workspace", "warehouse", "vendor"],
+        relations: ["project", "project.workspace", "warehouse", "vendor", "item"],
       });
 
       if (!item || item.project.workspace?.id !== req.workspace!.id) {
@@ -304,6 +331,27 @@ export class InventoryController {
           : (null as unknown as Date);
       }
 
+      // Applied last so a catalog reference wins over any conflicting
+      // freeform itemName/sku sent in the same request — the catalog is the
+      // source of truth once an item is linked to it.
+      if (catalogItemId !== undefined) {
+        if (catalogItemId === null) {
+          item.item = null;
+        } else {
+          const catalogItem = await catalogItemRepository.findOne({
+            where: { id: catalogItemId, workspace: { id: req.workspace!.id } },
+          });
+          if (!catalogItem) {
+            return res.status(400).json({ message: "Selected item not found" });
+          }
+          item.item = catalogItem;
+          item.itemName = catalogItem.name;
+          if (catalogItem.code !== undefined) {
+            item.sku = catalogItem.code;
+          }
+        }
+      }
+
       const updatedBy = await userRepository.findOneBy({ id: req.user!.id });
       if (updatedBy) item.updatedBy = updatedBy;
 
@@ -353,7 +401,7 @@ export class InventoryController {
     const itemRepository = AppDataSource.getRepository(InventoryItem);
     const item = await itemRepository.findOne({
       where: { id: parseInt(itemId) },
-      relations: ["project", "project.workspace", "warehouse", "vendor"],
+      relations: ["project", "project.workspace", "warehouse", "vendor", "item"],
     });
     if (!item || item.project.workspace?.id !== workspaceId) return null;
     return item;

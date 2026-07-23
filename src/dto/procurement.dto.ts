@@ -2,7 +2,9 @@ import { ProcurementStatus, ProcurementCategory } from "../entities/ProcurementI
 
 /** Body shape for POST /projects/:projectId/procurement. */
 export interface AddProcurementItemDto {
-  itemName: string;
+  itemName?: string;
+  /** References CatalogItem — when set, itemName is derived from it server-side instead of trusting the freeform field above. */
+  itemId?: number;
   category?: ProcurementCategory;
   quantity?: number;
   estimatedCost?: number;
@@ -16,6 +18,8 @@ export interface AddProcurementItemDto {
 /** Body shape for PUT /projects/procurement/:itemId. */
 export interface UpdateProcurementItemDto {
   itemName?: string;
+  /** References CatalogItem — when set (non-null), itemName is overwritten from it server-side. Pass null to detach. */
+  itemId?: number | null;
   category?: ProcurementCategory;
   quantity?: number;
   estimatedCost?: number | null;

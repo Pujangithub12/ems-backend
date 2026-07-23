@@ -232,3 +232,23 @@ export const permissionMiddleware = (key: PermissionKey) => {
     next();
   };
 };
+
+/**
+ * Same as permissionMiddleware, but passes if the role holds ANY of the given
+ * keys — for routes shared across features gated by different permissions
+ * (e.g. the item catalog, writable from both the Inventory and Procurement
+ * "Add item" forms, each gated by its own permission key).
+ */
+export const anyPermissionMiddleware = (keys: PermissionKey[]) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    for (const key of keys) {
+      if (await roleHasPermission(req.user.role, key)) {
+        return next();
+      }
+    }
+    return res.status(403).json({ message: "Forbidden: Access denied" });
+  };
+};
