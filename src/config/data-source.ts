@@ -28,6 +28,7 @@ import { MonthlyPerformance } from "../entities/MonthlyPerformance";
 import { InventoryItem } from "../entities/InventoryItem";
 import { Warehouse } from "../entities/Warehouse";
 import { Vendor } from "../entities/Vendor";
+import { CatalogItem } from "../entities/CatalogItem";
 import { ReportComment } from "../entities/ReportComment";
 import { ReportActivity } from "../entities/ReportActivity";
 import { InventoryBatch } from "../entities/InventoryBatch";
@@ -76,6 +77,7 @@ const entityList = isProduction
       InventoryItem,
       Warehouse,
       Vendor,
+      CatalogItem,
       ReportComment,
       ReportActivity,
       InventoryBatch,

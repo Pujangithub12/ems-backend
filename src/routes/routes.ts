@@ -25,7 +25,8 @@ import { ScheduleController } from "../controllers/ScheduleController";
 import { ScheduleService } from "../services/schedule.service";
 import { PermissionController } from "../controllers/PermissionController";
 import { ReportsController } from "../controllers/ReportsController";
-import { authMiddleware, roleMiddleware, permissionMiddleware } from "../middlewares/auth";
+import { CatalogItemController } from "../controllers/CatalogItemController";
+import { authMiddleware, roleMiddleware, permissionMiddleware, anyPermissionMiddleware } from "../middlewares/auth";
 import {
   upload,
   uploadProjectFile,
@@ -419,6 +420,16 @@ router.put(
   authMiddleware,
   permissionMiddleware("projects.inventory"),
   InventoryController.updateVendor,
+);
+
+// Shared item catalog (name + code) — keeps item naming consistent between
+// the Inventory and Procurement "Add item" forms.
+router.get("/workspace/items", authMiddleware, CatalogItemController.getWorkspaceItems);
+router.post(
+  "/workspace/items",
+  authMiddleware,
+  anyPermissionMiddleware(["projects.inventory", "projects.procurement"]),
+  CatalogItemController.createItem,
 );
 
 // Reports dashboard

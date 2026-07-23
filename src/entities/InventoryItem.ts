@@ -10,6 +10,7 @@ import { Workspace } from "./Workspace";
 import { User } from "./User";
 import { Warehouse } from "./Warehouse";
 import { Vendor } from "./Vendor";
+import { CatalogItem } from "./CatalogItem";
 
 export type InventoryCategory = "hardware" | "software" | "service";
 export type InventoryStatus = "in_stock" | "low_stock" | "out_of_stock";
@@ -25,8 +26,13 @@ export class InventoryItem {
   @PrimaryGeneratedColumn()
   id!: number;
 
+  /** Legacy free-text item name, kept as a display fallback for items created before the shared catalog existed — kept in sync with item.name whenever item is set. */
   @Column()
   itemName!: string;
+
+  /** References the shared workspace item catalog (name + code), so item naming/SKU stays consistent across Inventory and Procurement instead of being entered freehand per row. */
+  @ManyToOne(() => CatalogItem, { nullable: true, onDelete: "SET NULL" })
+  item?: CatalogItem | null;
 
   @Column({ type: "varchar", default: "hardware" })
   category!: InventoryCategory;
@@ -47,6 +53,7 @@ export class InventoryItem {
   @Column("text", { nullable: true })
   notes?: string;
 
+  /** Kept in sync with item.code whenever item is set — retained as a plain column (rather than dropped) so rows created before the catalog existed keep their SKU. */
   @Column({ nullable: true })
   sku?: string;
 

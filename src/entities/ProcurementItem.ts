@@ -9,6 +9,7 @@ import { Project } from "./Project";
 import { Workspace } from "./Workspace";
 import { User } from "./User";
 import { Vendor } from "./Vendor";
+import { CatalogItem } from "./CatalogItem";
 
 export type ProcurementStatus = "pending" | "approved" | "ordered" | "delivered";
 export type ProcurementCategory = "hardware" | "software" | "service";
@@ -24,8 +25,13 @@ export class ProcurementItem {
   @PrimaryGeneratedColumn()
   id!: number;
 
+  /** Legacy free-text item name, kept as a display fallback for items created before the shared catalog existed — kept in sync with item.name whenever item is set. */
   @Column()
   itemName!: string;
+
+  /** References the shared workspace item catalog (name + code), so item naming stays consistent across Inventory and Procurement instead of being entered freehand per row. */
+  @ManyToOne(() => CatalogItem, { nullable: true, onDelete: "SET NULL" })
+  item?: CatalogItem | null;
 
   /** Auto-generated on create, e.g. "PO-000123" (zero-padded id). */
   @Column({ nullable: true })

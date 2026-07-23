@@ -12,6 +12,8 @@ import { HierarchyNode } from "../entities/HierarchyNode";
 import { AuthRequest } from "../middlewares/auth";
 import { CreateInviteDto, AcceptInviteDto } from "../dto/invite.dto";
 import { sendEmail } from "../utils/emailService";
+import { ActivityController } from "./ActivityController";
+import { ActivityType } from "../entities/Activity";
 import { countSuperAdminsInWorkspace } from "./UserController";
 import { getPasswordStrengthError } from "../utils/passwordPolicy";
 
@@ -178,6 +180,14 @@ export class InviteController {
 
         await placeUnderInviter(req.user?.id, existingUser.id, finalRole, workspace.id);
 
+        await ActivityController.logActivity(
+          ActivityType.MEMBER_INVITED,
+          `Invited ${existingUser.fullName} to join the workspace as ${finalRole.replace("_", " ")}`,
+          undefined,
+          req.user?.id,
+          workspace,
+        );
+
         const roleText = finalRole.replace("_", " ");
         await sendEmail(
           [normalizedEmail],
@@ -253,6 +263,14 @@ export class InviteController {
           message: "Failed to send the invite email. Please try again.",
         });
       }
+
+      await ActivityController.logActivity(
+        ActivityType.MEMBER_INVITED,
+        `Invited ${fullName} (${normalizedEmail}) to join the workspace as ${roleText}`,
+        undefined,
+        req.user?.id,
+        workspace,
+      );
 
       return res.status(200).json({ message: "Invitation sent" });
     } catch (error) {

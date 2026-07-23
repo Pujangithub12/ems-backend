@@ -13,7 +13,8 @@ import { Workspace } from "./Workspace";
 export enum ActivityType {
   TASK_CREATED = "task_created",
   TASK_ASSIGNED = "task_assigned",
-  STATUS_CHANGED = "status_changed",
+  MEMBER_INVITED = "member_invited",
+  PROJECT_CREATED = "project_created",
 }
 
 @Entity()

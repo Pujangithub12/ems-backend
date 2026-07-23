@@ -2,7 +2,9 @@ import { InventoryCategory, InventoryStatus } from "../entities/InventoryItem";
 
 /** Body shape for POST /projects/:projectId/inventory. */
 export interface AddInventoryItemDto {
-  itemName: string;
+  itemName?: string;
+  /** References CatalogItem — when set, itemName/sku are derived from it server-side instead of trusting the freeform fields below. */
+  itemId?: number;
   category?: InventoryCategory;
   quantity?: number;
   unit?: string;
@@ -23,6 +25,8 @@ export interface AddInventoryItemDto {
 /** Body shape for PUT /projects/inventory/:itemId. */
 export interface UpdateInventoryItemDto {
   itemName?: string;
+  /** References CatalogItem — when set (non-null), itemName/sku are overwritten from it server-side. Pass null to detach. */
+  itemId?: number | null;
   category?: InventoryCategory;
   quantity?: number;
   unit?: string;

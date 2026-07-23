@@ -365,6 +365,7 @@ EMS Management
         `Created task "${newTask.title}"`,
         newTask.id,
         req.user?.id,
+        req.workspace,
       );
 
       if (assignedUsers.length > 0) {
@@ -374,6 +375,7 @@ EMS Management
           `Assigned task "${newTask.title}" to ${assignedNames}`,
           newTask.id,
           req.user?.id,
+          req.workspace,
         );
       }
 
@@ -565,8 +567,6 @@ EMS Management
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      const oldStatus = task.status;
-
       if (title) task.title = title;
       if (description !== undefined) task.description = description;
       if (priority) task.priority = priority as TaskPriority;
@@ -747,17 +747,6 @@ EMS Management
         sanitizeCreatedBy(updatedTask);
       }
 
-      // Log activity if status changed
-      if (status && status !== oldStatus) {
-        const statusLabel = (status as string).replace(/_/g, " ");
-        await ActivityController.logActivity(
-          ActivityType.STATUS_CHANGED,
-          `Changed status of "${task.title}" to ${statusLabel}`,
-          task.id,
-          req.user?.id,
-        );
-      }
-
       // Log activity if assigned users changed
       if (
         (assignAll !== undefined && assignAll !== null) ||
@@ -771,6 +760,7 @@ EMS Management
           `Assigned task "${task.title}" to ${assignedNames}`,
           task.id,
           req.user?.id,
+          req.workspace,
         );
       }
 
@@ -813,14 +803,6 @@ EMS Management
 
       task.status = normalized as TaskStatus;
       await taskRepository.save(task);
-
-      const statusLabel = normalized.replace(/_/g, " ");
-      await ActivityController.logActivity(
-        ActivityType.STATUS_CHANGED,
-        `Changed status of "${task.title}" to ${statusLabel}`,
-        task.id,
-        userId,
-      );
 
       return res.status(200).json({ message: "Task status updated", task });
     } catch (error) {
