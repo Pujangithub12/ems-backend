@@ -397,30 +397,41 @@ EMS Management
       const workspace = req.workspace!;
       let tasks;
 
-      if (
-        req.user?.role === UserRole.SUPER_ADMIN ||
-        req.user?.role === UserRole.ADMIN
-      ) {
-        // Super admin and regular admin can see all tasks in current workspace
+      if (req.user?.role === UserRole.SUPER_ADMIN) {
+        // Super admin sees every task in the workspace.
         tasks = await taskRepository.find({
           relations: ["assignedUsers", "project", "comments", "createdBy"],
           where: { workspace: { id: workspace.id } },
           order: { createdAt: "DESC" },
         });
       } else {
-        // Regular user sees tasks assigned to them in current workspace
-        tasks = await taskRepository
+        // Everyone else (including regular admins) only sees a task if they
+        // assigned it (created it) or were assigned to it. Resolve matching
+        // task ids via a query-builder join first, then re-fetch with full
+        // relations — filtering directly on the joined "assignedUsers" alias
+        // would silently truncate that relation to just the caller's own row.
+        const visibleRows = await taskRepository
           .createQueryBuilder("task")
-          .leftJoinAndSelect("task.assignedUsers", "user")
-          .leftJoinAndSelect("task.project", "project")
-          .leftJoinAndSelect("task.comments", "comment")
-          .leftJoinAndSelect("task.createdBy", "createdByUser")
-          .where("user.id = :userId", { userId: req.user?.id })
-          .andWhere("task.workspace.id = :workspaceId", {
+          .leftJoin("task.assignedUsers", "user")
+          .leftJoin("task.createdBy", "createdByUser")
+          .where("task.workspace.id = :workspaceId", {
             workspaceId: workspace.id,
           })
-          .orderBy("task.createdAt", "DESC")
-          .getMany();
+          .andWhere("(user.id = :userId OR createdByUser.id = :userId)", {
+            userId: req.user?.id,
+          })
+          .select("task.id", "id")
+          .distinct(true)
+          .getRawMany();
+
+        const taskIds = visibleRows.map((row) => row.id);
+        tasks = taskIds.length
+          ? await taskRepository.find({
+              relations: ["assignedUsers", "project", "comments", "createdBy"],
+              where: { id: In(taskIds) },
+              order: { createdAt: "DESC" },
+            })
+          : [];
       }
 
       tasks.forEach((t) => sanitizeCreatedBy(t));
@@ -514,14 +525,13 @@ EMS Management
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      if (
-        req.user?.role !== UserRole.ADMIN &&
-        req.user?.role !== UserRole.SUPER_ADMIN
-      ) {
+      if (req.user?.role !== UserRole.SUPER_ADMIN) {
+        // Only the assigner (creator) and the assignees may view a task.
         const assignedToUser = task.assignedUsers.some(
           (user) => user.id === req.user?.id,
         );
-        if (!assignedToUser)
+        const isCreator = task.createdBy?.id === req.user?.id;
+        if (!assignedToUser && !isCreator)
           return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -823,12 +833,12 @@ EMS Management
       });
 
       let tasksToReturn = projectTasks;
-      if (
-        req.user?.role !== UserRole.ADMIN &&
-        req.user?.role !== UserRole.SUPER_ADMIN
-      ) {
-        tasksToReturn = projectTasks.filter((task) =>
-          task.assignedUsers.some((user) => user.id === req.user?.id),
+      if (req.user?.role !== UserRole.SUPER_ADMIN) {
+        // Only the assigner (creator) and the assignees may view a task.
+        tasksToReturn = projectTasks.filter(
+          (task) =>
+            task.assignedUsers.some((user) => user.id === req.user?.id) ||
+            task.createdBy?.id === req.user?.id,
         );
       }
 

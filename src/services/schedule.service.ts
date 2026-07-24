@@ -10,6 +10,7 @@ export interface ScheduleTaskDto {
   parentId: string | null;
   predecessorId: string | null;
   progress: number | null;
+  status: string;
 }
 
 function toProjectId(projectId: string): number {
@@ -29,6 +30,7 @@ function toDto(row: ScheduleTask): ScheduleTaskDto {
     parentId: row.parentId ?? null,
     predecessorId: row.predecessorId ?? null,
     progress: row.progress ?? null,
+    status: row.status ?? "pending",
   };
 }
 
@@ -78,6 +80,7 @@ export class ScheduleService {
           parentId: task.parentId,
           predecessorId: task.predecessorId,
           progress: task.progress,
+          status: task.status,
           orderIndex: index,
         }),
       );

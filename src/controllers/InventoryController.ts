@@ -876,4 +876,38 @@ export class InventoryController {
       return res.status(500).json({ message: "Internal server error", error });
     }
   };
+
+  /** DELETE /workspace/vendors/:vendorId — admin-gated. Inventory items referencing this vendor fall back to their legacy free-text supplier field (onDelete: SET NULL on the relation). */
+  static deleteVendor = async (req: AuthRequest, res: Response) => {
+    const { vendorId } = req.params;
+    try {
+      const vendorRepository = AppDataSource.getRepository(Vendor);
+      const vendor = await vendorRepository.findOne({
+        where: { id: parseInt(vendorId as string), workspace: { id: req.workspace!.id } },
+      });
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+
+      await vendorRepository.remove(vendor);
+      return res.status(200).json({ message: "Vendor deleted" });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  /** DELETE /workspace/warehouses/:warehouseId — admin-gated. Inventory items stored at this warehouse are unassigned (onDelete: SET NULL on the relation), not deleted. */
+  static deleteWarehouse = async (req: AuthRequest, res: Response) => {
+    const { warehouseId } = req.params;
+    try {
+      const warehouseRepository = AppDataSource.getRepository(Warehouse);
+      const warehouse = await warehouseRepository.findOne({
+        where: { id: parseInt(warehouseId as string), workspace: { id: req.workspace!.id } },
+      });
+      if (!warehouse) return res.status(404).json({ message: "Warehouse not found" });
+
+      await warehouseRepository.remove(warehouse);
+      return res.status(200).json({ message: "Warehouse deleted" });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
 }

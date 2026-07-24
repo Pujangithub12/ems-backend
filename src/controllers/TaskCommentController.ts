@@ -33,7 +33,7 @@ export class TaskCommentController {
       const userRepository = AppDataSource.getRepository(User);
       const task = await taskRepository.findOne({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers"],
+        relations: ["assignedUsers", "createdBy"],
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
@@ -41,14 +41,12 @@ export class TaskCommentController {
       const user = await userRepository.findOneBy({ id: req.user!.id });
       if (!user) return res.status(404).json({ message: "User not found" });
 
+      // Only the assigner (creator) and the assignees may view/comment on a task.
       const isAssigned = task.assignedUsers.some(
         (assigned) => assigned.id === user.id,
       );
-      if (
-        !isAssigned &&
-        req.user?.role !== "admin" &&
-        req.user?.role !== "super_admin"
-      )
+      const isCreator = task.createdBy?.id === user.id;
+      if (!isAssigned && !isCreator && req.user?.role !== "super_admin")
         return res.status(403).json({ message: "Forbidden" });
 
       const comment = commentRepository.create({
@@ -72,16 +70,19 @@ export class TaskCommentController {
       const taskRepository = AppDataSource.getRepository(Task);
       const task = await taskRepository.findOne({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers"],
+        relations: ["assignedUsers", "createdBy"],
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
+      // Only the assigner (creator) and the assignees may view a task's comments.
+      if (req.user?.role !== "super_admin") {
         const isAssigned = task.assignedUsers.some(
           (assigned) => assigned.id === req.user?.id,
         );
-        if (!isAssigned) return res.status(403).json({ message: "Forbidden" });
+        const isCreator = task.createdBy?.id === req.user?.id;
+        if (!isAssigned && !isCreator)
+          return res.status(403).json({ message: "Forbidden" });
       }
 
       const commentRepository = AppDataSource.getRepository(TaskComment);
