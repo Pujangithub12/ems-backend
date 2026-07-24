@@ -1,4 +1,5 @@
 import { Response } from "express";
+import { In } from "typeorm";
 import { AppDataSource } from "../config/data-source";
 import { Task } from "../entities/Task";
 import { TaskPriority, TaskStatus } from "../entities/TaskEnums";
@@ -11,12 +12,26 @@ export class DashboardController {
     try {
       const taskRepository = AppDataSource.getRepository(Task);
       const leaveRequestRepository = AppDataSource.getRepository(LeaveRequest);
-      const isAdmin =
+      const isSuperAdmin = req.user?.role === "super_admin";
+      const isAdminOrAbove =
         req.user?.role === "admin" || req.user?.role === "super_admin";
       const userId = req.user?.id;
       const workspace = req.workspace!;
 
-      if (isAdmin) {
+      // Admins (and super admins) review every pending leave request in the
+      // workspace; regular users only see the status of their own.
+      const pendingLeaveRequests = await leaveRequestRepository.count({
+        where: isAdminOrAbove
+          ? { status: "pending", workspace: { id: workspace.id } }
+          : {
+              status: "pending",
+              workspace: { id: workspace.id },
+              user: { id: req.user!.id },
+            },
+      });
+
+      if (isSuperAdmin) {
+        // Only the super admin sees stats across every task in the workspace.
         const total = await taskRepository.count({
           where: { workspace: { id: workspace.id } },
         });
@@ -46,10 +61,6 @@ export class DashboardController {
           relations: ["assignedUsers"],
           order: { createdAt: "DESC" },
         });
-        // Admins review every pending leave request in the workspace.
-        const pendingLeaveRequests = await leaveRequestRepository.count({
-          where: { status: "pending", workspace: { id: workspace.id } },
-        });
 
         return res.status(200).json({
           total,
@@ -61,60 +72,47 @@ export class DashboardController {
         });
       }
 
-      // Regular users only see the status of their own leave requests.
-      const pendingLeaveRequests = await leaveRequestRepository.count({
-        where: {
-          status: "pending",
-          workspace: { id: workspace.id },
-          user: { id: req.user!.id },
-        },
-      });
+      // Everyone else (including regular admins) only sees stats for tasks
+      // they assigned (created) or were assigned to.
+      const baseVisibleTasksQuery = () =>
+        taskRepository
+          .createQueryBuilder("task")
+          .leftJoin("task.assignedUsers", "user")
+          .leftJoin("task.createdBy", "createdByUser")
+          .where("task.workspace.id = :workspaceId", {
+            workspaceId: workspace.id,
+          })
+          .andWhere("(user.id = :userId OR createdByUser.id = :userId)", {
+            userId,
+          });
 
-      const total = await taskRepository
-        .createQueryBuilder("task")
-        .leftJoin("task.assignedUsers", "user")
-        .where("user.id = :userId", { userId })
-        .andWhere("task.workspace.id = :workspaceId", {
-          workspaceId: workspace.id,
-        })
-        .getCount();
-      const pending = await taskRepository
-        .createQueryBuilder("task")
-        .leftJoin("task.assignedUsers", "user")
-        .where("user.id = :userId", { userId })
-        .andWhere("task.workspace.id = :workspaceId", {
-          workspaceId: workspace.id,
-        })
+      const total = await baseVisibleTasksQuery().getCount();
+      const pending = await baseVisibleTasksQuery()
         .andWhere("task.status = :status", { status: TaskStatus.PENDING })
         .getCount();
-      const inProgress = await taskRepository
-        .createQueryBuilder("task")
-        .leftJoin("task.assignedUsers", "user")
-        .where("user.id = :userId", { userId })
-        .andWhere("task.workspace.id = :workspaceId", {
-          workspaceId: workspace.id,
-        })
+      const inProgress = await baseVisibleTasksQuery()
         .andWhere("task.status = :status", { status: TaskStatus.IN_PROGRESS })
         .getCount();
-      const completed = await taskRepository
-        .createQueryBuilder("task")
-        .leftJoin("task.assignedUsers", "user")
-        .where("user.id = :userId", { userId })
-        .andWhere("task.workspace.id = :workspaceId", {
-          workspaceId: workspace.id,
-        })
+      const completed = await baseVisibleTasksQuery()
         .andWhere("task.status = :status", { status: TaskStatus.COMPLETED })
         .getCount();
-      const highPriorityTasks = await taskRepository
-        .createQueryBuilder("task")
-        .leftJoinAndSelect("task.assignedUsers", "user")
-        .where("user.id = :userId", { userId })
-        .andWhere("task.workspace.id = :workspaceId", {
-          workspaceId: workspace.id,
-        })
+
+      // Resolve visible high-priority task ids first, then re-fetch with full
+      // relations — filtering directly on the joined "assignedUsers" alias
+      // would silently truncate that relation to just the caller's own row.
+      const highPriorityRows = await baseVisibleTasksQuery()
         .andWhere("task.priority = :priority", { priority: TaskPriority.HIGH })
-        .orderBy("task.createdAt", "DESC")
-        .getMany();
+        .select("task.id", "id")
+        .distinct(true)
+        .getRawMany();
+      const highPriorityTaskIds = highPriorityRows.map((row) => row.id);
+      const highPriorityTasks = highPriorityTaskIds.length
+        ? await taskRepository.find({
+            where: { id: In(highPriorityTaskIds) },
+            relations: ["assignedUsers"],
+            order: { createdAt: "DESC" },
+          })
+        : [];
 
       return res.status(200).json({
         total,

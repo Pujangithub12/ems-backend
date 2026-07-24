@@ -52,6 +52,10 @@ export class ScheduleTask {
   @Column({ type: "float", nullable: true })
   progress?: number | null;
 
+  /** Manually set: "pending" | "in_progress" | "on_hold" | "completed". Drives the Gantt bar color. */
+  @Column({ type: "varchar", default: "pending" })
+  status!: string;
+
   /** Preserves the row order the user entered/uploaded. */
   @Column({ default: 0 })
   orderIndex!: number;

@@ -27,17 +27,18 @@ export class SubTaskController {
 
       const task = await taskRepository.findOne({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers"],
+        relations: ["assignedUsers", "createdBy"],
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
       const userId = req.user?.id;
       const isAssigned = task.assignedUsers.some((user) => user.id === userId);
+      const isCreator = task.createdBy?.id === userId;
 
       if (
         !isAssigned &&
-        req.user?.role !== UserRole.ADMIN &&
+        !isCreator &&
         req.user?.role !== UserRole.SUPER_ADMIN
       ) {
         return res
@@ -198,9 +199,27 @@ export class SubTaskController {
     }
   };
 
-  static getSubTasks = async (req: Request, res: Response) => {
+  static getSubTasks = async (req: AuthRequest, res: Response) => {
     const { taskId } = req.params;
     try {
+      const taskRepository = AppDataSource.getRepository(Task);
+      const task = await taskRepository.findOne({
+        where: { id: parseInt(taskId as string) },
+        relations: ["assignedUsers", "createdBy"],
+      });
+
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      if (req.user?.role !== UserRole.SUPER_ADMIN) {
+        // Only the assigner (creator) and the assignees may view a task's subtasks.
+        const isAssigned = task.assignedUsers.some(
+          (user) => user.id === req.user?.id,
+        );
+        const isCreator = task.createdBy?.id === req.user?.id;
+        if (!isAssigned && !isCreator)
+          return res.status(403).json({ message: "Forbidden" });
+      }
+
       const allSubTasks = await fetchSubTasksForTask(
         parseInt(taskId as string),
       );

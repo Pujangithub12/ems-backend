@@ -15,6 +15,19 @@ export interface ScheduleTaskInput {
   predecessorId: string | null;
   /** Percent complete (0-100), manually entered. Null when not tracked. */
   progress: number | null;
+  /** "pending" | "in_progress" | "on_hold" | "completed". */
+  status: string;
+}
+
+const VALID_STATUSES = new Set(["pending", "in_progress", "on_hold", "completed"]);
+
+/** Case/spacing-tolerant normalization ("On Hold", "on-hold" -> "on_hold"),
+ * falling back to "pending" for anything unrecognized rather than rejecting
+ * the whole save — same forgiving treatment as Progress being clamped. */
+function normalizeStatus(raw: unknown): string {
+  if (raw === undefined || raw === null || raw === "") return "pending";
+  const key = String(raw).trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return VALID_STATUSES.has(key) ? key : "pending";
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -103,7 +116,9 @@ export function validateScheduleTasks(input: unknown): ScheduleTaskInput[] {
       progress = Math.max(0, Math.min(100, n));
     }
 
-    return { id: finalId, taskName, duration, startDate, parentId, predecessorId, progress };
+    const status = normalizeStatus(raw.status);
+
+    return { id: finalId, taskName, duration, startDate, parentId, predecessorId, progress, status };
   });
 
   // Cross-row referential checks.

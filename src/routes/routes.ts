@@ -404,6 +404,12 @@ router.post(
   permissionMiddleware("projects.inventory"),
   InventoryController.createWarehouse,
 );
+router.delete(
+  "/workspace/warehouses/:warehouseId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.deleteWarehouse,
+);
 router.get(
   "/workspace/vendors",
   authMiddleware,
@@ -420,6 +426,12 @@ router.put(
   authMiddleware,
   permissionMiddleware("projects.inventory"),
   InventoryController.updateVendor,
+);
+router.delete(
+  "/workspace/vendors/:vendorId",
+  authMiddleware,
+  permissionMiddleware("projects.inventory"),
+  InventoryController.deleteVendor,
 );
 
 // Shared item catalog (name + code) — keeps item naming consistent between
