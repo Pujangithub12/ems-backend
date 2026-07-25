@@ -14,7 +14,6 @@ import { SiteVisitRequest } from "./SiteVisitRequest";
 import { ExpenseRequest } from "./ExpenseRequest";
 import { MyTask } from "./MyTask";
 import { CalendarEvent } from "./CalendarEvent";
-import { Activity } from "./Activity";
 import { HierarchyNode } from "./HierarchyNode";
 import { ProjectFile } from "./ProjectFile";
 
@@ -57,9 +56,6 @@ export class Workspace {
 
   @OneToMany(() => CalendarEvent, (ce) => ce.workspace, { cascade: true })
   calendarEvents!: CalendarEvent[];
-
-  @OneToMany(() => Activity, (act) => act.workspace, { cascade: true })
-  activities!: Activity[];
 
   @OneToMany(() => HierarchyNode, (node) => node.workspace, { cascade: true })
   hierarchyNodes!: HierarchyNode[];

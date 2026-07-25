@@ -7,8 +7,13 @@ export interface AddProcurementItemDto {
   itemId?: number;
   category?: ProcurementCategory;
   quantity?: number;
+  unit?: string;
   estimatedCost?: number;
   unitCost?: number;
+  taxPercent?: number;
+  discountPercent?: number;
+  transportCost?: number;
+  customsCost?: number;
   vendorName?: string;
   vendorId?: number;
   neededByDate?: string;
@@ -22,8 +27,13 @@ export interface UpdateProcurementItemDto {
   itemId?: number | null;
   category?: ProcurementCategory;
   quantity?: number;
+  unit?: string;
   estimatedCost?: number | null;
   unitCost?: number | null;
+  taxPercent?: number | null;
+  discountPercent?: number | null;
+  transportCost?: number | null;
+  customsCost?: number | null;
   vendorName?: string;
   vendorId?: number | null;
   neededByDate?: string | null;

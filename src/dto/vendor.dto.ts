@@ -3,7 +3,7 @@ export interface AddVendorDto {
   name: string;
   code?: string;
   location?: string;
-  rating?: number;
+  contact?: string;
   contractExpiryDate?: string;
 }
 
@@ -12,6 +12,6 @@ export interface UpdateVendorDto {
   name?: string;
   code?: string;
   location?: string;
-  rating?: number | null;
+  contact?: string;
   contractExpiryDate?: string | null;
 }

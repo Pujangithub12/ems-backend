@@ -382,7 +382,6 @@ export class ReportsController {
         return {
           id: v.id,
           name: v.name,
-          rating: v.rating ?? null,
           avgDeliveryDays:
             deliveryDays.length > 0
               ? Math.round((deliveryDays.reduce((s, d) => s + d, 0) / deliveryDays.length) * 10) / 10

@@ -19,7 +19,6 @@ import { LeaveRequestController } from "../controllers/LeaveRequestController";
 import { SiteVisitRequestController } from "../controllers/SiteVisitRequestController";
 import { ExpenseRequestController } from "../controllers/ExpenseRequestController";
 import { CalendarEventController } from "../controllers/CalendarEventController";
-import { ActivityController } from "../controllers/ActivityController";
 import { HierarchyController } from "../controllers/HierarchyController";
 import { ScheduleController } from "../controllers/ScheduleController";
 import { ScheduleService } from "../services/schedule.service";
@@ -199,16 +198,20 @@ router.get(
   authMiddleware,
   ProjectFileController.getProjectFiles,
 );
+// Folder/file create, rename, delete are no longer gated here by the blanket
+// "projects.documents" permission — per-node FileAccess grants now decide
+// write access (see ProjectFileController), since a role that lacks
+// projects.documents can still have been handed explicit write access to one
+// folder. Root-level creation (no parentId to check a grant against) re-checks
+// projects.documents inline in the controller instead.
 router.post(
   "/projects/:projectId/folders",
   authMiddleware,
-  permissionMiddleware("projects.documents"),
   ProjectFileController.addProjectFolder,
 );
 router.post(
   "/projects/:projectId/files",
   authMiddleware,
-  permissionMiddleware("projects.documents"),
   uploadProjectFile.single("file"),
   ProjectFileController.addProjectFile,
 );
@@ -220,14 +223,28 @@ router.get(
 router.put(
   "/projects/files/:fileId",
   authMiddleware,
-  permissionMiddleware("projects.documents"),
   ProjectFileController.renameProjectFile,
 );
 router.delete(
   "/projects/files/:fileId",
   authMiddleware,
-  permissionMiddleware("projects.documents"),
   ProjectFileController.deleteProjectFile,
+);
+// File/folder access management — who can read/write a given node. Deliberately
+// admin/super_admin only (not gated by the broader "projects.documents"
+// permission finance can also hold), since granting access is a narrower
+// capability than just using Documents.
+router.get(
+  "/projects/files/:fileId/access",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  ProjectFileController.getFileAccess,
+);
+router.put(
+  "/projects/files/:fileId/access",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  ProjectFileController.setFileAccess,
 );
 
 // Project procurement routes (Procurement tab) — view is open to any workspace
@@ -472,13 +489,11 @@ router.get(
 router.post(
   "/workspace/folders",
   authMiddleware,
-  permissionMiddleware("projects.documents"),
   WorkspaceFileController.addWorkspaceFolder,
 );
 router.post(
   "/workspace/files",
   authMiddleware,
-  permissionMiddleware("projects.documents"),
   uploadWorkspaceFile.single("file"),
   WorkspaceFileController.addWorkspaceFile,
 );
@@ -709,9 +724,6 @@ router.delete(
   permissionMiddleware("calendar.manage"),
   CalendarEventController.deleteEvent,
 );
-
-// Activity routes
-router.get("/activities", authMiddleware, ActivityController.getAllActivities);
 
 // Hierarchy routes
 router.get("/hierarchy", authMiddleware, HierarchyController.getHierarchy);

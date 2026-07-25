@@ -7,8 +7,10 @@ import { ProcurementAttachment } from "../entities/ProcurementAttachment";
 import { User } from "../entities/User";
 import { Vendor } from "../entities/Vendor";
 import { CatalogItem } from "../entities/CatalogItem";
+import { InventoryController } from "./InventoryController";
 import { AuthRequest } from "../middlewares/auth";
 import { AddProcurementItemDto, UpdateProcurementItemDto } from "../dto/procurement.dto";
+import { computeLandedUnitCost } from "../utils/procurementCost";
 
 /** Procurement tab: purchase-request line items scoped to a project. */
 export class ProcurementController {
@@ -30,8 +32,13 @@ export class ProcurementController {
         poNumber: item.poNumber,
         category: item.category,
         quantity: item.quantity,
+        unit: item.unit,
         estimatedCost: item.estimatedCost,
         unitCost: item.unitCost,
+        taxPercent: item.taxPercent,
+        discountPercent: item.discountPercent,
+        transportCost: item.transportCost,
+        customsCost: item.customsCost,
         vendorName: item.vendorName,
         vendor: item.vendor ? { id: item.vendor.id, name: item.vendor.name } : null,
         neededByDate: item.neededByDate,
@@ -86,8 +93,13 @@ export class ProcurementController {
       itemId,
       category,
       quantity,
+      unit,
       estimatedCost,
       unitCost,
+      taxPercent,
+      discountPercent,
+      transportCost,
+      customsCost,
       vendorName,
       vendorId,
       neededByDate,
@@ -145,8 +157,13 @@ export class ProcurementController {
         project,
         workspace: req.workspace!,
         ...(category ? { category } : {}),
+        ...(unit ? { unit } : {}),
         ...(estimatedCost !== undefined ? { estimatedCost } : {}),
         ...(unitCost !== undefined ? { unitCost } : {}),
+        ...(taxPercent !== undefined ? { taxPercent } : {}),
+        ...(discountPercent !== undefined ? { discountPercent } : {}),
+        ...(transportCost !== undefined ? { transportCost } : {}),
+        ...(customsCost !== undefined ? { customsCost } : {}),
         ...(vendorName ? { vendorName } : {}),
         ...(vendor ? { vendor } : {}),
         ...(catalogItem ? { item: catalogItem } : {}),
@@ -184,8 +201,13 @@ export class ProcurementController {
       itemId: catalogItemId,
       category,
       quantity,
+      unit,
       estimatedCost,
       unitCost,
+      taxPercent,
+      discountPercent,
+      transportCost,
+      customsCost,
       vendorName,
       vendorId,
       neededByDate,
@@ -218,6 +240,7 @@ export class ProcurementController {
       }
       if (category !== undefined) item.category = category;
       if (quantity !== undefined) item.quantity = Math.round(quantity) || 1;
+      if (unit !== undefined) item.unit = unit;
       if (estimatedCost !== undefined) {
         // null (not undefined) so TypeORM actually issues SET estimatedCost = NULL
         // instead of silently excluding the column from the UPDATE.
@@ -225,6 +248,18 @@ export class ProcurementController {
       }
       if (unitCost !== undefined) {
         item.unitCost = unitCost === null ? (null as unknown as number) : unitCost;
+      }
+      if (taxPercent !== undefined) {
+        item.taxPercent = taxPercent === null ? (null as unknown as number) : taxPercent;
+      }
+      if (discountPercent !== undefined) {
+        item.discountPercent = discountPercent === null ? (null as unknown as number) : discountPercent;
+      }
+      if (transportCost !== undefined) {
+        item.transportCost = transportCost === null ? (null as unknown as number) : transportCost;
+      }
+      if (customsCost !== undefined) {
+        item.customsCost = customsCost === null ? (null as unknown as number) : customsCost;
       }
       if (vendorName !== undefined) item.vendorName = vendorName;
       if (vendorId !== undefined) {
@@ -274,6 +309,28 @@ export class ProcurementController {
             ...(changedBy ? { changedBy } : {}),
           }),
         );
+
+        // Marking a purchase request delivered means the goods are in hand —
+        // fold it into the project's Inventory automatically instead of
+        // requiring a separate manual entry (merges into an existing row for
+        // the same item, same dedup rule as InventoryController.addInventoryItem).
+        // The stored unit cost is the landed cost (tax/discount/transport/
+        // customs folded in and divided back to a per-unit figure) so stock
+        // valuation reflects the true cost of bringing the item in.
+        if (status === "delivered") {
+          await InventoryController.receiveFromProcurement({
+            project: item.project,
+            workspace: req.workspace!,
+            catalogItem: item.item ?? null,
+            itemName: item.itemName,
+            quantity: item.quantity,
+            unit: item.unit,
+            unitCost: computeLandedUnitCost(item),
+            vendor: item.vendor ?? null,
+            poNumber: item.poNumber,
+            userId: req.user!.id,
+          });
+        }
       }
 
       return res.status(200).json({ message: "Procurement item updated", item });

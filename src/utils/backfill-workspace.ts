@@ -10,7 +10,6 @@ import { Announcement } from "../entities/Announcement";
 import { LeaveRequest } from "../entities/LeaveRequest";
 import { MyTask } from "../entities/MyTask";
 import { CalendarEvent } from "../entities/CalendarEvent";
-import { Activity } from "../entities/Activity";
 
 export async function backfillWorkspace() {
   if (!AppDataSource.isInitialized) {
@@ -129,15 +128,6 @@ export async function backfillWorkspace() {
       .setParameter("workspaceId", workspaceId)
       .execute();
     console.log(`Backfilled ${calendarEventUpdate.affected} calendar events`);
-
-    // Backfill Activities
-    const activityUpdate = await AppDataSource.createQueryBuilder()
-      .update(Activity)
-      .set({ workspace: () => `:workspaceId` })
-      .where("workspaceId IS NULL")
-      .setParameter("workspaceId", workspaceId)
-      .execute();
-    console.log(`Backfilled ${activityUpdate.affected} activities`);
 
     console.log("Workspace backfill completed successfully! ✨");
 

@@ -22,9 +22,9 @@ export class Vendor {
   @Column({ nullable: true })
   location?: string;
 
-  /** 1-5, set from the Vendors modal — feeds the Reports "Vendor Performance" scatter chart. */
-  @Column({ type: "int", nullable: true })
-  rating?: number;
+  /** Vendor's phone number. */
+  @Column({ nullable: true })
+  contact?: string;
 
   @Column({ type: "date", nullable: true })
   contractExpiryDate?: Date;

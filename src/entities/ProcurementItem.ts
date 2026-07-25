@@ -43,12 +43,32 @@ export class ProcurementItem {
   @Column({ type: "int", default: 1 })
   quantity!: number;
 
+  /** e.g. "pcs", "kg", "box" — free text measuring unit, mirrors InventoryItem.unit. */
+  @Column({ nullable: true })
+  unit?: string;
+
   @Column({ type: "numeric", nullable: true })
   estimatedCost?: number;
 
   /** Per-unit cost; estimatedCost is left as the existing total-cost field (read by budget calcs elsewhere). */
   @Column({ type: "numeric", nullable: true })
   unitCost?: number;
+
+  /** Percentage (0-100) applied on top of unitCost x quantity. */
+  @Column({ type: "numeric", nullable: true })
+  taxPercent?: number;
+
+  /** Percentage (0-100) subtracted from unitCost x quantity. */
+  @Column({ type: "numeric", nullable: true })
+  discountPercent?: number;
+
+  /** Flat Rs amount for shipping/freight on this request, added on top of tax/discount. */
+  @Column({ type: "numeric", nullable: true })
+  transportCost?: number;
+
+  /** Flat Rs amount for customs/import duty on this request, added on top of tax/discount. */
+  @Column({ type: "numeric", nullable: true })
+  customsCost?: number;
 
   /** Legacy free-text vendor name, kept as a display fallback for POs created before Vendor existed. */
   @Column({ nullable: true })
