@@ -8,8 +8,6 @@ import { Project } from "../entities/Project";
 import { SubTask } from "../entities/SubTask";
 import { In } from "typeorm";
 import { AuthRequest } from "../middlewares/auth";
-import { ActivityController } from "./ActivityController";
-import { ActivityType } from "../entities/Activity";
 import { sendEmail } from "../utils/emailService";
 import {
   buildSubTaskTree,
@@ -357,26 +355,6 @@ EMS Management
         const avg = computeAverageLeafProgress(newTask.subTasks);
         newTask.progress = avg;
         await taskRepository.update(newTask.id, { progress: avg });
-      }
-
-      // Log activity for task creation
-      await ActivityController.logActivity(
-        ActivityType.TASK_CREATED,
-        `Created task "${newTask.title}"`,
-        newTask.id,
-        req.user?.id,
-        req.workspace,
-      );
-
-      if (assignedUsers.length > 0) {
-        const assignedNames = assignedUsers.map((u) => u.fullName).join(", ");
-        await ActivityController.logActivity(
-          ActivityType.TASK_ASSIGNED,
-          `Assigned task "${newTask.title}" to ${assignedNames}`,
-          newTask.id,
-          req.user?.id,
-          req.workspace,
-        );
       }
 
       sanitizeCreatedBy(newTask);
@@ -755,23 +733,6 @@ EMS Management
           progress: updatedTask.progress,
         });
         sanitizeCreatedBy(updatedTask);
-      }
-
-      // Log activity if assigned users changed
-      if (
-        (assignAll !== undefined && assignAll !== null) ||
-        (userIds && parsedUserIds.length > 0)
-      ) {
-        const assignedNames = newAssignedUsers
-          .map((u) => u.fullName)
-          .join(", ");
-        await ActivityController.logActivity(
-          ActivityType.TASK_ASSIGNED,
-          `Assigned task "${task.title}" to ${assignedNames}`,
-          task.id,
-          req.user?.id,
-          req.workspace,
-        );
       }
 
       return res

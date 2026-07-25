@@ -1,6 +1,8 @@
 import { Response } from "express";
+import { IsNull } from "typeorm";
 import { AppDataSource } from "../config/data-source";
 import { Project } from "../entities/Project";
+import { Workspace } from "../entities/Workspace";
 import { InventoryItem } from "../entities/InventoryItem";
 import { User } from "../entities/User";
 import { Warehouse } from "../entities/Warehouse";
@@ -199,6 +201,55 @@ export class InventoryController {
 
       const finalQuantity = quantity && quantity > 0 ? Math.round(quantity) : 0;
 
+      // Adding stock for an item already tracked in this project is a
+      // restock, not a new line item — match on the shared catalog
+      // reference (or, for legacy free-text rows with no catalog link, the
+      // exact item name) and fold the quantity into the existing row
+      // instead of inserting a duplicate. This is what keeps the Inventory
+      // table to one row per item; the "Inventory Transactions" section in
+      // the item drawer (InventoryTransaction rows, via logTransaction)
+      // already provides the per-addition date/quantity history.
+      const existingItem = await itemRepository.findOne({
+        where: catalogItem
+          ? { project: { id: project.id }, item: { id: catalogItem.id } }
+          : { project: { id: project.id }, itemName: trimmedName, item: IsNull() },
+        relations: ["item", "warehouse", "vendor", "updatedBy"],
+      });
+
+      if (existingItem) {
+        const previousQuantity = existingItem.quantity;
+        existingItem.quantity = previousQuantity + finalQuantity;
+        if (category) existingItem.category = category;
+        if (unit) existingItem.unit = unit;
+        if (status) existingItem.status = status;
+        if (lastRestockedDate) existingItem.lastRestockedDate = new Date(lastRestockedDate);
+        if (notes) existingItem.notes = notes;
+        if (warehouse) existingItem.warehouse = warehouse;
+        if (reservedQuantity !== undefined) existingItem.reservedQuantity = Math.max(0, Math.round(reservedQuantity));
+        if (incomingQuantity !== undefined) existingItem.incomingQuantity = Math.max(0, Math.round(incomingQuantity));
+        if (averageCost !== undefined) existingItem.averageCost = averageCost;
+        if (supplier) existingItem.supplier = supplier;
+        if (vendor) existingItem.vendor = vendor;
+        if (imageUrl) existingItem.imageUrl = imageUrl;
+        if (warrantyExpiryDate) existingItem.warrantyExpiryDate = new Date(warrantyExpiryDate);
+        if (updatedBy) existingItem.updatedBy = updatedBy;
+        await itemRepository.save(existingItem);
+
+        if (finalQuantity > 0) {
+          await logTransaction(
+            existingItem,
+            "receipt",
+            finalQuantity,
+            existingItem.quantity,
+            "Additional stock received",
+            req.user!.id,
+            req.workspace!.id,
+          );
+        }
+
+        return res.status(200).json({ message: "Stock added to existing item", item: existingItem });
+      }
+
       const itemData: Partial<InventoryItem> = {
         itemName: trimmedName,
         quantity: finalQuantity,
@@ -237,6 +288,78 @@ export class InventoryController {
       return res.status(500).json({ message: "Internal server error", error });
     }
   };
+
+  /**
+   * Called from ProcurementController when a purchase request is marked
+   * "delivered" — folds the delivered quantity into the project's Inventory
+   * using the same find-or-create-merge logic as addInventoryItem (dedup by
+   * catalog item, or by exact name for legacy free-text rows), so a
+   * delivered PO shows up as stock automatically instead of requiring a
+   * separate manual Inventory entry. Never throws — a failure here shouldn't
+   * block the procurement status update itself.
+   */
+  static async receiveFromProcurement(params: {
+    project: Project;
+    workspace: Workspace;
+    catalogItem: CatalogItem | null;
+    itemName: string;
+    quantity: number;
+    unit?: string | null | undefined;
+    unitCost?: number | null | undefined;
+    vendor?: Vendor | null | undefined;
+    poNumber?: string | null | undefined;
+    userId: number;
+  }) {
+    const { project, workspace, catalogItem, itemName, quantity, unit, unitCost, vendor, poNumber, userId } = params;
+    const finalQuantity = quantity && quantity > 0 ? Math.round(quantity) : 0;
+    if (finalQuantity <= 0) return;
+
+    try {
+      const itemRepository = AppDataSource.getRepository(InventoryItem);
+      const userRepository = AppDataSource.getRepository(User);
+      const updatedBy = await userRepository.findOneBy({ id: userId });
+      const reason = poNumber ? `Received from procurement ${poNumber}` : "Received from procurement";
+
+      const existingItem = await itemRepository.findOne({
+        where: catalogItem
+          ? { project: { id: project.id }, item: { id: catalogItem.id } }
+          : { project: { id: project.id }, itemName, item: IsNull() },
+        relations: ["item", "warehouse", "vendor", "updatedBy"],
+      });
+
+      if (existingItem) {
+        existingItem.quantity += finalQuantity;
+        if (unit) existingItem.unit = unit;
+        if (unitCost !== undefined && unitCost !== null) existingItem.averageCost = unitCost;
+        if (vendor) existingItem.vendor = vendor;
+        if (updatedBy) existingItem.updatedBy = updatedBy;
+        await itemRepository.save(existingItem);
+        await logTransaction(existingItem, "receipt", finalQuantity, existingItem.quantity, reason, userId, workspace.id);
+        return existingItem;
+      }
+
+      const itemData: Partial<InventoryItem> = {
+        itemName,
+        quantity: finalQuantity,
+        project,
+        workspace,
+        ...(unit ? { unit } : {}),
+        ...(catalogItem
+          ? { item: catalogItem, ...(catalogItem.code !== undefined ? { sku: catalogItem.code } : {}) }
+          : {}),
+        ...(unitCost !== undefined && unitCost !== null ? { averageCost: unitCost } : {}),
+        ...(vendor ? { vendor } : {}),
+        ...(updatedBy ? { updatedBy } : {}),
+      };
+      const item = itemRepository.create(itemData);
+      await itemRepository.save(item);
+      await logTransaction(item, "receipt", finalQuantity, finalQuantity, reason, userId, workspace.id);
+      return item;
+    } catch (error) {
+      console.error("Failed to receive procurement item into inventory:", error);
+      return undefined;
+    }
+  }
 
   /** PUT /projects/inventory/:itemId — update fields and/or status. Admin-gated. */
   static updateInventoryItem = async (req: AuthRequest, res: Response) => {
@@ -822,7 +945,7 @@ export class InventoryController {
 
   /** POST /workspace/vendors — create a vendor. Admin-gated. */
   static createVendor = async (req: AuthRequest, res: Response) => {
-    const { name, code, location, rating, contractExpiryDate }: AddVendorDto = req.body;
+    const { name, code, location, contact, contractExpiryDate }: AddVendorDto = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ message: "Vendor name is required" });
     }
@@ -833,7 +956,7 @@ export class InventoryController {
         workspace: req.workspace!,
         ...(code ? { code } : {}),
         ...(location ? { location } : {}),
-        ...(rating !== undefined ? { rating } : {}),
+        ...(contact ? { contact } : {}),
         ...(contractExpiryDate ? { contractExpiryDate: new Date(contractExpiryDate) } : {}),
       });
       await vendorRepository.save(vendor);
@@ -846,7 +969,7 @@ export class InventoryController {
   /** PUT /workspace/vendors/:vendorId — update a vendor. Admin-gated. */
   static updateVendor = async (req: AuthRequest, res: Response) => {
     const { vendorId } = req.params;
-    const { name, code, location, rating, contractExpiryDate }: UpdateVendorDto = req.body;
+    const { name, code, location, contact, contractExpiryDate }: UpdateVendorDto = req.body;
     try {
       const vendorRepository = AppDataSource.getRepository(Vendor);
       const vendor = await vendorRepository.findOne({
@@ -861,9 +984,7 @@ export class InventoryController {
       }
       if (code !== undefined) vendor.code = code;
       if (location !== undefined) vendor.location = location;
-      if (rating !== undefined) {
-        vendor.rating = rating === null ? (null as unknown as number) : rating;
-      }
+      if (contact !== undefined) vendor.contact = contact;
       if (contractExpiryDate !== undefined) {
         vendor.contractExpiryDate = contractExpiryDate
           ? new Date(contractExpiryDate)

@@ -7,8 +7,6 @@ import { Task } from "../entities/Task";
 import { TaskPriority, TaskStatus } from "../entities/TaskEnums";
 import { In } from "typeorm";
 import { AuthRequest } from "../middlewares/auth";
-import { ActivityController } from "./ActivityController";
-import { ActivityType } from "../entities/Activity";
 import {
   CreateProjectDto,
   UpdateProjectDto,
@@ -98,14 +96,6 @@ export class ProjectController {
 
       const project = projectRepository.create(projectPayload);
       await projectRepository.save(project);
-
-      await ActivityController.logActivity(
-        ActivityType.PROJECT_CREATED,
-        `Created project "${project.name}"`,
-        undefined,
-        user.id,
-        workspace,
-      );
 
       return res.status(201).json({ message: "Project created", project });
     } catch (error) {

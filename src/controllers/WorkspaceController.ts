@@ -245,7 +245,7 @@ export class WorkspaceController {
       });
 
       // The workspace FK on Project/Task/Announcement/LeaveRequest/MyTask/
-      // CalendarEvent/Activity/HierarchyNode/WorkspaceMembership all carry ON
+      // CalendarEvent/HierarchyNode/WorkspaceMembership all carry ON
       // DELETE CASCADE, so a single delete here removes everything scoped to
       // this workspace at the database level.
       await workspaceRepo.delete(workspaceId);

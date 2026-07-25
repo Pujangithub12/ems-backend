@@ -8,13 +8,13 @@ import { SiteVisitRequest } from "../entities/SiteVisitRequest";
 import { ExpenseRequest } from "../entities/ExpenseRequest";
 import { Project } from "../entities/Project";
 import { ProjectFile } from "../entities/ProjectFile";
+import { FileAccess } from "../entities/FileAccess";
 import { ProjectHeading } from "../entities/ProjectHeading";
 import { SubTask } from "../entities/SubTask";
 import { TaskComment } from "../entities/TaskComment";
 import { SubTaskComment } from "../entities/SubTaskComment";
 import { MyTask } from "../entities/MyTask";
 import { CalendarEvent } from "../entities/CalendarEvent";
-import { Activity } from "../entities/Activity";
 import { Workspace } from "../entities/Workspace";
 import { WorkspaceMembership } from "../entities/WorkspaceMembership";
 import { HierarchyNode } from "../entities/HierarchyNode";
@@ -57,13 +57,13 @@ const entityList = isProduction
       ExpenseRequest,
       Project,
       ProjectFile,
+      FileAccess,
       ProjectHeading,
       SubTask,
       TaskComment,
       SubTaskComment,
       MyTask,
       CalendarEvent,
-      Activity,
       Workspace,
       WorkspaceMembership,
       HierarchyNode,

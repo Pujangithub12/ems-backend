@@ -1,12 +1,15 @@
 import { Response } from "express";
 import path from "path";
 import fs from "fs";
-import { IsNull } from "typeorm";
+import { IsNull, In } from "typeorm";
 import { AppDataSource } from "../config/data-source";
 import { User } from "../entities/User";
 import { ProjectFile } from "../entities/ProjectFile";
+import { FileAccess } from "../entities/FileAccess";
 import { AuthRequest } from "../middlewares/auth";
 import { AddWorkspaceFolderDto } from "../dto/workspace-file.dto";
+import { filterAndAnnotate, resolveAccessForFile, grantCreatorAccess } from "../utils/fileAccess";
+import { roleHasPermission } from "../utils/permissionService";
 
 /** Sidebar Documents page: files and folders scoped directly to a workspace (no project). */
 export class WorkspaceFileController {
@@ -23,17 +26,30 @@ export class WorkspaceFileController {
     try {
       const fileRepository = AppDataSource.getRepository(ProjectFile);
 
-      const rootFiles = await fileRepository.find({
+      const rootFilesRaw = await fileRepository.find({
         where: { workspace: { id: req.workspace!.id }, project: IsNull() },
         relations: ["uploadedBy"],
         order: { isFolder: "DESC", createdAt: "ASC" },
       });
 
-      const projectFiles = await fileRepository.find({
+      const projectFilesRaw = await fileRepository.find({
         where: { project: { workspace: { id: req.workspace!.id } } },
         relations: ["uploadedBy", "project"],
         order: { isFolder: "DESC", createdAt: "ASC" },
       });
+
+      // IDs are unique across the whole ProjectFile table and a node's
+      // parentId only ever points within its own project/root scope, so one
+      // combined access-filter pass over both lists is safe and correct.
+      const combinedIds = [...rootFilesRaw, ...projectFilesRaw].map((f) => f.id);
+      const grants = combinedIds.length
+        ? await AppDataSource.getRepository(FileAccess).find({
+            where: { file: { id: In(combinedIds) } },
+            relations: ["user", "file"],
+          })
+        : [];
+      const rootFiles = filterAndAnnotate(rootFilesRaw, grants, req.user!.id, req.user!.role);
+      const projectFiles = filterAndAnnotate(projectFilesRaw, grants, req.user!.id, req.user!.role);
 
       const projectsById = new Map<number, { id: number; name: string; createdAt: Date }>();
       for (const file of projectFiles) {
@@ -56,6 +72,11 @@ export class WorkspaceFileController {
         createdAt: project.createdAt,
         isProjectRoot: true,
         projectId: project.id,
+        // Not a real ACL'd node — always shown as read-only here since the
+        // frontend already treats every project-owned mirrored row as
+        // read-only in this view (editing happens from the project's own
+        // Documents tab, where the real write check applies).
+        myAccessLevel: "read" as const,
       }));
 
       const mirroredFiles = projectFiles.map((file) => ({
@@ -70,6 +91,7 @@ export class WorkspaceFileController {
         createdAt: file.createdAt,
         projectId: file.project!.id,
         parentId: file.parentId ?? -file.project!.id,
+        myAccessLevel: file.myAccessLevel,
       }));
 
       return res
@@ -96,6 +118,25 @@ export class WorkspaceFileController {
         parentId !== undefined && parentId !== null && parentId !== ""
           ? parseInt(parentId as string)
           : null;
+
+      if (parsedParentId !== null) {
+        const parentFile = await fileRepository.findOne({
+          where: { id: parsedParentId },
+          relations: ["project", "project.workspace", "workspace"],
+        });
+        if (!parentFile || (parentFile.project ? parentFile.project.workspace?.id : parentFile.workspace?.id) !== req.workspace!.id) {
+          return res.status(404).json({ message: "Parent folder not found" });
+        }
+        const parentLevel = await resolveAccessForFile(parentFile, req.user!.id, req.user!.role);
+        if (parentLevel !== "write") {
+          return res.status(403).json({ message: "You don't have permission to add items to this folder" });
+        }
+      } else {
+        const allowed = await roleHasPermission(req.user!.role, "projects.documents");
+        if (!allowed) {
+          return res.status(403).json({ message: "You don't have permission to manage documents" });
+        }
+      }
 
       const duplicate = await fileRepository
         .createQueryBuilder("file")
@@ -126,6 +167,7 @@ export class WorkspaceFileController {
 
       const folder = fileRepository.create(folderData);
       await fileRepository.save(folder);
+      await grantCreatorAccess(folder, req.user!.id, req.user!.role, req.workspace!);
       return res.status(201).json({ message: "Folder created", file: folder });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -163,11 +205,32 @@ export class WorkspaceFileController {
       };
 
       if (parentId !== undefined && parentId !== null && parentId !== "") {
-        fileData.parentId = parseInt(parentId as string);
+        const parsedParentId = parseInt(parentId as string);
+        const parentFile = await fileRepository.findOne({
+          where: { id: parsedParentId },
+          relations: ["project", "project.workspace", "workspace"],
+        });
+        if (!parentFile || (parentFile.project ? parentFile.project.workspace?.id : parentFile.workspace?.id) !== req.workspace!.id) {
+          fs.unlink(uploadedFile.path, () => {});
+          return res.status(404).json({ message: "Parent folder not found" });
+        }
+        const parentLevel = await resolveAccessForFile(parentFile, req.user!.id, req.user!.role);
+        if (parentLevel !== "write") {
+          fs.unlink(uploadedFile.path, () => {});
+          return res.status(403).json({ message: "You don't have permission to add items to this folder" });
+        }
+        fileData.parentId = parsedParentId;
+      } else {
+        const allowed = await roleHasPermission(req.user!.role, "projects.documents");
+        if (!allowed) {
+          fs.unlink(uploadedFile.path, () => {});
+          return res.status(403).json({ message: "You don't have permission to manage documents" });
+        }
       }
 
       const file = fileRepository.create(fileData);
       await fileRepository.save(file);
+      await grantCreatorAccess(file, req.user!.id, req.user!.role, req.workspace!);
       return res.status(201).json({ message: "File uploaded", file });
     } catch (error) {
       fs.unlink(uploadedFile.path, () => {});

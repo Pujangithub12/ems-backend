@@ -1,13 +1,21 @@
 import { Response } from "express";
 import path from "path";
 import fs from "fs";
-import { IsNull } from "typeorm";
+import { IsNull, In } from "typeorm";
 import { AppDataSource } from "../config/data-source";
 import { Project } from "../entities/Project";
 import { User } from "../entities/User";
 import { ProjectFile } from "../entities/ProjectFile";
+import { FileAccess } from "../entities/FileAccess";
 import { AuthRequest } from "../middlewares/auth";
 import { AddProjectFolderDto, RenameProjectFileDto } from "../dto/project-file.dto";
+import { SetFileAccessDto, FileAccessGrantDto } from "../dto/file-access.dto";
+import {
+  filterAndAnnotate,
+  resolveAccessForFile,
+  grantCreatorAccess,
+} from "../utils/fileAccess";
+import { roleHasPermission } from "../utils/permissionService";
 
 /** A file/folder is either project-scoped (Documents tab) or workspace-scoped (sidebar Documents page, project null) — resolve whichever workspace actually owns it. */
 const ownerWorkspaceId = (file: ProjectFile): number | undefined =>
@@ -38,7 +46,16 @@ export class ProjectFileController {
         order: { isFolder: "DESC", createdAt: "ASC" },
       });
 
-      return res.status(200).json({ files });
+      const fileIds = files.map((f) => f.id);
+      const grants = fileIds.length
+        ? await AppDataSource.getRepository(FileAccess).find({
+            where: { file: { id: In(fileIds) } },
+            relations: ["user", "file"],
+          })
+        : [];
+      const visible = filterAndAnnotate(files, grants, req.user!.id, req.user!.role);
+
+      return res.status(200).json({ files: visible });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -73,6 +90,27 @@ export class ProjectFileController {
           ? parseInt(parentId as string)
           : null;
 
+      if (parsedParentId !== null) {
+        const parentFile = await fileRepository.findOne({
+          where: { id: parsedParentId },
+          relations: ["project", "project.workspace", "workspace"],
+        });
+        if (!parentFile || ownerWorkspaceId(parentFile) !== req.workspace!.id) {
+          return res.status(404).json({ message: "Parent folder not found" });
+        }
+        const parentLevel = await resolveAccessForFile(parentFile, req.user!.id, req.user!.role);
+        if (parentLevel !== "write") {
+          return res.status(403).json({ message: "You don't have permission to add items to this folder" });
+        }
+      } else {
+        // No parent to check a grant against — fall back to the coarse
+        // role permission that used to gate this route.
+        const allowed = await roleHasPermission(req.user!.role, "projects.documents");
+        if (!allowed) {
+          return res.status(403).json({ message: "You don't have permission to manage documents" });
+        }
+      }
+
       const duplicate = await fileRepository
         .createQueryBuilder("file")
         .where("file.projectId = :projectId", { projectId: project.id })
@@ -102,6 +140,7 @@ export class ProjectFileController {
 
       const folder = fileRepository.create(folderData);
       await fileRepository.save(folder);
+      await grantCreatorAccess(folder, req.user!.id, req.user!.role, req.workspace!);
       return res.status(201).json({ message: "Folder created", file: folder });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -154,11 +193,32 @@ export class ProjectFileController {
       };
 
       if (parentId !== undefined && parentId !== null && parentId !== "") {
-        fileData.parentId = parseInt(parentId as string);
+        const parsedParentId = parseInt(parentId as string);
+        const parentFile = await fileRepository.findOne({
+          where: { id: parsedParentId },
+          relations: ["project", "project.workspace", "workspace"],
+        });
+        if (!parentFile || ownerWorkspaceId(parentFile) !== req.workspace!.id) {
+          fs.unlink(uploadedFile.path, () => {});
+          return res.status(404).json({ message: "Parent folder not found" });
+        }
+        const parentLevel = await resolveAccessForFile(parentFile, req.user!.id, req.user!.role);
+        if (parentLevel !== "write") {
+          fs.unlink(uploadedFile.path, () => {});
+          return res.status(403).json({ message: "You don't have permission to add items to this folder" });
+        }
+        fileData.parentId = parsedParentId;
+      } else {
+        const allowed = await roleHasPermission(req.user!.role, "projects.documents");
+        if (!allowed) {
+          fs.unlink(uploadedFile.path, () => {});
+          return res.status(403).json({ message: "You don't have permission to manage documents" });
+        }
       }
 
       const file = fileRepository.create(fileData);
       await fileRepository.save(file);
+      await grantCreatorAccess(file, req.user!.id, req.user!.role, req.workspace!);
       return res.status(201).json({ message: "File uploaded", file });
     } catch (error) {
       fs.unlink(uploadedFile.path, () => {});
@@ -182,6 +242,11 @@ export class ProjectFileController {
         !file.path ||
         ownerWorkspaceId(file) !== req.workspace!.id
       ) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const level = await resolveAccessForFile(file, req.user!.id, req.user!.role);
+      if (level === "none") {
         return res.status(404).json({ message: "File not found" });
       }
 
@@ -211,6 +276,11 @@ export class ProjectFileController {
 
       if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
         return res.status(404).json({ message: "File not found" });
+      }
+
+      const renameLevel = await resolveAccessForFile(file, req.user!.id, req.user!.role);
+      if (renameLevel !== "write") {
+        return res.status(403).json({ message: "You don't have permission to edit this" });
       }
 
       if (file.isFolder) {
@@ -262,6 +332,11 @@ export class ProjectFileController {
         return res.status(404).json({ message: "File not found" });
       }
 
+      const deleteLevel = await resolveAccessForFile(file, req.user!.id, req.user!.role);
+      if (deleteLevel !== "write") {
+        return res.status(403).json({ message: "You don't have permission to delete this" });
+      }
+
       // Gather this node plus all descendants (folders can be nested arbitrarily deep),
       // scoped to the same project (Documents tab) or the same workspace with no
       // project (sidebar Documents page) — whichever this file belongs to.
@@ -289,6 +364,90 @@ export class ProjectFileController {
 
       await fileRepository.remove(toDelete);
       return res.status(200).json({ message: "Deleted" });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  /** GET /projects/files/:fileId/access — explicit grants set directly on this node (not inherited ones). Admin/super_admin only (see routes.ts). */
+  static getFileAccess = async (req: AuthRequest, res: Response) => {
+    const { fileId } = req.params;
+    try {
+      const fileRepository = AppDataSource.getRepository(ProjectFile);
+      const file = await fileRepository.findOne({
+        where: { id: parseInt(fileId as string) },
+        relations: ["project", "project.workspace", "workspace"],
+      });
+      if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const accessRepository = AppDataSource.getRepository(FileAccess);
+      const grants = await accessRepository.find({
+        where: { file: { id: file.id } },
+        relations: ["user"],
+        order: { createdAt: "ASC" },
+      });
+
+      const result: FileAccessGrantDto[] = grants.map((g) => ({
+        id: g.id,
+        granteeType: g.granteeType,
+        user: g.user ? { id: g.user.id, fullName: g.user.fullName, email: g.user.email } : null,
+        role: g.role,
+        level: g.level,
+      }));
+
+      return res.status(200).json({ grants: result });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error", error });
+    }
+  };
+
+  /** PUT /projects/files/:fileId/access — full-replace the explicit grants on this node. Admin/super_admin only. */
+  static setFileAccess = async (req: AuthRequest, res: Response) => {
+    const { fileId } = req.params;
+    const { grants }: SetFileAccessDto = req.body;
+
+    if (!Array.isArray(grants)) {
+      return res.status(400).json({ message: "grants must be an array" });
+    }
+
+    try {
+      const fileRepository = AppDataSource.getRepository(ProjectFile);
+      const file = await fileRepository.findOne({
+        where: { id: parseInt(fileId as string) },
+        relations: ["project", "project.workspace", "workspace"],
+      });
+      if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const accessRepository = AppDataSource.getRepository(FileAccess);
+
+      const validated = grants.filter(
+        (entry) =>
+          entry &&
+          (entry.granteeType === "user" || entry.granteeType === "role") &&
+          (entry.level === "none" || entry.level === "read" || entry.level === "write") &&
+          ((entry.granteeType === "user" && entry.userId) || (entry.granteeType === "role" && entry.role)),
+      );
+
+      await accessRepository.delete({ file: { id: file.id } });
+
+      const created = validated.map((v) =>
+        accessRepository.create({
+          file,
+          granteeType: v.granteeType,
+          ...(v.granteeType === "user" ? { user: { id: v.userId } as User } : {}),
+          ...(v.granteeType === "role" ? { role: v.role } : {}),
+          level: v.level,
+          workspace: req.workspace!,
+          grantedBy: { id: req.user!.id } as User,
+        }),
+      );
+      const saved = created.length ? await accessRepository.save(created) : [];
+
+      return res.status(200).json({ message: "Access updated", grants: saved });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
