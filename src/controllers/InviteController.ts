@@ -67,25 +67,10 @@ export class InviteController {
   // account exists until the invitee opens the link and sets their own
   // password — see acceptInvite below.
   static sendInvite = async (req: AuthRequest, res: Response) => {
-    const {
-      fullName,
-      email,
-      phoneNumber,
-      address,
-      jobPosition,
-      joinDate,
-      role,
-    }: CreateInviteDto = req.body;
+    const { fullName, email, role }: CreateInviteDto = req.body;
 
-    if (
-      !fullName ||
-      !email ||
-      !phoneNumber ||
-      !address ||
-      !jobPosition ||
-      !joinDate
-    ) {
-      return res.status(400).json({ message: "All fields are required" });
+    if (!fullName || !email) {
+      return res.status(400).json({ message: "Name and email are required" });
     }
 
     try {
@@ -209,10 +194,6 @@ export class InviteController {
         invite = inviteRepository.create({ email: normalizedEmail });
       }
       invite.fullName = fullName;
-      invite.phoneNumber = phoneNumber;
-      invite.address = address;
-      invite.jobPosition = jobPosition;
-      invite.joinDate = new Date(joinDate);
       invite.role = finalRole;
       invite.workspaceId = workspace.id;
       invite.invitedByUserId = req.user?.id ?? null;
@@ -289,7 +270,6 @@ export class InviteController {
         invite: {
           fullName: invite.fullName,
           email: invite.email,
-          jobPosition: invite.jobPosition,
           role: invite.role,
         },
         workspace: { name: workspace?.name || "this workspace" },
@@ -304,7 +284,7 @@ export class InviteController {
   // AuthController.registerVerify).
   static acceptInvite = async (req: Request, res: Response) => {
     const token = req.params.token as string;
-    const { password }: AcceptInviteDto = req.body;
+    const { password, phoneNumber, address, jobPosition }: AcceptInviteDto = req.body;
 
     if (!password) {
       return res.status(400).json({ message: "Password is required" });
@@ -312,6 +292,11 @@ export class InviteController {
     const passwordError = getPasswordStrengthError(password);
     if (passwordError) {
       return res.status(400).json({ message: passwordError });
+    }
+    if (!phoneNumber || !address || !jobPosition) {
+      return res.status(400).json({
+        message: "Phone number, address, and job position are required",
+      });
     }
 
     try {
@@ -373,10 +358,12 @@ export class InviteController {
         fullName: invite.fullName,
         email: invite.email,
         password: hashedPassword,
-        phoneNumber: invite.phoneNumber,
-        address: invite.address,
-        jobPosition: invite.jobPosition,
-        joinDate: invite.joinDate,
+        phoneNumber,
+        address,
+        jobPosition,
+        // Not asked for — the invitee is joining right now, so today is
+        // always the correct join date.
+        joinDate: new Date(),
         // Permanently locks this account to the workspace it was invited
         // into — see authMiddleware and WorkspaceController.create/switch.
         homeWorkspaceId: workspace.id,
