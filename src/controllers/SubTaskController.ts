@@ -79,7 +79,7 @@ export class SubTaskController {
 
   static updateSubTask = async (req: AuthRequest, res: Response) => {
     const { taskId, subtaskId } = req.params;
-    const { title: updateText, status, progress }: UpdateSubTaskDto = req.body;
+    const { title: updateText, name, status, progress }: UpdateSubTaskDto = req.body;
 
     console.log("=== updateSubTask called ===", {
       taskId,
@@ -108,7 +108,16 @@ export class SubTaskController {
       // Capture old progress for history
       const oldProgress = subTask.progress ?? 0;
 
-      // Only update status and progress, NOT the original title
+      // `name` renames the subtask itself; `title` above is a different
+      // thing — the free-text note for this particular progress update,
+      // logged into history/comments rather than persisted on the subtask.
+      if (typeof name === "string") {
+        const trimmedName = name.trim();
+        if (!trimmedName) {
+          return res.status(400).json({ message: "Sub-task name cannot be empty" });
+        }
+        subTask.title = trimmedName;
+      }
       if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
         subTask.status = status as TaskStatus;
       }
