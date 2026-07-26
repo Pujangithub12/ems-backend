@@ -557,6 +557,11 @@ router.put(
   // roleMiddleware([UserRole.ADMIN]),
   SubTaskController.updateSubTask,
 );
+router.delete(
+  "/tasks/:taskId/subtasks/:subtaskId",
+  authMiddleware,
+  SubTaskController.deleteSubTask,
+);
 
 // Comment routes
 router.post(

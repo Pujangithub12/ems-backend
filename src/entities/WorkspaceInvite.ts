@@ -23,17 +23,22 @@ export class WorkspaceInvite {
   @Column()
   fullName!: string;
 
-  @Column()
-  phoneNumber!: string;
+  // Phone/address/job position are no longer collected from the inviting
+  // admin — the invitee fills these in themselves when accepting (see
+  // InviteController.acceptInvite) — so these stay empty on the invite row
+  // itself and only exist here at all for backward compatibility with any
+  // pre-existing pending invites.
+  @Column({ nullable: true })
+  phoneNumber?: string;
 
-  @Column("text")
-  address!: string;
+  @Column({ type: "text", nullable: true })
+  address?: string;
 
-  @Column()
-  jobPosition!: string;
+  @Column({ nullable: true })
+  jobPosition?: string;
 
-  @Column()
-  joinDate!: Date;
+  @Column({ nullable: true })
+  joinDate?: Date;
 
   @Column({
     type: "varchar",
