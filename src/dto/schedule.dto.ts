@@ -118,6 +118,14 @@ export function validateScheduleTasks(input: unknown): ScheduleTaskInput[] {
 
     const status = normalizeStatus(raw.status);
 
+    // Progress is derived from status for Pending/Completed — enforced here
+    // too (not just client-side in ProjectScheduleTab's handleStatusChange)
+    // so a direct API call or stale client can't desync the two. In Progress
+    // and On Hold both keep whatever value was sent: In Progress because
+    // it's user-editable, On Hold because it's meant to stay frozen.
+    if (status === "pending") progress = 0;
+    else if (status === "completed") progress = 100;
+
     return { id: finalId, taskName, duration, startDate, parentId, predecessorId, progress, status };
   });
 
