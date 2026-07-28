@@ -1,10 +1,9 @@
-import { AppDataSource } from "../config/data-source";
-import { HierarchyNode } from "../entities/HierarchyNode";
-import { UserRole } from "../entities/User";
-import { WorkspaceMembership } from "../entities/WorkspaceMembership";
+import { prisma } from "../config/prisma";
+import { UserRole } from "../types/enums";
+import type { HierarchyNodeModel as HierarchyNode } from "../generated/prisma/models";
 
 /**
- * Loads every HierarchyNode for a workspace once and returns the ordered
+ * Loads every HierarchyNode for an organization once and returns the ordered
  * chain of ancestor nodes (nearest manager first) above the given user's
  * node — walking the primary (solid-line) `parentId` chain only, never the
  * dotted-line `secondaryManagers`. Bounded by node count so a data anomaly
@@ -12,12 +11,11 @@ import { WorkspaceMembership } from "../entities/WorkspaceMembership";
  * just defense in depth on read).
  */
 export async function getAncestorChain(
-  workspaceId: number,
+  organizationId: number,
   userId: number,
 ): Promise<HierarchyNode[]> {
-  const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
-  const nodes = await hierarchyRepo.find({
-    where: { workspaceId },
+  const nodes = await prisma.hierarchyNode.findMany({
+    where: { organizationId },
   });
   const nodeByUserId = new Map(nodes.map((n) => [n.userId, n]));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
@@ -37,12 +35,12 @@ export async function getAncestorChain(
 
 /** Self counts as a descendant of itself, so self-assignment is always allowed. */
 export async function isDescendant(
-  workspaceId: number,
+  organizationId: number,
   ancestorUserId: number,
   descendantUserId: number,
 ): Promise<boolean> {
   if (ancestorUserId === descendantUserId) return true;
-  const chain = await getAncestorChain(workspaceId, descendantUserId);
+  const chain = await getAncestorChain(organizationId, descendantUserId);
   return chain.some((n) => n.userId === ancestorUserId);
 }
 
@@ -53,11 +51,10 @@ export async function isDescendant(
  * candidate's chain individually.
  */
 export async function getDescendantUserIds(
-  workspaceId: number,
+  organizationId: number,
   ancestorUserId: number,
 ): Promise<number[]> {
-  const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
-  const nodes = await hierarchyRepo.find({ where: { workspaceId } });
+  const nodes = await prisma.hierarchyNode.findMany({ where: { organizationId } });
 
   const childrenByParentNodeId = new Map<number, HierarchyNode[]>();
   nodes.forEach((n) => {
@@ -87,16 +84,15 @@ export async function getDescendantUserIds(
  * been placed under anyone in the tree yet).
  */
 export async function getApprover(
-  workspaceId: number,
+  organizationId: number,
   requesterUserId: number,
 ): Promise<{ userId: number } | null> {
-  const chain = await getAncestorChain(workspaceId, requesterUserId);
+  const chain = await getAncestorChain(organizationId, requesterUserId);
   if (chain.length === 0) return null;
 
-  // Role is scoped to this one workspace already (see WorkspaceMembership),
-  // so a plain userId -> role map is unambiguous here.
-  const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
-  const memberships = await membershipRepo.find({ where: { workspace: { id: workspaceId } } });
+  // Role is scoped to this one organization already (see
+  // OrganizationMembership), so a plain userId -> role map is unambiguous here.
+  const memberships = await prisma.organizationMembership.findMany({ where: { organizationId } });
   const roleByUserId = new Map(memberships.map((m) => [m.userId, m.role]));
 
   const approver = chain.find(
@@ -116,12 +112,12 @@ export async function getApprover(
  * admin ancestor.
  */
 export async function canApprove(
-  workspaceId: number,
+  organizationId: number,
   actorUserId: number,
   actorRole: string,
   requesterUserId: number,
 ): Promise<boolean> {
   if (actorRole === UserRole.SUPER_ADMIN) return true;
-  const approver = await getApprover(workspaceId, requesterUserId);
+  const approver = await getApprover(organizationId, requesterUserId);
   return approver?.userId === actorUserId;
 }

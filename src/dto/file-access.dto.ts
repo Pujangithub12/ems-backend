@@ -1,4 +1,4 @@
-import { FileAccessLevel, FileGranteeType } from "../entities/FileAccess";
+import { FileAccessLevel, FileGranteeType } from "../types/domain";
 
 /** One row of the grant list sent back by GET /projects/files/:fileId/access. */
 export interface FileAccessGrantDto {

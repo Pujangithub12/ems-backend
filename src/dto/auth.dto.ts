@@ -5,8 +5,8 @@ export interface LoginDto {
 }
 
 /**
- * Body shape for POST /register/start. Workspace name isn't collected at
- * signup — a default is generated, renameable later from workspace settings.
+ * Body shape for POST /register/start. Organization name isn't collected at
+ * signup — a default is generated, renameable later from organization settings.
  * This only sends a verification code; the account isn't created until
  * POST /register/verify succeeds.
  */

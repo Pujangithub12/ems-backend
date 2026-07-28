@@ -1,15 +1,19 @@
 import { Router } from "express";
 import { AuthController } from "../controllers/AuthController";
-import { WorkspaceController } from "../controllers/WorkspaceController";
+import { OrganizationController } from "../controllers/OrganizationController";
 import { UserController } from "../controllers/UserController";
 import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
-import { ProcurementController } from "../controllers/ProcurementController";
+import { PurchaseRequestController } from "../controllers/PurchaseRequestController";
+import { PurchaseOrderController } from "../controllers/PurchaseOrderController";
+import { ProformaInvoiceController } from "../controllers/ProformaInvoiceController";
+import { ShipmentController } from "../controllers/ShipmentController";
+import { GoodsReceiptController } from "../controllers/GoodsReceiptController";
 import { MonthlyPerformanceController } from "../controllers/MonthlyPerformanceController";
 import { InventoryController } from "../controllers/InventoryController";
-import { WorkspaceFileController } from "../controllers/WorkspaceFileController";
+import { OrganizationFileController } from "../controllers/OrganizationFileController";
 import { MyTaskController } from "../controllers/MyTaskController";
 import { TaskController } from "../controllers/TaskController";
 import { DashboardController } from "../controllers/DashboardController";
@@ -26,25 +30,30 @@ import { PermissionController } from "../controllers/PermissionController";
 import { ReportsController } from "../controllers/ReportsController";
 import { CatalogItemController } from "../controllers/CatalogItemController";
 import { authMiddleware, roleMiddleware, permissionMiddleware, anyPermissionMiddleware } from "../middlewares/auth";
+import { loginLimiter, authActionLimiter } from "../middlewares/rateLimit";
 import {
   upload,
   uploadProjectFile,
-  uploadWorkspaceFile,
+  uploadOrganizationFile,
   uploadInventoryFile,
-  uploadProcurementFile,
+  uploadPurchaseRequestFile,
+  uploadPurchaseOrderFile,
+  uploadProformaInvoiceFile,
+  uploadCustomsFile,
+  uploadGoodsReceiptFile,
 } from "../middlewares/upload";
-import { UserRole } from "../entities/User";
+import { UserRole } from "../types/enums";
 
 const router = Router();
 
 const scheduleController = new ScheduleController(new ScheduleService());
 
 // Auth routes
-router.post("/register/start", AuthController.registerStart);
-router.post("/register/verify", AuthController.registerVerify);
-router.post("/forgot-password/start", AuthController.forgotPasswordStart);
-router.post("/forgot-password/reset", AuthController.forgotPasswordReset);
-router.post("/login", AuthController.login);
+router.post("/register/start", authActionLimiter, AuthController.registerStart);
+router.post("/register/verify", authActionLimiter, AuthController.registerVerify);
+router.post("/forgot-password/start", authActionLimiter, AuthController.forgotPasswordStart);
+router.post("/forgot-password/reset", authActionLimiter, AuthController.forgotPasswordReset);
+router.post("/login", loginLimiter, AuthController.login);
 router.post("/logout", AuthController.logout);
 router.get("/me", authMiddleware, AuthController.getMe);
 router.put("/me", authMiddleware, AuthController.updateMe);
@@ -53,38 +62,38 @@ router.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Workspace routes
-router.get("/workspaces", authMiddleware, WorkspaceController.getAll);
-router.post("/workspaces", authMiddleware, WorkspaceController.create);
-router.post("/workspaces/switch", authMiddleware, WorkspaceController.switch);
+// Organization routes
+router.get("/workspaces", authMiddleware, OrganizationController.getAll);
+router.post("/workspaces", authMiddleware, OrganizationController.create);
+router.post("/workspaces/switch", authMiddleware, OrganizationController.switch);
 router.get(
   "/workspaces/current",
   authMiddleware,
-  WorkspaceController.getCurrent,
+  OrganizationController.getCurrent,
 );
-router.put("/workspaces/:id", authMiddleware, WorkspaceController.update);
-router.delete("/workspaces/:id", authMiddleware, WorkspaceController.remove);
+router.put("/workspaces/:id", authMiddleware, OrganizationController.update);
+router.delete("/workspaces/:id", authMiddleware, OrganizationController.remove);
 
-// Cross-workspace member access matrix (Settings > Workspace tab) — lets a
-// caller who belongs to more than one of their own workspaces manage which
-// of those workspaces each employee can access, from one place.
+// Cross-organization member access matrix (Settings > Organization tab) — lets a
+// caller who belongs to more than one of their own organizations manage which
+// of those organizations each employee can access, from one place.
 router.get(
   "/workspaces/access-matrix",
   authMiddleware,
   permissionMiddleware("members.manage"),
-  WorkspaceController.getAccessMatrix,
+  OrganizationController.getAccessMatrix,
 );
 router.put(
   "/workspaces/:id/members/:userId",
   authMiddleware,
   permissionMiddleware("members.manage"),
-  WorkspaceController.grantMemberAccess,
+  OrganizationController.grantMemberAccess,
 );
 router.delete(
   "/workspaces/:id/members/:userId",
   authMiddleware,
   permissionMiddleware("members.manage"),
-  WorkspaceController.revokeMemberAccess,
+  OrganizationController.revokeMemberAccess,
 );
 
 // Permission routes — matrix is viewable by anyone, but only a super admin
@@ -247,57 +256,233 @@ router.put(
   ProjectFileController.setFileAccess,
 );
 
-// Project procurement routes (Procurement tab) — view is open to any workspace
-// member with project access; add/edit/delete are admin-gated.
-router.get(
-  "/workspace/procurement",
-  authMiddleware,
-  ProcurementController.getWorkspaceProcurement,
-);
-router.get(
-  "/projects/:projectId/procurement",
-  authMiddleware,
-  ProcurementController.getProcurementItems,
-);
+// Procurement pipeline v2 (Purchase Request -> Vendor Selection -> Purchase Order ->
+// Proforma Invoice -> Shipment/Insurance/Customs -> Cost Sheet -> Goods Receipt -> Inventory).
+// Replaces the old flat "Procurement" routes below — ProcurementController's underlying data
+// (procurement_item/procurement_attachment/procurement_status_history) is intentionally kept
+// in the DB for historical integrity but is no longer routed to; see
+// src/utils/migrate-procurement-to-pr-po.ts for the one-off migration into the new tables.
+// View endpoints are open to any organization member with project access; mutations are gated
+// on the existing "projects.procurement" permission key (no new permission key was introduced),
+// except creating/editing/submitting a Purchase Request itself, which any authenticated member
+// can do (see the "Purchase Requests + Vendor Selection" section below) — raising a request is
+// meant to be self-service, only approving it and everything downstream is admin territory.
+// The Purchase Orders and Vendors *pages* are additionally hidden from non-admins in the
+// frontend (nav + route guard) since browsing PO/vendor pricing is admin-only by design; the
+// underlying read APIs stay open like every other view endpoint here.
+
+// Purchase Requests + Vendor Selection
+// Creating/editing/submitting a draft PR is open to any authenticated organization member
+// (any employee can raise a purchase request) — approving/rejecting it, and everything from
+// vendor selection onward, stays gated on "projects.procurement" (see changeStatus's inline
+// check and the vendor-quote/generate-po routes below).
+router.get("/workspace/purchase-requests", authMiddleware, PurchaseRequestController.getOrganizationPurchaseRequests);
+router.get("/projects/:projectId/purchase-requests", authMiddleware, PurchaseRequestController.getPurchaseRequests);
 router.post(
-  "/projects/:projectId/procurement",
+  "/projects/:projectId/purchase-requests",
   authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  ProcurementController.addProcurementItem,
+  PurchaseRequestController.addPurchaseRequest,
 );
 router.put(
-  "/projects/procurement/:itemId",
+  "/purchase-requests/:id",
   authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  ProcurementController.updateProcurementItem,
+  PurchaseRequestController.updatePurchaseRequest,
 );
 router.delete(
-  "/projects/procurement/:itemId",
+  "/purchase-requests/:id",
   authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  ProcurementController.deleteProcurementItem,
+  PurchaseRequestController.deletePurchaseRequest,
 );
-router.get(
-  "/projects/procurement/:itemId/detail",
+router.get("/purchase-requests/:id/detail", authMiddleware, PurchaseRequestController.getPurchaseRequestDetail);
+router.post(
+  "/purchase-requests/:id/status",
   authMiddleware,
-  ProcurementController.getProcurementItemDetail,
+  PurchaseRequestController.changeStatus,
 );
 router.post(
-  "/projects/procurement/:itemId/attachments",
+  "/purchase-requests/:id/vendor-quotes",
   authMiddleware,
   permissionMiddleware("projects.procurement"),
-  uploadProcurementFile.single("file"),
-  ProcurementController.addAttachment,
+  PurchaseRequestController.addVendorQuote,
+);
+router.put(
+  "/purchase-requests/:id/vendor-quotes/:quoteId",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  PurchaseRequestController.updateVendorQuote,
 );
 router.delete(
-  "/projects/procurement/:itemId/attachments/:attachmentId",
+  "/purchase-requests/:id/vendor-quotes/:quoteId",
   authMiddleware,
   permissionMiddleware("projects.procurement"),
-  ProcurementController.deleteAttachment,
+  PurchaseRequestController.deleteVendorQuote,
+);
+router.post(
+  "/purchase-requests/:id/vendor-quotes/:quoteId/select",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  PurchaseRequestController.selectVendorQuote,
+);
+router.post(
+  "/purchase-requests/:id/generate-po",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  PurchaseRequestController.generatePurchaseOrder,
+);
+router.post(
+  "/purchase-requests/:itemId/attachments",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  uploadPurchaseRequestFile.single("file"),
+  PurchaseRequestController.addAttachment,
+);
+router.delete(
+  "/purchase-requests/:itemId/attachments/:attachmentId",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  PurchaseRequestController.deleteAttachment,
+);
+
+// Purchase Orders + Cost Sheet
+router.get("/workspace/purchase-orders", authMiddleware, PurchaseOrderController.getOrganizationPurchaseOrders);
+router.get("/projects/:projectId/purchase-orders", authMiddleware, PurchaseOrderController.getPurchaseOrders);
+router.get("/purchase-orders/:id/detail", authMiddleware, PurchaseOrderController.getPurchaseOrderDetail);
+router.put(
+  "/purchase-orders/:id",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  PurchaseOrderController.updatePurchaseOrder,
+);
+router.get("/purchase-orders/:id/cost-sheet", authMiddleware, PurchaseOrderController.getCostSheet);
+router.get("/purchase-orders/:id/pdf", authMiddleware, PurchaseOrderController.downloadPdf);
+router.post(
+  "/purchase-orders/:itemId/attachments",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  uploadPurchaseOrderFile.single("file"),
+  PurchaseOrderController.addAttachment,
+);
+router.delete(
+  "/purchase-orders/:itemId/attachments/:attachmentId",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  PurchaseOrderController.deleteAttachment,
+);
+
+// Proforma Invoices
+router.post(
+  "/purchase-orders/:id/proforma-invoices",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProformaInvoiceController.addProformaInvoice,
+);
+router.put(
+  "/proforma-invoices/:id",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProformaInvoiceController.updateProformaInvoice,
+);
+router.delete(
+  "/proforma-invoices/:id",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProformaInvoiceController.deleteProformaInvoice,
+);
+router.put(
+  "/proforma-invoices/:id/status",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProformaInvoiceController.changeStatus,
+);
+router.post(
+  "/proforma-invoices/:itemId/attachment",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  uploadProformaInvoiceFile.single("file"),
+  ProformaInvoiceController.addAttachment,
+);
+
+// Shipment (Local + International) + Insurance + Customs
+router.post(
+  "/purchase-orders/:id/shipment",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ShipmentController.addShipment,
+);
+router.put(
+  "/shipments/:id",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ShipmentController.updateShipment,
+);
+router.post(
+  "/shipments/:id/insurance",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ShipmentController.addInsurance,
+);
+router.put(
+  "/insurance/:id",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ShipmentController.updateInsurance,
+);
+router.post(
+  "/shipments/:id/customs",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ShipmentController.addCustoms,
+);
+router.put(
+  "/customs/:id",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ShipmentController.updateCustoms,
+);
+router.post(
+  "/customs/:itemId/documents",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  uploadCustomsFile.single("file"),
+  ShipmentController.addCustomsDocument,
+);
+router.delete(
+  "/customs/:itemId/documents/:documentId",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ShipmentController.deleteCustomsDocument,
+);
+
+// Goods Receipt (GRN) — accepting/partially-accepting is the only action in this whole
+// pipeline that increments real Inventory stock (see GoodsReceiptController.updateStatus).
+router.post(
+  "/purchase-orders/:id/goods-receipts",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  GoodsReceiptController.addGoodsReceipt,
+);
+router.put(
+  "/goods-receipts/:id/status",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  GoodsReceiptController.updateStatus,
+);
+router.post(
+  "/goods-receipts/:itemId/photos",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  uploadGoodsReceiptFile.single("file"),
+  GoodsReceiptController.addPhoto,
+);
+router.delete(
+  "/goods-receipts/:itemId/photos/:photoId",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  GoodsReceiptController.deletePhoto,
 );
 
 // Project energy performance routes (Energy Performance tab) — view is open to
-// any workspace member with project access; upsert is admin-gated.
+// any organization member with project access; upsert is admin-gated.
 router.get(
   "/projects/:projectId/performance",
   authMiddleware,
@@ -310,12 +495,12 @@ router.put(
   MonthlyPerformanceController.upsertMonthlyPerformance,
 );
 
-// Project inventory routes (Inventory tab) — view is open to any workspace
+// Project inventory routes (Inventory tab) — view is open to any organization
 // member with project access; add/edit/delete are admin-gated.
 router.get(
   "/workspace/inventory",
   authMiddleware,
-  InventoryController.getWorkspaceInventory,
+  InventoryController.getOrganizationInventory,
 );
 router.get(
   "/projects/:projectId/inventory",
@@ -403,17 +588,17 @@ router.delete(
 router.get(
   "/workspace/inventory/transfers",
   authMiddleware,
-  InventoryController.getWorkspacePendingTransfers,
+  InventoryController.getOrganizationPendingTransfers,
 );
 router.get(
   "/workspace/inventory/transactions",
   authMiddleware,
-  InventoryController.getWorkspaceInventoryTransactions,
+  InventoryController.getOrganizationInventoryTransactions,
 );
 router.get(
   "/workspace/warehouses",
   authMiddleware,
-  InventoryController.getWorkspaceWarehouses,
+  InventoryController.getOrganizationWarehouses,
 );
 router.post(
   "/workspace/warehouses",
@@ -430,7 +615,7 @@ router.delete(
 router.get(
   "/workspace/vendors",
   authMiddleware,
-  InventoryController.getWorkspaceVendors,
+  InventoryController.getOrganizationVendors,
 );
 router.post(
   "/workspace/vendors",
@@ -453,7 +638,7 @@ router.delete(
 
 // Shared item catalog (name + code) — keeps item naming consistent between
 // the Inventory and Procurement "Add item" forms.
-router.get("/workspace/items", authMiddleware, CatalogItemController.getWorkspaceItems);
+router.get("/workspace/items", authMiddleware, CatalogItemController.getOrganizationItems);
 router.post(
   "/workspace/items",
   authMiddleware,
@@ -478,24 +663,24 @@ router.post(
   ReportsController.addReportComment,
 );
 
-// Workspace-level document routes (sidebar Documents page). Rename/download/delete
+// Organization-level document routes (sidebar Documents page). Rename/download/delete
 // reuse the same /projects/files/:fileId endpoints above — they resolve ownership
-// via whichever of project/workspace is set on the row.
+// via whichever of project/organization is set on the row.
 router.get(
   "/workspace/files",
   authMiddleware,
-  WorkspaceFileController.getWorkspaceFiles,
+  OrganizationFileController.getOrganizationFiles,
 );
 router.post(
   "/workspace/folders",
   authMiddleware,
-  WorkspaceFileController.addWorkspaceFolder,
+  OrganizationFileController.addOrganizationFolder,
 );
 router.post(
   "/workspace/files",
   authMiddleware,
-  uploadWorkspaceFile.single("file"),
-  WorkspaceFileController.addWorkspaceFile,
+  uploadOrganizationFile.single("file"),
+  OrganizationFileController.addOrganizationFile,
 );
 
 // Personal task routes

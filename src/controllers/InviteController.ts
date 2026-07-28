@@ -2,55 +2,47 @@ import { Request, Response } from "express";
 import crypto from "crypto";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import dotenv from "dotenv";
-import { AppDataSource } from "../config/data-source";
-import { User, UserRole } from "../entities/User";
-import { Workspace } from "../entities/Workspace";
-import { WorkspaceMembership } from "../entities/WorkspaceMembership";
-import { WorkspaceInvite } from "../entities/WorkspaceInvite";
-import { HierarchyNode } from "../entities/HierarchyNode";
+import { prisma } from "../config/prisma";
+import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import { CreateInviteDto, AcceptInviteDto } from "../dto/invite.dto";
 import { sendEmail } from "../utils/emailService";
-import { countSuperAdminsInWorkspace } from "./UserController";
+import { countSuperAdminsInOrganization } from "./UserController";
 import { getPasswordStrengthError } from "../utils/passwordPolicy";
+import { JWT_SECRET } from "../config/jwt";
 
-dotenv.config();
-
-const JWT_SECRET: string = process.env.JWT_SECRET || "your_jwt_secret_key";
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-// Find-or-create this user's hierarchy node in the workspace — mirrors the
+// Find-or-create this user's hierarchy node in the organization — mirrors the
 // same auto-heal HierarchyController.getHierarchy does, so a node always
 // exists to attach a manager to (or be attached under one) on demand.
-const ensureHierarchyNode = async (userId: number, workspaceId: number) => {
-  const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
-  let node = await hierarchyRepo.findOne({ where: { userId, workspaceId } });
+const ensureHierarchyNode = async (userId: number, organizationId: number) => {
+  let node = await prisma.hierarchyNode.findFirst({ where: { userId, organizationId } });
   if (!node) {
-    node = hierarchyRepo.create({ userId, workspaceId });
-    await hierarchyRepo.save(node);
+    node = await prisma.hierarchyNode.create({ data: { userId, organizationId } });
   }
   return node;
 };
 
-// Places a newly-invited member under whoever invited them in the workspace's
+// Places a newly-invited member under whoever invited them in the organization's
 // org chart, so they immediately show up in the inviter's "Assigned To"
 // picker instead of requiring a manual Settings > Hierarchy edit. Skipped if
 // we don't know who invited them (legacy invite rows) or the invitee is the
-// workspace's super admin, who always stays at the root.
+// organization's super admin, who always stays at the root.
 const placeUnderInviter = async (
   inviterUserId: number | null | undefined,
   inviteeUserId: number,
   inviteeRole: UserRole,
-  workspaceId: number,
+  organizationId: number,
 ) => {
   if (inviterUserId == null || inviteeRole === UserRole.SUPER_ADMIN) return;
-  const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
-  const inviterNode = await ensureHierarchyNode(inviterUserId, workspaceId);
-  const inviteeNode = await ensureHierarchyNode(inviteeUserId, workspaceId);
-  inviteeNode.parentId = inviterNode.id;
-  await hierarchyRepo.save(inviteeNode);
+  const inviterNode = await ensureHierarchyNode(inviterUserId, organizationId);
+  const inviteeNode = await ensureHierarchyNode(inviteeUserId, organizationId);
+  await prisma.hierarchyNode.update({
+    where: { id: inviteeNode.id },
+    data: { parentId: inviterNode.id },
+  });
 };
 // Falls back by NODE_ENV (not just a single hardcoded default) so a missing
 // FRONTEND_URL env var still points production invite emails at the deployed
@@ -74,19 +66,15 @@ export class InviteController {
     }
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const inviteRepository = AppDataSource.getRepository(WorkspaceInvite);
-      const workspaceRepository = AppDataSource.getRepository(Workspace);
-      const workspace = req.workspace!;
+      const organization = req.organization!;
       const normalizedEmail = email.trim();
 
-      const membershipRepository = AppDataSource.getRepository(WorkspaceMembership);
-      const existingUser = await userRepository.findOne({
+      const existingUser = await prisma.user.findUnique({
         where: { email: normalizedEmail },
       });
 
       // Enforce role assignment rules (identical to the old direct-create
-      // flow: admins can't invite a super admin; only one super admin/workspace).
+      // flow: admins can't invite a super admin; only one super admin/organization).
       const currentUserRole = req.user?.role;
       let finalRole = (role as UserRole) || UserRole.USER;
 
@@ -107,108 +95,118 @@ export class InviteController {
       }
 
       if (finalRole === UserRole.SUPER_ADMIN) {
-        const existingSuperAdmins = await countSuperAdminsInWorkspace(workspace.id);
+        const existingSuperAdmins = await countSuperAdminsInOrganization(organization.id);
         if (existingSuperAdmins > 0) {
           return res
             .status(400)
-            .json({ message: "This workspace already has a super admin" });
+            .json({ message: "This organization already has a super admin" });
         }
       }
 
       if (existingUser) {
         // This email already has an account — created either by this same
-        // person self-registering, or by a completely unrelated workspace's
+        // person self-registering, or by a completely unrelated organization's
         // admin inviting them. Rather than blocking the invite, add them as
-        // a member of *this* workspace too: same login, now shows up in
-        // their workspace switcher alongside any others (exactly like a
+        // a member of *this* organization too: same login, now shows up in
+        // their organization switcher alongside any others (exactly like a
         // self-registered "owner" account already can belong to several
-        // workspaces). No new password/accept-invite step is needed since
+        // organizations). No new password/accept-invite step is needed since
         // the account already exists.
-        const alreadyMember = await membershipRepository.findOne({
-          where: { workspace: { id: workspace.id }, user: { id: existingUser.id } },
+        const alreadyMember = await prisma.organizationMembership.findFirst({
+          where: { organizationId: organization.id, userId: existingUser.id },
         });
         if (alreadyMember) {
           return res
             .status(400)
-            .json({ message: "This user is already a member of this workspace" });
+            .json({ message: "This user is already a member of this organization" });
         }
 
-        const fullWorkspace = await workspaceRepository.findOne({
-          where: { id: workspace.id },
+        const fullOrganization = await prisma.organization.findUnique({
+          where: { id: organization.id },
         });
-        if (!fullWorkspace) {
-          return res.status(404).json({ message: "Workspace not found" });
+        if (!fullOrganization) {
+          return res.status(404).json({ message: "Organization not found" });
         }
 
-        // Only creates a membership in *this* workspace — the invited
-        // user's role in any other workspace they already belong to is
+        // Only creates a membership in *this* organization — the invited
+        // user's role in any other organization they already belong to is
         // untouched (previously `existingUser.role = finalRole` clobbered
         // their role everywhere, since role was a single global column).
-        await membershipRepository.save(
-          membershipRepository.create({
-            user: existingUser,
-            workspace: fullWorkspace,
+        await prisma.organizationMembership.create({
+          data: {
+            userId: existingUser.id,
+            organizationId: fullOrganization.id,
             role: finalRole,
-          }),
-        );
+          },
+        });
 
-        // Unlock: once an account belongs to more than one workspace it
+        // Unlock: once an account belongs to more than one organization it
         // behaves like a self-registered "owner" account and gets the
-        // normal workspace switcher, instead of staying pinned to a single
-        // home workspace (see authMiddleware's homeWorkspaceId check).
-        if (existingUser.homeWorkspaceId != null) {
-          existingUser.homeWorkspaceId = null;
-          await userRepository.save(existingUser);
+        // normal organization switcher, instead of staying pinned to a single
+        // home organization (see authMiddleware's homeOrganizationId check).
+        if (existingUser.homeOrganizationId != null) {
+          await prisma.user.update({
+            where: { id: existingUser.id },
+            data: { homeOrganizationId: null },
+          });
         }
 
-        await placeUnderInviter(req.user?.id, existingUser.id, finalRole, workspace.id);
+        await placeUnderInviter(req.user?.id, existingUser.id, finalRole, organization.id);
 
         const roleText = finalRole.replace("_", " ");
         await sendEmail(
           [normalizedEmail],
-          `You've been added to ${workspace.name} on EMS`,
-          `Hi ${existingUser.fullName},\n\nYou've been added to ${workspace.name} on EMS as ${roleText}.\n\nLog in with your existing account and use the workspace switcher to access it.`,
+          `You've been added to ${organization.name} on EMS`,
+          `Hi ${existingUser.fullName},\n\nYou've been added to ${organization.name} on EMS as ${roleText}.\n\nLog in with your existing account and use the organization switcher to access it.`,
           `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #333;">You've been added to ${workspace.name} on EMS</h2>
+            <h2 style="color: #333;">You've been added to ${organization.name} on EMS</h2>
             <p style="color: #555; line-height: 1.6;">
               Hi ${existingUser.fullName},<br /><br />
-              You've been added to <strong>${workspace.name}</strong> on EMS as <strong>${roleText}</strong>.
-              Log in with your existing account and use the workspace switcher to access it.
+              You've been added to <strong>${organization.name}</strong> on EMS as <strong>${roleText}</strong>.
+              Log in with your existing account and use the organization switcher to access it.
             </p>
           </div>
           `,
-          "workspace-added",
+          "organization-added",
         );
 
-        return res.status(200).json({ message: "Existing user added to workspace" });
+        return res.status(200).json({ message: "Existing user added to organization" });
       }
 
       const token = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
 
       // One live invite per email — resending overwrites the previous token.
-      let invite = await inviteRepository.findOne({
+      await prisma.organizationInvite.upsert({
         where: { email: normalizedEmail },
+        create: {
+          email: normalizedEmail,
+          fullName,
+          role: finalRole,
+          organizationId: organization.id,
+          invitedByUserId: req.user?.id ?? null,
+          token,
+          expiresAt,
+        },
+        update: {
+          fullName,
+          role: finalRole,
+          organizationId: organization.id,
+          invitedByUserId: req.user?.id ?? null,
+          token,
+          expiresAt,
+        },
       });
-      if (!invite) {
-        invite = inviteRepository.create({ email: normalizedEmail });
-      }
-      invite.fullName = fullName;
-      invite.role = finalRole;
-      invite.workspaceId = workspace.id;
-      invite.invitedByUserId = req.user?.id ?? null;
-      invite.token = token;
-      invite.expiresAt = new Date(Date.now() + INVITE_TTL_MS);
-      await inviteRepository.save(invite);
 
       const acceptUrl = `${FRONTEND_URL}/accept-invite?token=${token}`;
       const roleText = finalRole.replace("_", " ");
       const inviteHtml = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #333;">You're invited to join ${workspace.name} on EMS</h2>
+          <h2 style="color: #333;">You're invited to join ${organization.name} on EMS</h2>
           <p style="color: #555; line-height: 1.6;">
             Hi ${fullName},<br /><br />
-            You've been invited to join <strong>${workspace.name}</strong> on EMS as <strong>${roleText}</strong>.
+            You've been invited to join <strong>${organization.name}</strong> on EMS as <strong>${roleText}</strong>.
           </p>
           <p style="text-align: center; margin: 32px 0;">
             <a href="${acceptUrl}" style="background: #1E3A8A; color: #ffffff; text-decoration: none; font-weight: 600; font-size: 14px; padding: 12px 28px; border-radius: 8px; display: inline-block;">
@@ -224,8 +222,8 @@ export class InviteController {
       `;
       const sent = await sendEmail(
         [normalizedEmail],
-        `You're invited to join ${workspace.name} on EMS`,
-        `Hi ${fullName},\n\nYou've been invited to join ${workspace.name} on EMS as ${roleText}.\n\nAccept your invite: ${acceptUrl}\n\nThis link expires in 7 days.`,
+        `You're invited to join ${organization.name} on EMS`,
+        `Hi ${fullName},\n\nYou've been invited to join ${organization.name} on EMS as ${roleText}.\n\nAccept your invite: ${acceptUrl}\n\nThis link expires in 7 days.`,
         inviteHtml,
         "invite",
       );
@@ -247,10 +245,7 @@ export class InviteController {
     const token = req.params.token as string;
 
     try {
-      const inviteRepository = AppDataSource.getRepository(WorkspaceInvite);
-      const workspaceRepository = AppDataSource.getRepository(Workspace);
-
-      const invite = await inviteRepository.findOne({ where: { token } });
+      const invite = await prisma.organizationInvite.findUnique({ where: { token } });
       if (!invite) {
         return res
           .status(404)
@@ -262,8 +257,8 @@ export class InviteController {
           .json({ message: "This invite has expired. Ask for a new one." });
       }
 
-      const workspace = await workspaceRepository.findOne({
-        where: { id: invite.workspaceId },
+      const organization = await prisma.organization.findUnique({
+        where: { id: invite.organizationId },
       });
 
       return res.status(200).json({
@@ -272,14 +267,14 @@ export class InviteController {
           email: invite.email,
           role: invite.role,
         },
-        workspace: { name: workspace?.name || "this workspace" },
+        organization: { name: organization?.name || "this organization" },
       });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
   };
 
-  // Public — creates the real User + adds them to the invite's workspace,
+  // Public — creates the real User + adds them to the invite's organization,
   // then logs them straight in (same cookie pattern as
   // AuthController.registerVerify).
   static acceptInvite = async (req: Request, res: Response) => {
@@ -300,24 +295,20 @@ export class InviteController {
     }
 
     try {
-      const inviteRepository = AppDataSource.getRepository(WorkspaceInvite);
-      const userRepository = AppDataSource.getRepository(User);
-      const workspaceRepository = AppDataSource.getRepository(Workspace);
-
-      const invite = await inviteRepository.findOne({ where: { token } });
+      const invite = await prisma.organizationInvite.findUnique({ where: { token } });
       if (!invite) {
         return res
           .status(404)
           .json({ message: "Invite not found or already used" });
       }
       if (invite.expiresAt.getTime() < Date.now()) {
-        await inviteRepository.remove(invite);
+        await prisma.organizationInvite.delete({ where: { id: invite.id } });
         return res
           .status(400)
           .json({ message: "This invite has expired. Ask for a new one." });
       }
 
-      const existingUser = await userRepository.findOne({
+      const existingUser = await prisma.user.findUnique({
         where: { email: invite.email },
       });
       if (existingUser) {
@@ -333,58 +324,63 @@ export class InviteController {
         });
       }
 
-      const workspace = await workspaceRepository.findOne({
-        where: { id: invite.workspaceId },
+      const organization = await prisma.organization.findUnique({
+        where: { id: invite.organizationId },
       });
-      if (!workspace) {
-        await inviteRepository.remove(invite);
-        return res.status(404).json({ message: "Workspace no longer exists" });
+      if (!organization) {
+        await prisma.organizationInvite.delete({ where: { id: invite.id } });
+        return res.status(404).json({ message: "Organization no longer exists" });
       }
 
-      // Re-check in case the workspace's super admin situation changed since
+      // Re-check in case the organization's super admin situation changed since
       // the invite was sent (e.g. someone else was promoted in the meantime).
       if (invite.role === UserRole.SUPER_ADMIN) {
-        const existingSuperAdmins = await countSuperAdminsInWorkspace(workspace.id);
+        const existingSuperAdmins = await countSuperAdminsInOrganization(organization.id);
         if (existingSuperAdmins > 0) {
           return res.status(400).json({
             message:
-              "This workspace already has a super admin. Contact your admin.",
+              "This organization already has a super admin. Contact your admin.",
           });
         }
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const user = userRepository.create({
-        fullName: invite.fullName,
-        email: invite.email,
-        password: hashedPassword,
-        phoneNumber,
-        address,
-        jobPosition,
-        // Not asked for — the invitee is joining right now, so today is
-        // always the correct join date.
-        joinDate: new Date(),
-        // Permanently locks this account to the workspace it was invited
-        // into — see authMiddleware and WorkspaceController.create/switch.
-        homeWorkspaceId: workspace.id,
+      const user = await prisma.user.create({
+        data: {
+          fullName: invite.fullName,
+          email: invite.email,
+          password: hashedPassword,
+          phoneNumber,
+          address,
+          jobPosition,
+          // Not asked for — the invitee is joining right now, so today is
+          // always the correct join date.
+          joinDate: new Date(),
+          // Permanently locks this account to the organization it was invited
+          // into — see authMiddleware and OrganizationController.create/switch.
+          homeOrganizationId: organization.id,
+        },
       });
-      await userRepository.save(user);
 
-      const membershipRepository = AppDataSource.getRepository(WorkspaceMembership);
-      await membershipRepository.save(
-        membershipRepository.create({
-          user,
-          workspace,
+      await prisma.organizationMembership.create({
+        data: {
+          userId: user.id,
+          organizationId: organization.id,
           role: invite.role,
-        }),
+        },
+      });
+
+      await placeUnderInviter(
+        invite.invitedByUserId,
+        user.id,
+        invite.role as UserRole,
+        organization.id,
       );
 
-      await placeUnderInviter(invite.invitedByUserId, user.id, invite.role, workspace.id);
+      await prisma.organizationInvite.delete({ where: { id: invite.id } });
 
-      await inviteRepository.remove(invite);
-
-      // Role is per-workspace now (see WorkspaceMembership), so it can't be
-      // baked into a token that outlives any single workspace context.
+      // Role is per-organization now (see OrganizationMembership), so it can't be
+      // baked into a token that outlives any single organization context.
       const jwtToken = jwt.sign({ id: user.id }, JWT_SECRET, {
         expiresIn: "3h",
       });
@@ -395,7 +391,7 @@ export class InviteController {
         sameSite: isProduction ? "none" : "lax",
         maxAge: THREE_HOURS_MS,
       });
-      res.cookie("workspaceId", workspace.id.toString(), {
+      res.cookie("workspaceId", organization.id.toString(), {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "none" : "lax",
@@ -413,13 +409,13 @@ export class InviteController {
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
-          homeWorkspaceId: user.homeWorkspaceId,
+          homeOrganizationId: user.homeOrganizationId,
         },
-        workspace: {
-          id: workspace.id,
-          name: workspace.name,
-          description: workspace.description,
-          createdAt: workspace.createdAt,
+        organization: {
+          id: organization.id,
+          name: organization.name,
+          description: organization.description,
+          createdAt: organization.createdAt,
         },
       });
     } catch (error) {

@@ -1,8 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ScheduleService = void 0;
-const data_source_1 = require("../config/data-source");
-const ScheduleTask_1 = require("../entities/ScheduleTask");
+const prisma_1 = require("../config/prisma");
 const schedule_dto_1 = require("../dto/schedule.dto");
 function toProjectId(projectId) {
     const n = Number(projectId);
@@ -11,26 +10,31 @@ function toProjectId(projectId) {
     }
     return n;
 }
+/** TypeORM's `type: "date"` columns read back as a plain "YYYY-MM-DD" string;
+ * Prisma always returns a Date object for @db.Date columns, so this
+ * reformats it back to the same string shape the frontend has always received. */
+function formatDate(d) {
+    return d ? d.toISOString().slice(0, 10) : null;
+}
 function toDto(row) {
     return {
         id: row.taskId,
         taskName: row.taskName,
         duration: row.duration ?? null,
-        startDate: row.startDate ?? null,
+        startDate: formatDate(row.startDate),
         parentId: row.parentId ?? null,
         predecessorId: row.predecessorId ?? null,
+        progress: row.progress ?? null,
+        status: row.status ?? "pending",
     };
 }
 class ScheduleService {
-    get repo() {
-        return data_source_1.AppDataSource.getRepository(ScheduleTask_1.ScheduleTask);
-    }
     /** Returns the saved schedule rows for a project, in their saved order. */
     async getSchedule(projectId) {
         const numericProjectId = toProjectId(projectId);
-        const rows = await this.repo.find({
+        const rows = await prisma_1.prisma.scheduleTask.findMany({
             where: { projectId: numericProjectId },
-            order: { orderIndex: "ASC" },
+            orderBy: { orderIndex: "asc" },
         });
         return rows.map(toDto);
     }
@@ -42,23 +46,30 @@ class ScheduleService {
      */
     async saveSchedule(projectId, tasks) {
         const numericProjectId = toProjectId(projectId);
-        const saved = await data_source_1.AppDataSource.transaction(async (manager) => {
-            const repo = manager.getRepository(ScheduleTask_1.ScheduleTask);
-            await repo.delete({ projectId: numericProjectId });
+        const saved = await prisma_1.prisma.$transaction(async (tx) => {
+            await tx.scheduleTask.deleteMany({ where: { projectId: numericProjectId } });
             if (tasks.length === 0) {
                 return [];
             }
-            const entities = tasks.map((task, index) => repo.create({
-                projectId: numericProjectId,
-                taskId: task.id,
-                taskName: task.taskName,
-                duration: task.duration,
-                startDate: task.startDate,
-                parentId: task.parentId,
-                predecessorId: task.predecessorId,
-                orderIndex: index,
-            }));
-            return repo.save(entities);
+            const rows = [];
+            for (const [index, task] of tasks.entries()) {
+                const row = await tx.scheduleTask.create({
+                    data: {
+                        projectId: numericProjectId,
+                        taskId: task.id,
+                        taskName: task.taskName,
+                        duration: task.duration,
+                        startDate: task.startDate,
+                        parentId: task.parentId,
+                        predecessorId: task.predecessorId,
+                        progress: task.progress,
+                        status: task.status,
+                        orderIndex: index,
+                    },
+                });
+                rows.push(row);
+            }
+            return rows;
         });
         return saved
             .slice()

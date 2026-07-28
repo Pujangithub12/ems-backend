@@ -1,7 +1,6 @@
-import { Request, Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { LeaveRequest } from "../entities/LeaveRequest";
-import { User, UserRole } from "../entities/User";
+import { Response } from "express";
+import { prisma } from "../config/prisma";
+import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import {
   CreateLeaveRequestDto,
@@ -10,13 +9,15 @@ import {
 } from "../dto/leave-request.dto";
 import { canApprove } from "../utils/hierarchyAuthority";
 
-// `user` is an eager relation on LeaveRequest, so it is always populated
-// (and includes the password hash) regardless of the `relations` option
-// passed to the query — strip it before sending requests to the client.
-const sanitizeUser = (lr: LeaveRequest) => {
+// `user` was an eager relation on LeaveRequest under TypeORM, so it was
+// always populated (and included the password hash) regardless of the
+// `relations` option passed to the query. Prisma has no eager-loading
+// concept, so every query below explicitly `include`s `user` — this still
+// strips it down to the safe subset before sending requests to the client.
+const sanitizeUser = (lr: any) => {
   if (lr.user) {
     const { id, fullName, email } = lr.user;
-    lr.user = { id, fullName, email } as User;
+    lr.user = { id, fullName, email };
   }
 };
 
@@ -32,31 +33,31 @@ export class LeaveRequestController {
 
     try {
       const userId = req.user?.id;
-      const userRepository = AppDataSource.getRepository(User);
-      const lrRepository = AppDataSource.getRepository(LeaveRequest);
-      const workspace = req.workspace!;
+      const organization = req.organization!;
 
-      const user = await userRepository.findOne({
+      const user = await prisma.user.findFirst({
         where: { id: userId as number },
       });
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      const newRequest = lrRepository.create({
-        user,
-        title,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
-        reason,
-        status: "pending",
-        workspace
+      const newRequest = await prisma.leaveRequest.create({
+        data: {
+          userId: user.id,
+          title,
+          startDate: new Date(startDate),
+          endDate: new Date(endDate),
+          reason,
+          status: "pending",
+          organizationId: organization.id,
+        },
       });
 
-      await lrRepository.save(newRequest);
-      sanitizeUser(newRequest);
+      const leaveRequest: any = { ...newRequest, user };
+      sanitizeUser(leaveRequest);
 
       return res
         .status(201)
-        .json({ message: "Leave request created", leaveRequest: newRequest });
+        .json({ message: "Leave request created", leaveRequest });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -64,47 +65,52 @@ export class LeaveRequestController {
 
   static getAllLeaveRequests = async (req: AuthRequest, res: Response) => {
     try {
-      const lrRepository = AppDataSource.getRepository(LeaveRequest);
-      const workspace = req.workspace!;
+      const organization = req.organization!;
 
       if (
         req.user?.role === UserRole.ADMIN ||
         req.user?.role === UserRole.SUPER_ADMIN
       ) {
-        const all = await lrRepository.find({
-          where: { workspace: { id: workspace.id } },
-          order: { createdAt: "DESC" },
-          relations: ["user"],
+        const all = await prisma.leaveRequest.findMany({
+          where: { organizationId: organization.id },
+          orderBy: { createdAt: "desc" },
+          include: { user: true },
         });
 
         // Add history count for admin
         const requestsWithHistory = await Promise.all(
           all.map(async (lr) => {
-            const historyCount = await lrRepository.count({
+            const historyCount = await prisma.leaveRequest.count({
               where: {
-                user: { id: lr.user.id },
+                userId: lr.userId as number,
                 status: "approved",
-                workspace: { id: workspace.id }
+                organizationId: organization.id,
               },
             });
-            sanitizeUser(lr);
-            return { ...lr, historyCount };
+            const shaped: any = { ...lr };
+            sanitizeUser(shaped);
+            return { ...shaped, historyCount };
           }),
         );
 
         return res.status(200).json(requestsWithHistory);
       }
 
-      const mine = await lrRepository.find({
+      const mine = await prisma.leaveRequest.findMany({
         where: {
-          user: { id: req.user?.id },
-          workspace: { id: workspace.id }
+          userId: req.user!.id,
+          organizationId: organization.id,
         },
-        order: { createdAt: "DESC" },
-      } as any);
-      mine.forEach(sanitizeUser);
+        orderBy: { createdAt: "desc" },
+        include: { user: true },
+      });
+      const mineShaped = mine.map((lr) => {
+        const shaped: any = { ...lr };
+        sanitizeUser(shaped);
+        return shaped;
+      });
 
-      return res.status(200).json(mine);
+      return res.status(200).json(mineShaped);
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -126,23 +132,23 @@ export class LeaveRequestController {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      const lrRepository = AppDataSource.getRepository(LeaveRequest);
-      const workspace = req.workspace!;
-      const lr = await lrRepository.findOne({
-        where: { 
+      const organization = req.organization!;
+      const lr = await prisma.leaveRequest.findFirst({
+        where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id }
+          organizationId: organization.id,
         },
+        include: { user: true },
       });
 
       if (!lr)
         return res.status(404).json({ message: "Leave request not found" });
 
       const allowed = await canApprove(
-        workspace.id,
+        organization.id,
         req.user!.id,
         req.user!.role,
-        lr.user.id,
+        lr.userId as number,
       );
       if (!allowed) {
         return res.status(403).json({
@@ -150,14 +156,17 @@ export class LeaveRequestController {
         });
       }
 
-      lr.status = status;
-      lr.approvedAt = new Date();
-      await lrRepository.save(lr);
-      sanitizeUser(lr);
+      const updated = await prisma.leaveRequest.update({
+        where: { id: lr.id },
+        data: { status: status as "approved" | "rejected", approvedAt: new Date() },
+      });
+
+      const leaveRequest: any = { ...updated, user: lr.user };
+      sanitizeUser(leaveRequest);
 
       return res
         .status(200)
-        .json({ message: `Leave request ${status}`, leaveRequest: lr });
+        .json({ message: `Leave request ${status}`, leaveRequest });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -166,13 +175,13 @@ export class LeaveRequestController {
   static getLeaveRequestById = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      const lrRepository = AppDataSource.getRepository(LeaveRequest);
-      const workspace = req.workspace!;
-      const lr = await lrRepository.findOne({
-        where: { 
+      const organization = req.organization!;
+      const lr = await prisma.leaveRequest.findFirst({
+        where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id }
+          organizationId: organization.id,
         },
+        include: { user: true },
       });
 
       if (!lr)
@@ -181,13 +190,14 @@ export class LeaveRequestController {
       if (
         req.user?.role !== UserRole.ADMIN &&
         req.user?.role !== UserRole.SUPER_ADMIN &&
-        lr.user.id !== req.user?.id
+        lr.userId !== req.user?.id
       ) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      sanitizeUser(lr);
-      return res.status(200).json(lr);
+      const shaped: any = { ...lr };
+      sanitizeUser(shaped);
+      return res.status(200).json(shaped);
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -198,13 +208,13 @@ export class LeaveRequestController {
     const { startDate, endDate, reason }: UpdateLeaveRequestDto = req.body;
 
     try {
-      const lrRepository = AppDataSource.getRepository(LeaveRequest);
-      const workspace = req.workspace!;
-      const lr = await lrRepository.findOne({
-        where: { 
+      const organization = req.organization!;
+      const lr = await prisma.leaveRequest.findFirst({
+        where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id }
+          organizationId: organization.id,
         },
+        include: { user: true },
       });
 
       if (!lr)
@@ -213,21 +223,27 @@ export class LeaveRequestController {
       if (
         req.user?.role !== UserRole.ADMIN &&
         req.user?.role !== UserRole.SUPER_ADMIN &&
-        lr.user.id !== req.user?.id
+        lr.userId !== req.user?.id
       ) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      if (startDate) lr.startDate = new Date(startDate);
-      if (endDate) lr.endDate = new Date(endDate);
-      if (reason) lr.reason = reason;
+      const data: { startDate?: Date; endDate?: Date; reason?: string } = {};
+      if (startDate) data.startDate = new Date(startDate);
+      if (endDate) data.endDate = new Date(endDate);
+      if (reason) data.reason = reason;
 
-      await lrRepository.save(lr);
-      sanitizeUser(lr);
+      const updated = await prisma.leaveRequest.update({
+        where: { id: lr.id },
+        data,
+      });
+
+      const leaveRequest: any = { ...updated, user: lr.user };
+      sanitizeUser(leaveRequest);
 
       return res
         .status(200)
-        .json({ message: "Leave request updated", leaveRequest: lr });
+        .json({ message: "Leave request updated", leaveRequest });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -243,19 +259,18 @@ export class LeaveRequestController {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      const lrRepository = AppDataSource.getRepository(LeaveRequest);
-      const workspace = req.workspace!;
-      const lr = await lrRepository.findOne({
-        where: { 
+      const organization = req.organization!;
+      const lr = await prisma.leaveRequest.findFirst({
+        where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id }
+          organizationId: organization.id,
         },
       });
 
       if (!lr)
         return res.status(404).json({ message: "Leave request not found" });
 
-      await lrRepository.remove(lr);
+      await prisma.leaveRequest.delete({ where: { id: lr.id } });
 
       return res.status(200).json({ message: "Leave request deleted" });
     } catch (error) {

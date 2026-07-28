@@ -9,6 +9,16 @@ class ValidationError extends Error {
     }
 }
 exports.ValidationError = ValidationError;
+const VALID_STATUSES = new Set(["pending", "in_progress", "on_hold", "completed"]);
+/** Case/spacing-tolerant normalization ("On Hold", "on-hold" -> "on_hold"),
+ * falling back to "pending" for anything unrecognized rather than rejecting
+ * the whole save — same forgiving treatment as Progress being clamped. */
+function normalizeStatus(raw) {
+    if (raw === undefined || raw === null || raw === "")
+        return "pending";
+    const key = String(raw).trim().toLowerCase().replace(/[\s-]+/g, "_");
+    return VALID_STATUSES.has(key) ? key : "pending";
+}
 function isPlainObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -62,7 +72,25 @@ function validateScheduleTasks(input) {
             raw.predecessorId !== ""
             ? String(raw.predecessorId).trim()
             : null;
-        return { id: finalId, taskName, duration, startDate, parentId, predecessorId };
+        let progress = null;
+        if (raw.progress !== undefined && raw.progress !== null && raw.progress !== "") {
+            const n = Number(raw.progress);
+            if (Number.isNaN(n)) {
+                throw new ValidationError(`Task "${finalId}" has a non-numeric Progress.`);
+            }
+            progress = Math.max(0, Math.min(100, n));
+        }
+        const status = normalizeStatus(raw.status);
+        // Progress is derived from status for Pending/Completed — enforced here
+        // too (not just client-side in ProjectScheduleTab's handleStatusChange)
+        // so a direct API call or stale client can't desync the two. In Progress
+        // and On Hold both keep whatever value was sent: In Progress because
+        // it's user-editable, On Hold because it's meant to stay frozen.
+        if (status === "pending")
+            progress = 0;
+        else if (status === "completed")
+            progress = 100;
+        return { id: finalId, taskName, duration, startDate, parentId, predecessorId, progress, status };
     });
     // Cross-row referential checks.
     tasks.forEach((task) => {

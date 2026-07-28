@@ -1,4 +1,4 @@
-import { ProcurementStatus, ProcurementCategory } from "../entities/ProcurementItem";
+import { ProcurementStatus, ProcurementCategory } from "../types/domain";
 
 /** Body shape for POST /projects/:projectId/procurement. */
 export interface AddProcurementItemDto {

@@ -1,31 +1,77 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TaskController = void 0;
-const data_source_1 = require("../config/data-source");
-const Task_1 = require("../entities/Task");
-const TaskEnums_1 = require("../entities/TaskEnums");
-const User_1 = require("../entities/User");
-const Project_1 = require("../entities/Project");
-const SubTask_1 = require("../entities/SubTask");
-const typeorm_1 = require("typeorm");
-const ActivityController_1 = require("./ActivityController");
-const Activity_1 = require("../entities/Activity");
+const prisma_1 = require("../config/prisma");
+const enums_1 = require("../types/enums");
 const emailService_1 = require("../utils/emailService");
 const subtaskTree_1 = require("../utils/subtaskTree");
+const hierarchyAuthority_1 = require("../utils/hierarchyAuthority");
+const simpleArray_1 = require("../utils/simpleArray");
+// Falls back by NODE_ENV (not just a single hardcoded default) so a missing
+// FRONTEND_URL env var still points production task-assignment emails at the
+// deployed frontend instead of localhost — same pattern as InviteController.
+const FRONTEND_URL = process.env.FRONTEND_URL ||
+    (process.env.NODE_ENV === "production"
+        ? "https://www.jdnenergy.com.np"
+        : "http://localhost:5173");
+const sanitizeCreatedBy = (task) => {
+    if (task.createdBy) {
+        const { id, fullName, email } = task.createdBy;
+        task.createdBy = { id, fullName, email };
+    }
+};
+/** Flattens Prisma's TaskAssignee join rows / raw `files` text column back
+ * into the plain shape the frontend has always received. */
+const shapeTask = (task) => ({
+    ...task,
+    files: (0, simpleArray_1.toSimpleArray)(task.files),
+    assignedUsers: Array.isArray(task.assignedUsers)
+        ? task.assignedUsers.map((a) => a.user)
+        : task.assignedUsers,
+});
+const TASK_LIST_INCLUDE = {
+    assignedUsers: { include: { user: true } },
+    project: true,
+    comments: true,
+    createdBy: true,
+};
+const TASK_DETAIL_INCLUDE = {
+    assignedUsers: { include: { user: true } },
+    project: true,
+    comments: { include: { author: true } },
+    createdBy: true,
+};
+async function attachSubTaskTrees(tasks) {
+    const taskIds = tasks.map((t) => t.id);
+    if (taskIds.length === 0)
+        return new Map();
+    const allSubTasks = await prisma_1.prisma.subTask.findMany({
+        where: { taskId: { in: taskIds } },
+        include: { parent: true },
+    });
+    const subTasksByTask = new Map();
+    allSubTasks.forEach((st) => {
+        const taskId = st.taskId;
+        if (!subTasksByTask.has(taskId))
+            subTasksByTask.set(taskId, []);
+        subTasksByTask.get(taskId).push({ ...st, history: st.history ? JSON.parse(st.history) : [] });
+    });
+    const treesByTask = new Map();
+    subTasksByTask.forEach((subTasks, taskId) => {
+        treesByTask.set(taskId, (0, subtaskTree_1.buildSubTaskTree)(subTasks));
+    });
+    return treesByTask;
+}
 class TaskController {
     static createTask = async (req, res) => {
-        const { companyName, title, description, priority, dueDate, userIds, assignAll, projectId, progress, subTasks, projectName, } = req.body;
+        const { title, description, priority, dueDate, userIds, assignAll, projectId, progress, subTasks, projectName, } = req.body;
         const files = req.files;
-        if (!companyName || !title || !priority || !dueDate) {
+        if (!title || !priority || !dueDate) {
             return res
                 .status(400)
                 .json({ message: "All fields except assignments are required" });
         }
         try {
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
             let assignedUsers = [];
             let project = null;
             let parsedUserIds = [];
@@ -40,39 +86,71 @@ class TaskController {
                         .filter((id) => !isNaN(id));
                 }
             }
+            const actorId = req.user.id;
+            const actorRole = req.user.role;
+            const organizationId = req.organization.id;
+            const isSuperAdmin = actorRole === enums_1.UserRole.SUPER_ADMIN;
             if (assignAll === "true" || assignAll === true) {
-                assignedUsers = await userRepository.find();
+                if (isSuperAdmin) {
+                    assignedUsers = (await prisma_1.prisma.organizationMembership.findMany({
+                        where: { organizationId },
+                        include: { user: true },
+                    })).map((m) => m.user);
+                }
+                else {
+                    // Non-root actors can only ever assign within their own reporting
+                    // line — "all" means "all of my descendants", not the organization.
+                    const descendantIds = await (0, hierarchyAuthority_1.getDescendantUserIds)(organizationId, actorId);
+                    const ids = Array.from(new Set([actorId, ...descendantIds]));
+                    assignedUsers = await prisma_1.prisma.user.findMany({ where: { id: { in: ids } } });
+                }
             }
             else if (parsedUserIds.length > 0) {
-                assignedUsers = await userRepository.findBy({ id: (0, typeorm_1.In)(parsedUserIds) });
+                if (!isSuperAdmin) {
+                    const descendantIds = new Set(await (0, hierarchyAuthority_1.getDescendantUserIds)(organizationId, actorId));
+                    const invalidIds = parsedUserIds.filter((id) => id !== actorId && !descendantIds.has(id));
+                    if (invalidIds.length > 0) {
+                        return res.status(403).json({
+                            message: "You can only assign a task to yourself or someone below you in the hierarchy",
+                        });
+                    }
+                }
+                assignedUsers = await prisma_1.prisma.user.findMany({ where: { id: { in: parsedUserIds } } });
             }
             if (projectId) {
-                project = await projectRepository.findOneBy({
-                    id: parseInt(projectId),
+                project = await prisma_1.prisma.project.findUnique({
+                    where: { id: parseInt(projectId) },
                 });
                 if (!project)
                     return res.status(404).json({ message: "Project not found" });
             }
             const filePaths = files ? files.map((file) => file.path) : [];
-            const user = await userRepository.findOneBy({ id: req.user.id });
-            const taskPayload = {
-                companyName,
-                title,
-                ...(description !== undefined ? { description } : {}),
-                priority: priority,
-                status: TaskEnums_1.TaskStatus.PENDING,
-                dueDate: new Date(dueDate),
-                assignedUsers,
+            const user = await prisma_1.prisma.user.findUnique({ where: { id: req.user.id } });
+            const newTaskRow = await prisma_1.prisma.task.create({
+                data: {
+                    title,
+                    ...(description !== undefined ? { description } : {}),
+                    priority: priority,
+                    status: enums_1.TaskStatus.PENDING,
+                    dueDate: new Date(dueDate),
+                    files: (0, simpleArray_1.fromSimpleArray)(filePaths),
+                    progress: progress ? parseInt(progress) : 0,
+                    projectName: (projectName || null),
+                    createdById: user.id,
+                    organizationId,
+                    ...(project ? { projectId: project.id } : {}),
+                    assignedUsers: {
+                        create: assignedUsers.map((u) => ({ userId: u.id })),
+                    },
+                },
+            });
+            const newTask = {
+                ...newTaskRow,
                 files: filePaths,
-                progress: progress ? parseInt(progress) : 0,
-                projectName: (projectName || null),
+                assignedUsers,
+                project,
                 createdBy: user,
-                workspace: req.workspace,
             };
-            if (project)
-                taskPayload.project = project;
-            const newTask = taskRepository.create(taskPayload);
-            await taskRepository.save(newTask);
             // Send email notifications to assigned users
             console.log("[Task Create] Checking assigned users:", assignedUsers.length);
             if (assignedUsers.length > 0) {
@@ -84,6 +162,7 @@ class TaskController {
                 console.log("[Task Create] RESEND_FROM_EMAIL:", process.env.RESEND_FROM_EMAIL);
                 const assignedBy = user?.fullName || "EMS Administrator";
                 const emailSubject = `New Task Assigned: ${title}`;
+                const dashboardUrl = `${FRONTEND_URL}/${req.organization.id}/dashboard`;
                 const priorityColors = {
                     LOW: "#10b981",
                     MEDIUM: "#f59e0b",
@@ -200,7 +279,7 @@ EMS Management
                         <table role="presentation" style="width: 100%; margin-bottom: 24px;">
                           <tr>
                             <td align="center">
-                              <a href="#" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: #ffffff; font-size: 15px; font-weight: 600; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">
+                              <a href="${dashboardUrl}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: #ffffff; font-size: 15px; font-weight: 600; text-decoration: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">
                                 View Task in Dashboard
                               </a>
                             </td>
@@ -231,7 +310,7 @@ EMS Management
           </html>
         `;
                 console.log("[Task Create] Calling sendEmail...");
-                (0, emailService_1.sendEmail)(recipientEmails, emailSubject, emailText, emailHtml)
+                (0, emailService_1.sendEmail)(recipientEmails, emailSubject, emailText, emailHtml, "task-assignment")
                     .then((success) => {
                     console.log("[Task Create] sendEmail returned success:", success);
                 })
@@ -246,7 +325,7 @@ EMS Management
             if (subTasks) {
                 const parsedSubTasks = typeof subTasks === "string" ? JSON.parse(subTasks) : subTasks;
                 if (Array.isArray(parsedSubTasks)) {
-                    await (0, subtaskTree_1.saveSubTasks)(parsedSubTasks, newTask, subTaskRepository);
+                    await (0, subtaskTree_1.saveSubTasks)(parsedSubTasks, newTask.id);
                 }
             }
             // Fetch all subtasks to return the complete tree with real DB IDs
@@ -255,14 +334,9 @@ EMS Management
             if (newTask.subTasks.length > 0) {
                 const avg = (0, subtaskTree_1.computeAverageLeafProgress)(newTask.subTasks);
                 newTask.progress = avg;
-                await taskRepository.update(newTask.id, { progress: avg });
+                await prisma_1.prisma.task.update({ where: { id: newTask.id }, data: { progress: avg } });
             }
-            // Log activity for task creation
-            await ActivityController_1.ActivityController.logActivity(Activity_1.ActivityType.TASK_CREATED, `Created task "${newTask.title}"`, newTask.id, req.user?.id);
-            if (assignedUsers.length > 0) {
-                const assignedNames = assignedUsers.map((u) => u.fullName).join(", ");
-                await ActivityController_1.ActivityController.logActivity(Activity_1.ActivityType.TASK_ASSIGNED, `Assigned task "${newTask.title}" to ${assignedNames}`, newTask.id, req.user?.id);
-            }
+            sanitizeCreatedBy(newTask);
             return res.status(201).json({
                 message: "Task created and assigned successfully",
                 task: newTask,
@@ -274,56 +348,40 @@ EMS Management
     };
     static getAllTasks = async (req, res) => {
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
-            const workspace = req.workspace;
+            const organization = req.organization;
             let tasks;
-            if (req.user?.role === TaskEnums_1.UserRole.SUPER_ADMIN ||
-                req.user?.role === TaskEnums_1.UserRole.ADMIN) {
-                // Super admin and regular admin can see all tasks in current workspace
-                tasks = await taskRepository.find({
-                    relations: ["assignedUsers", "project", "comments"],
-                    where: { workspace: { id: workspace.id } },
-                    order: { createdAt: "DESC" },
+            if (req.user?.role === enums_1.UserRole.SUPER_ADMIN) {
+                // Super admin sees every task in the organization.
+                tasks = await prisma_1.prisma.task.findMany({
+                    where: { organizationId: organization.id },
+                    include: TASK_LIST_INCLUDE,
+                    orderBy: { createdAt: "desc" },
                 });
             }
             else {
-                // Regular user sees tasks assigned to them in current workspace
-                tasks = await taskRepository
-                    .createQueryBuilder("task")
-                    .leftJoinAndSelect("task.assignedUsers", "user")
-                    .leftJoinAndSelect("task.project", "project")
-                    .leftJoinAndSelect("task.comments", "comment")
-                    .where("user.id = :userId", { userId: req.user?.id })
-                    .andWhere("task.workspace.id = :workspaceId", {
-                    workspaceId: workspace.id,
-                })
-                    .orderBy("task.createdAt", "DESC")
-                    .getMany();
-            }
-            if (tasks.length > 0) {
-                const taskIds = tasks.map((t) => t.id);
-                const allSubTasks = await subTaskRepository
-                    .createQueryBuilder("subTask")
-                    .leftJoinAndSelect("subTask.parent", "parent")
-                    .leftJoinAndSelect("subTask.task", "task")
-                    .addSelect("subTask.progress")
-                    .addSelect("subTask.history")
-                    .where("task.id IN (:...taskIds)", { taskIds })
-                    .getMany();
-                const subTasksByTask = new Map();
-                allSubTasks.forEach((st) => {
-                    const taskId = typeof st.task === "object" ? st.task.id : st.task;
-                    if (!subTasksByTask.has(taskId))
-                        subTasksByTask.set(taskId, []);
-                    subTasksByTask.get(taskId).push(st);
-                });
-                tasks.forEach((task) => {
-                    task.subTasks = (0, subtaskTree_1.buildSubTaskTree)(subTasksByTask.get(task.id) || []);
-                    task.progress = (0, subtaskTree_1.computeAverageLeafProgress)(task.subTasks);
+                // Everyone else (including regular admins) only sees a task if they
+                // assigned it (created it) or were assigned to it.
+                tasks = await prisma_1.prisma.task.findMany({
+                    where: {
+                        organizationId: organization.id,
+                        OR: [
+                            { assignedUsers: { some: { userId: req.user.id } } },
+                            { createdById: req.user.id },
+                        ],
+                    },
+                    include: TASK_LIST_INCLUDE,
+                    orderBy: { createdAt: "desc" },
                 });
             }
-            return res.status(200).json(tasks);
+            const treesByTask = await attachSubTaskTrees(tasks);
+            const shaped = tasks.map((task) => {
+                const shapedTask = shapeTask(task);
+                sanitizeCreatedBy(shapedTask);
+                shapedTask.subTasks = treesByTask.get(task.id) || [];
+                shapedTask.progress = (0, subtaskTree_1.computeAverageLeafProgress)(shapedTask.subTasks);
+                return shapedTask;
+            });
+            return res.status(200).json(shaped);
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });
@@ -336,27 +394,28 @@ EMS Management
             return res.status(400).json({ message: "Progress is required" });
         }
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const task = await taskRepository.findOne({
+            const task = await prisma_1.prisma.task.findUnique({
                 where: { id: parseInt(id) },
-                relations: ["assignedUsers"],
+                include: { assignedUsers: true },
             });
             if (!task)
                 return res.status(404).json({ message: "Task not found" });
             const userId = req.user?.id;
-            const isAssigned = task.assignedUsers.some((user) => user.id === userId);
+            const isAssigned = task.assignedUsers.some((a) => a.userId === userId);
             if (!isAssigned &&
-                req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
-                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN) {
+                req.user?.role !== enums_1.UserRole.ADMIN &&
+                req.user?.role !== enums_1.UserRole.SUPER_ADMIN) {
                 return res
                     .status(403)
                     .json({ message: "Forbidden: You are not assigned to this task." });
             }
-            task.progress = parseInt(progress);
-            await taskRepository.save(task);
+            const updated = await prisma_1.prisma.task.update({
+                where: { id: task.id },
+                data: { progress: parseInt(progress) },
+            });
             return res
                 .status(200)
-                .json({ message: "Task progress updated successfully", task });
+                .json({ message: "Task progress updated successfully", task: updated });
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });
@@ -365,23 +424,25 @@ EMS Management
     static getTaskById = async (req, res) => {
         const { id } = req.params;
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const task = await taskRepository.findOne({
+            const task = await prisma_1.prisma.task.findUnique({
                 where: { id: parseInt(id) },
-                relations: ["assignedUsers", "project", "comments", "comments.author"],
+                include: TASK_DETAIL_INCLUDE,
             });
             if (!task)
                 return res.status(404).json({ message: "Task not found" });
-            if (req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
-                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN) {
-                const assignedToUser = task.assignedUsers.some((user) => user.id === req.user?.id);
-                if (!assignedToUser)
+            if (req.user?.role !== enums_1.UserRole.SUPER_ADMIN) {
+                // Only the assigner (creator) and the assignees may view a task.
+                const assignedToUser = task.assignedUsers.some((a) => a.userId === req.user?.id);
+                const isCreator = task.createdById === req.user?.id;
+                if (!assignedToUser && !isCreator)
                     return res.status(403).json({ message: "Forbidden" });
             }
             const allSubTasks = await (0, subtaskTree_1.fetchSubTasksForTask)(task.id);
-            task.subTasks = (0, subtaskTree_1.buildSubTaskTree)(allSubTasks);
-            task.progress = (0, subtaskTree_1.computeAverageLeafProgress)(task.subTasks);
-            return res.status(200).json(task);
+            const shapedTask = shapeTask(task);
+            shapedTask.subTasks = (0, subtaskTree_1.buildSubTaskTree)(allSubTasks);
+            shapedTask.progress = (0, subtaskTree_1.computeAverageLeafProgress)(shapedTask.subTasks);
+            sanitizeCreatedBy(shapedTask);
+            return res.status(200).json(shapedTask);
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });
@@ -389,46 +450,38 @@ EMS Management
     };
     static updateTask = async (req, res) => {
         const { id } = req.params;
-        const { companyName, title, description, priority, dueDate, status, userIds, assignAll, projectId, progress, subTasks, projectName, } = req.body;
+        const { title, description, priority, dueDate, status, userIds, assignAll, projectId, progress, subTasks, projectName, } = req.body;
         const files = req.files;
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
-            const task = await taskRepository.findOne({
-                where: { id: parseInt(id) },
-                relations: ["assignedUsers", "project"],
-            });
+            const taskId = parseInt(id);
+            const task = await prisma_1.prisma.task.findUnique({ where: { id: taskId } });
             if (!task)
                 return res.status(404).json({ message: "Task not found" });
-            const oldStatus = task.status;
-            if (companyName)
-                task.companyName = companyName;
+            const data = {};
             if (title)
-                task.title = title;
+                data.title = title;
             if (description !== undefined)
-                task.description = description;
+                data.description = description;
             if (priority)
-                task.priority = priority;
-            if (status && Object.values(TaskEnums_1.TaskStatus).includes(status))
-                task.status = status;
+                data.priority = priority;
+            if (status && Object.values(enums_1.TaskStatus).includes(status))
+                data.status = status;
             if (dueDate)
-                task.dueDate = new Date(dueDate);
+                data.dueDate = new Date(dueDate);
             if (progress !== undefined)
-                task.progress = parseInt(progress);
+                data.progress = parseInt(progress);
             if (projectName !== undefined)
-                task.projectName = projectName;
+                data.projectName = projectName;
             if (projectId) {
-                const project = await projectRepository.findOneBy({
-                    id: parseInt(projectId),
+                const project = await prisma_1.prisma.project.findUnique({
+                    where: { id: parseInt(projectId) },
                 });
                 if (!project)
                     return res.status(404).json({ message: "Project not found" });
-                task.project = project;
+                data.projectId = project.id;
             }
             let parsedUserIds = [];
-            if (userIds) {
+            if (userIds !== undefined && userIds !== null) {
                 if (Array.isArray(userIds)) {
                     parsedUserIds = userIds.map((id) => parseInt(id.toString()));
                 }
@@ -439,20 +492,45 @@ EMS Management
                         .filter((id) => !isNaN(id));
                 }
             }
-            let newAssignedUsers = [...task.assignedUsers];
+            const actorId = req.user.id;
+            const actorRole = req.user.role;
+            const organizationId = req.organization.id;
+            const isSuperAdmin = actorRole === enums_1.UserRole.SUPER_ADMIN;
+            let newAssignedUserIds = null;
             if (assignAll === "true" || assignAll === true) {
-                newAssignedUsers = await userRepository.find();
-                task.assignedUsers = newAssignedUsers;
+                if (isSuperAdmin) {
+                    newAssignedUserIds = (await prisma_1.prisma.organizationMembership.findMany({
+                        where: { organizationId },
+                        select: { userId: true },
+                    })).map((m) => m.userId);
+                }
+                else {
+                    const descendantIds = await (0, hierarchyAuthority_1.getDescendantUserIds)(organizationId, actorId);
+                    newAssignedUserIds = Array.from(new Set([actorId, ...descendantIds]));
+                }
             }
-            else if (parsedUserIds.length > 0) {
-                newAssignedUsers = await userRepository.findBy({
-                    id: (0, typeorm_1.In)(parsedUserIds),
-                });
-                task.assignedUsers = newAssignedUsers;
+            else if (userIds !== undefined && userIds !== null) {
+                if (!isSuperAdmin && parsedUserIds.length > 0) {
+                    const descendantIds = new Set(await (0, hierarchyAuthority_1.getDescendantUserIds)(organizationId, actorId));
+                    const invalidIds = parsedUserIds.filter((uid) => uid !== actorId && !descendantIds.has(uid));
+                    if (invalidIds.length > 0) {
+                        return res.status(403).json({
+                            message: "You can only assign a task to yourself or someone below you in the hierarchy",
+                        });
+                    }
+                }
+                // Explicitly provided (possibly empty) — replace assignees, including clearing to none.
+                newAssignedUserIds = parsedUserIds;
+            }
+            if (newAssignedUserIds !== null) {
+                data.assignedUsers = {
+                    deleteMany: {},
+                    create: newAssignedUserIds.map((userId) => ({ userId })),
+                };
             }
             if (files && files.length > 0) {
                 const newFilePaths = files.map((file) => file.path);
-                task.files = [...(task.files || []), ...newFilePaths];
+                data.files = (0, simpleArray_1.fromSimpleArray)([...(0, simpleArray_1.toSimpleArray)(task.files), ...newFilePaths]);
             }
             // Handle subTasks (supports nested) — UPDATE existing ones to preserve history/progress
             if (subTasks) {
@@ -463,85 +541,84 @@ EMS Management
                     const existingSubTasksMap = new Map();
                     existingSubTasks.forEach((st) => existingSubTasksMap.set(String(st.id), st));
                     // 2. Helper to update or create subtasks recursively
-                    const updateOrCreateSubTasks = async (subTasksList, parentSubTask) => {
+                    const updateOrCreateSubTasks = async (subTasksList, parentSubTaskId) => {
                         for (const subTaskData of subTasksList) {
                             if (!subTaskData.title)
                                 continue;
                             const subTaskIdStr = String(subTaskData.id);
-                            let subTask;
+                            let subTaskId;
+                            const rawEstimatedDays = subTaskData.estimatedDays;
+                            const estimatedDays = rawEstimatedDays !== undefined && rawEstimatedDays !== null && rawEstimatedDays !== ""
+                                ? Number(rawEstimatedDays)
+                                : undefined;
+                            const hasValidEstimatedDays = estimatedDays !== undefined && Number.isFinite(estimatedDays) && estimatedDays >= 0;
                             if (existingSubTasksMap.has(subTaskIdStr) &&
                                 !subTaskIdStr.startsWith("temp-")) {
                                 // Update existing subtask (preserve history, progress!)
-                                subTask = existingSubTasksMap.get(subTaskIdStr);
-                                subTask.title = subTaskData.title;
-                                if (parentSubTask)
-                                    subTask.parent = parentSubTask;
-                                await subTaskRepository.save(subTask);
+                                const existing = existingSubTasksMap.get(subTaskIdStr);
+                                subTaskId = existing.id;
+                                await prisma_1.prisma.subTask.update({
+                                    where: { id: subTaskId },
+                                    data: {
+                                        title: subTaskData.title,
+                                        ...(hasValidEstimatedDays ? { estimatedDays } : {}),
+                                        ...(parentSubTaskId !== undefined ? { parentId: parentSubTaskId } : {}),
+                                    },
+                                });
                                 existingSubTasksMap.delete(subTaskIdStr); // Mark as processed
                             }
                             else {
                                 // Create new subtask
-                                subTask = subTaskRepository.create({
-                                    title: subTaskData.title,
-                                    task,
-                                    ...(parentSubTask ? { parent: parentSubTask } : {}),
+                                const created = await prisma_1.prisma.subTask.create({
+                                    data: {
+                                        title: subTaskData.title,
+                                        taskId: task.id,
+                                        ...(hasValidEstimatedDays ? { estimatedDays } : {}),
+                                        ...(parentSubTaskId !== undefined ? { parentId: parentSubTaskId } : {}),
+                                    },
                                 });
-                                await subTaskRepository.save(subTask);
+                                subTaskId = created.id;
                             }
                             // Process children
                             if (Array.isArray(subTaskData.subTasks) &&
                                 subTaskData.subTasks.length > 0) {
-                                await updateOrCreateSubTasks(subTaskData.subTasks, subTask);
+                                await updateOrCreateSubTasks(subTaskData.subTasks, subTaskId);
                             }
                         }
                     };
                     // 3. Process the parsed subtasks
                     await updateOrCreateSubTasks(parsedSubTasks);
-                    // 4. Delete remaining (unprocessed) existing subtasks
-                    const subtasksToDelete = Array.from(existingSubTasksMap.values());
-                    // Delete leaf nodes first
-                    const deleteLeafNodes = async (toDelete) => {
-                        if (toDelete.length === 0)
-                            return;
-                        const leafNodes = toDelete.filter((st) => {
-                            const hasChildren = toDelete.some((other) => other.parent?.id === st.id);
-                            return !hasChildren;
-                        });
-                        if (leafNodes.length > 0) {
-                            await subTaskRepository.remove(leafNodes);
-                            await deleteLeafNodes(toDelete.filter((st) => !leafNodes.includes(st)));
-                        }
-                    };
-                    await deleteLeafNodes(subtasksToDelete);
+                    // 4. Delete remaining (unprocessed) existing subtasks. Any subtask
+                    // that was kept already had its parentId reassigned above (to
+                    // wherever the payload put it), so it's no longer a DB child of
+                    // any node still in this set — a single bulk delete (letting
+                    // onDelete: Cascade handle any subtask-of-a-subtask still in this
+                    // same set) reaches the identical end state as deleting leaves
+                    // first.
+                    const idsToDelete = Array.from(existingSubTasksMap.values()).map((st) => st.id);
+                    if (idsToDelete.length > 0) {
+                        await prisma_1.prisma.subTask.deleteMany({ where: { id: { in: idsToDelete } } });
+                    }
                 }
             }
-            await taskRepository.save(task);
-            // 4. Refetch task WITHOUT subTasks relations (we will build it manually)
-            const updatedTask = await taskRepository.findOne({
+            await prisma_1.prisma.task.update({ where: { id: task.id }, data });
+            // Refetch task WITHOUT subTasks relations (we will build it manually)
+            const updatedTaskRow = await prisma_1.prisma.task.findUnique({
                 where: { id: task.id },
-                relations: ["assignedUsers", "project", "comments", "comments.author"],
+                include: TASK_DETAIL_INCLUDE,
             });
-            // 5. Fetch ALL subtasks and build the complete tree
+            // Fetch ALL subtasks and build the complete tree
             const allSubTasks = await (0, subtaskTree_1.fetchSubTasksForTask)(task.id);
-            if (updatedTask) {
+            let updatedTask = null;
+            if (updatedTaskRow) {
+                updatedTask = shapeTask(updatedTaskRow);
                 updatedTask.subTasks = (0, subtaskTree_1.buildSubTaskTree)(allSubTasks);
                 updatedTask.progress = (0, subtaskTree_1.computeAverageLeafProgress)(updatedTask.subTasks);
-                await taskRepository.update(task.id, {
-                    progress: updatedTask.progress,
+                await prisma_1.prisma.task.update({
+                    where: { id: task.id },
+                    data: { progress: updatedTask.progress },
                 });
-            }
-            // Log activity if status changed
-            if (status && status !== oldStatus) {
-                const statusLabel = status.replace(/_/g, " ");
-                await ActivityController_1.ActivityController.logActivity(Activity_1.ActivityType.STATUS_CHANGED, `Changed status of "${task.title}" to ${statusLabel}`, task.id, req.user?.id);
-            }
-            // Log activity if assigned users changed
-            if ((assignAll !== undefined && assignAll !== null) ||
-                (userIds && parsedUserIds.length > 0)) {
-                const assignedNames = newAssignedUsers
-                    .map((u) => u.fullName)
-                    .join(", ");
-                await ActivityController_1.ActivityController.logActivity(Activity_1.ActivityType.TASK_ASSIGNED, `Assigned task "${task.title}" to ${assignedNames}`, task.id, req.user?.id);
+                sanitizeCreatedBy(updatedTask);
             }
             return res
                 .status(200)
@@ -557,28 +634,27 @@ EMS Management
         if (!status)
             return res.status(400).json({ message: "Status is required" });
         const normalized = String(status).toLowerCase().replace(/\s+/g, "_");
-        if (!Object.values(TaskEnums_1.TaskStatus).includes(normalized)) {
+        if (!Object.values(enums_1.TaskStatus).includes(normalized)) {
             return res.status(400).json({ message: "Invalid status value" });
         }
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const task = await taskRepository.findOne({
+            const task = await prisma_1.prisma.task.findUnique({
                 where: { id: parseInt(id) },
-                relations: ["assignedUsers"],
+                include: { assignedUsers: true },
             });
             if (!task)
                 return res.status(404).json({ message: "Task not found" });
             const userId = req.user?.id;
-            const isAssigned = task.assignedUsers.some((user) => user.id === userId);
+            const isAssigned = task.assignedUsers.some((a) => a.userId === userId);
             if (!isAssigned &&
-                req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
-                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN)
+                req.user?.role !== enums_1.UserRole.ADMIN &&
+                req.user?.role !== enums_1.UserRole.SUPER_ADMIN)
                 return res.status(403).json({ message: "Forbidden" });
-            task.status = normalized;
-            await taskRepository.save(task);
-            const statusLabel = normalized.replace(/_/g, " ");
-            await ActivityController_1.ActivityController.logActivity(Activity_1.ActivityType.STATUS_CHANGED, `Changed status of "${task.title}" to ${statusLabel}`, task.id, userId);
-            return res.status(200).json({ message: "Task status updated", task });
+            const updated = await prisma_1.prisma.task.update({
+                where: { id: task.id },
+                data: { status: normalized },
+            });
+            return res.status(200).json({ message: "Task status updated", task: updated });
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });
@@ -587,41 +663,26 @@ EMS Management
     static getTasksByProject = async (req, res) => {
         const { projectId } = req.params;
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
             const projectIdInt = parseInt(projectId);
-            const projectTasks = await taskRepository.find({
-                where: { project: { id: projectIdInt } },
-                relations: ["assignedUsers", "project", "comments"],
-                order: { createdAt: "DESC" },
+            const projectTasks = await prisma_1.prisma.task.findMany({
+                where: { projectId: projectIdInt },
+                include: TASK_LIST_INCLUDE,
+                orderBy: { createdAt: "desc" },
             });
             let tasksToReturn = projectTasks;
-            if (req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
-                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN) {
-                tasksToReturn = projectTasks.filter((task) => task.assignedUsers.some((user) => user.id === req.user?.id));
+            if (req.user?.role !== enums_1.UserRole.SUPER_ADMIN) {
+                // Only the assigner (creator) and the assignees may view a task.
+                tasksToReturn = projectTasks.filter((task) => task.assignedUsers.some((a) => a.userId === req.user?.id) ||
+                    task.createdById === req.user?.id);
             }
-            if (tasksToReturn.length > 0) {
-                const taskIds = tasksToReturn.map((t) => t.id);
-                const allSubTasks = await subTaskRepository
-                    .createQueryBuilder("subTask")
-                    .leftJoinAndSelect("subTask.parent", "parent")
-                    .leftJoinAndSelect("subTask.task", "task")
-                    .addSelect("subTask.progress")
-                    .addSelect("subTask.history")
-                    .where("task.id IN (:...taskIds)", { taskIds })
-                    .getMany();
-                const subTasksByTask = new Map();
-                allSubTasks.forEach((st) => {
-                    const taskId = typeof st.task === "object" ? st.task.id : st.task;
-                    if (!subTasksByTask.has(taskId))
-                        subTasksByTask.set(taskId, []);
-                    subTasksByTask.get(taskId).push(st);
-                });
-                tasksToReturn.forEach((task) => {
-                    task.subTasks = (0, subtaskTree_1.buildSubTaskTree)(subTasksByTask.get(task.id) || []);
-                });
-            }
-            return res.status(200).json(tasksToReturn);
+            const treesByTask = await attachSubTaskTrees(tasksToReturn);
+            const shaped = tasksToReturn.map((task) => {
+                const shapedTask = shapeTask(task);
+                sanitizeCreatedBy(shapedTask);
+                shapedTask.subTasks = treesByTask.get(task.id) || [];
+                return shapedTask;
+            });
+            return res.status(200).json(shaped);
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });
@@ -630,13 +691,12 @@ EMS Management
     static deleteTask = async (req, res) => {
         const { id } = req.params;
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const task = await taskRepository.findOne({
+            const task = await prisma_1.prisma.task.findUnique({
                 where: { id: parseInt(id) },
             });
             if (!task)
                 return res.status(404).json({ message: "Task not found" });
-            await taskRepository.remove(task);
+            await prisma_1.prisma.task.delete({ where: { id: task.id } });
             return res.status(200).json({ message: "Task deleted successfully" });
         }
         catch (error) {

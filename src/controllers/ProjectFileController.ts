@@ -1,15 +1,11 @@
 import { Response } from "express";
 import path from "path";
 import fs from "fs";
-import { IsNull, In } from "typeorm";
-import { AppDataSource } from "../config/data-source";
-import { Project } from "../entities/Project";
-import { User } from "../entities/User";
-import { ProjectFile } from "../entities/ProjectFile";
-import { FileAccess } from "../entities/FileAccess";
+import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { AddProjectFolderDto, RenameProjectFileDto } from "../dto/project-file.dto";
 import { SetFileAccessDto, FileAccessGrantDto } from "../dto/file-access.dto";
+import type { FileAccessLevel, FileGranteeType } from "../types/domain";
 import {
   filterAndAnnotate,
   resolveAccessForFile,
@@ -17,9 +13,9 @@ import {
 } from "../utils/fileAccess";
 import { roleHasPermission } from "../utils/permissionService";
 
-/** A file/folder is either project-scoped (Documents tab) or workspace-scoped (sidebar Documents page, project null) — resolve whichever workspace actually owns it. */
-const ownerWorkspaceId = (file: ProjectFile): number | undefined =>
-  file.project ? file.project.workspace?.id : file.workspace?.id;
+/** A file/folder is either project-scoped (Documents tab) or organization-scoped (sidebar Documents page, project null) — every ProjectFile row carries its own organizationId regardless, so this is just that column. */
+const ownerOrganizationId = (file: { organizationId: number | null }): number | undefined =>
+  file.organizationId ?? undefined;
 
 /** Documents tab: files and folders scoped to a project. */
 export class ProjectFileController {
@@ -27,31 +23,25 @@ export class ProjectFileController {
   static getProjectFiles = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
     try {
-      const projectRepository = AppDataSource.getRepository(Project);
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-
-      const project = await projectRepository.findOne({
+      const project = await prisma.project.findFirst({
         where: {
           id: parseInt(projectId as string),
-          workspace: { id: req.workspace!.id },
+          organizationId: req.organization!.id,
         },
       });
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
       }
 
-      const files = await fileRepository.find({
-        where: { project: { id: project.id } },
-        relations: ["uploadedBy"],
-        order: { isFolder: "DESC", createdAt: "ASC" },
+      const files = await prisma.projectFile.findMany({
+        where: { projectId: project.id },
+        include: { uploadedBy: true },
+        orderBy: [{ isFolder: "desc" }, { createdAt: "asc" }],
       });
 
       const fileIds = files.map((f) => f.id);
       const grants = fileIds.length
-        ? await AppDataSource.getRepository(FileAccess).find({
-            where: { file: { id: In(fileIds) } },
-            relations: ["user", "file"],
-          })
+        ? await prisma.fileAccess.findMany({ where: { fileId: { in: fileIds } } })
         : [];
       const visible = filterAndAnnotate(files, grants, req.user!.id, req.user!.role);
 
@@ -72,13 +62,10 @@ export class ProjectFileController {
     }
 
     try {
-      const projectRepository = AppDataSource.getRepository(Project);
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-
-      const project = await projectRepository.findOne({
+      const project = await prisma.project.findFirst({
         where: {
           id: parseInt(projectId as string),
-          workspace: { id: req.workspace!.id },
+          organizationId: req.organization!.id,
         },
       });
       if (!project) {
@@ -91,11 +78,8 @@ export class ProjectFileController {
           : null;
 
       if (parsedParentId !== null) {
-        const parentFile = await fileRepository.findOne({
-          where: { id: parsedParentId },
-          relations: ["project", "project.workspace", "workspace"],
-        });
-        if (!parentFile || ownerWorkspaceId(parentFile) !== req.workspace!.id) {
+        const parentFile = await prisma.projectFile.findFirst({ where: { id: parsedParentId } });
+        if (!parentFile || ownerOrganizationId(parentFile) !== req.organization!.id) {
           return res.status(404).json({ message: "Parent folder not found" });
         }
         const parentLevel = await resolveAccessForFile(parentFile, req.user!.id, req.user!.role);
@@ -111,18 +95,14 @@ export class ProjectFileController {
         }
       }
 
-      const duplicate = await fileRepository
-        .createQueryBuilder("file")
-        .where("file.projectId = :projectId", { projectId: project.id })
-        .andWhere("file.isFolder = true")
-        .andWhere("LOWER(file.name) = LOWER(:name)", { name: trimmedName })
-        .andWhere(
-          parsedParentId === null
-            ? "file.parentId IS NULL"
-            : "file.parentId = :parentId",
-          parsedParentId === null ? {} : { parentId: parsedParentId },
-        )
-        .getOne();
+      const duplicate = await prisma.projectFile.findFirst({
+        where: {
+          projectId: project.id,
+          isFolder: true,
+          name: { equals: trimmedName, mode: "insensitive" },
+          parentId: parsedParentId,
+        },
+      });
 
       if (duplicate) {
         return res
@@ -130,17 +110,16 @@ export class ProjectFileController {
           .json({ message: "A folder with this name already exists" });
       }
 
-      const folderData: Partial<ProjectFile> = {
-        name: trimmedName,
-        isFolder: true,
-        project,
-        workspace: req.workspace!,
-        ...(parsedParentId !== null ? { parentId: parsedParentId } : {}),
-      };
-
-      const folder = fileRepository.create(folderData);
-      await fileRepository.save(folder);
-      await grantCreatorAccess(folder, req.user!.id, req.user!.role, req.workspace!);
+      const folder = await prisma.projectFile.create({
+        data: {
+          name: trimmedName,
+          isFolder: true,
+          projectId: project.id,
+          organizationId: req.organization!.id,
+          ...(parsedParentId !== null ? { parentId: parsedParentId } : {}),
+        },
+      });
+      await grantCreatorAccess(folder, req.user!.id, req.user!.role, req.organization!.id);
       return res.status(201).json({ message: "Folder created", file: folder });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -158,47 +137,40 @@ export class ProjectFileController {
     }
 
     try {
-      const projectRepository = AppDataSource.getRepository(Project);
-      const userRepository = AppDataSource.getRepository(User);
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-
-      const project = await projectRepository.findOne({
+      const project = await prisma.project.findFirst({
         where: {
           id: parseInt(projectId as string),
-          workspace: { id: req.workspace!.id },
+          organizationId: req.organization!.id,
         },
       });
       if (!project) {
-        // Clean up the orphaned upload if the project doesn't exist/isn't in this workspace
+        // Clean up the orphaned upload if the project doesn't exist/isn't in this organization
         fs.unlink(uploadedFile.path, () => {});
         return res.status(404).json({ message: "Project not found" });
       }
 
-      const uploadedBy = await userRepository.findOneBy({ id: req.user!.id });
+      const uploadedBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
       const relativePath = path
         .relative("uploads", uploadedFile.path)
         .split(path.sep)
         .join("/");
       const ext = path.extname(uploadedFile.originalname).replace(".", "").toLowerCase();
 
-      const fileData: Partial<ProjectFile> = {
+      const fileData: any = {
         name: uploadedFile.originalname,
         isFolder: false,
         size: uploadedFile.size,
         path: relativePath,
-        project,
-        workspace: req.workspace!,
+        projectId: project.id,
+        organizationId: req.organization!.id,
         ...(ext ? { type: ext } : {}),
-        ...(uploadedBy ? { uploadedBy } : {}),
+        ...(uploadedBy ? { uploadedById: uploadedBy.id } : {}),
       };
 
       if (parentId !== undefined && parentId !== null && parentId !== "") {
         const parsedParentId = parseInt(parentId as string);
-        const parentFile = await fileRepository.findOne({
-          where: { id: parsedParentId },
-          relations: ["project", "project.workspace", "workspace"],
-        });
-        if (!parentFile || ownerWorkspaceId(parentFile) !== req.workspace!.id) {
+        const parentFile = await prisma.projectFile.findFirst({ where: { id: parsedParentId } });
+        if (!parentFile || ownerOrganizationId(parentFile) !== req.organization!.id) {
           fs.unlink(uploadedFile.path, () => {});
           return res.status(404).json({ message: "Parent folder not found" });
         }
@@ -216,9 +188,8 @@ export class ProjectFileController {
         }
       }
 
-      const file = fileRepository.create(fileData);
-      await fileRepository.save(file);
-      await grantCreatorAccess(file, req.user!.id, req.user!.role, req.workspace!);
+      const file = await prisma.projectFile.create({ data: fileData });
+      await grantCreatorAccess(file, req.user!.id, req.user!.role, req.organization!.id);
       return res.status(201).json({ message: "File uploaded", file });
     } catch (error) {
       fs.unlink(uploadedFile.path, () => {});
@@ -230,17 +201,15 @@ export class ProjectFileController {
   static downloadProjectFile = async (req: AuthRequest, res: Response) => {
     const { fileId } = req.params;
     try {
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const file = await fileRepository.findOne({
+      const file = await prisma.projectFile.findFirst({
         where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace", "workspace"],
       });
 
       if (
         !file ||
         file.isFolder ||
         !file.path ||
-        ownerWorkspaceId(file) !== req.workspace!.id
+        ownerOrganizationId(file) !== req.organization!.id
       ) {
         return res.status(404).json({ message: "File not found" });
       }
@@ -268,13 +237,11 @@ export class ProjectFileController {
     }
 
     try {
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const file = await fileRepository.findOne({
+      const file = await prisma.projectFile.findFirst({
         where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace", "workspace"],
       });
 
-      if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
+      if (!file || ownerOrganizationId(file) !== req.organization!.id) {
         return res.status(404).json({ message: "File not found" });
       }
 
@@ -284,25 +251,17 @@ export class ProjectFileController {
       }
 
       if (file.isFolder) {
-        const duplicate = await fileRepository
-          .createQueryBuilder("f")
-          .where(
-            file.project ? "f.projectId = :scopeId" : "f.workspaceId = :scopeId",
-            { scopeId: file.project ? file.project.id : file.workspace!.id },
-          )
-          .andWhere(file.project ? "1=1" : "f.projectId IS NULL")
-          .andWhere("f.isFolder = true")
-          .andWhere("f.id != :id", { id: file.id })
-          .andWhere("LOWER(f.name) = LOWER(:name)", { name: trimmedName })
-          .andWhere(
-            file.parentId === null || file.parentId === undefined
-              ? "f.parentId IS NULL"
-              : "f.parentId = :parentId",
-            file.parentId === null || file.parentId === undefined
-              ? {}
-              : { parentId: file.parentId },
-          )
-          .getOne();
+        const duplicate = await prisma.projectFile.findFirst({
+          where: {
+            ...(file.projectId !== null
+              ? { projectId: file.projectId }
+              : { projectId: null, organizationId: file.organizationId }),
+            isFolder: true,
+            id: { not: file.id },
+            name: { equals: trimmedName, mode: "insensitive" },
+            parentId: file.parentId ?? null,
+          },
+        });
 
         if (duplicate) {
           return res
@@ -311,9 +270,11 @@ export class ProjectFileController {
         }
       }
 
-      file.name = trimmedName;
-      await fileRepository.save(file);
-      return res.status(200).json({ message: "Renamed", file });
+      const updated = await prisma.projectFile.update({
+        where: { id: file.id },
+        data: { name: trimmedName },
+      });
+      return res.status(200).json({ message: "Renamed", file: updated });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -323,12 +284,10 @@ export class ProjectFileController {
   static deleteProjectFile = async (req: AuthRequest, res: Response) => {
     const { fileId } = req.params;
     try {
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const file = await fileRepository.findOne({
+      const file = await prisma.projectFile.findFirst({
         where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace", "workspace"],
       });
-      if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
+      if (!file || ownerOrganizationId(file) !== req.organization!.id) {
         return res.status(404).json({ message: "File not found" });
       }
 
@@ -338,14 +297,15 @@ export class ProjectFileController {
       }
 
       // Gather this node plus all descendants (folders can be nested arbitrarily deep),
-      // scoped to the same project (Documents tab) or the same workspace with no
+      // scoped to the same project (Documents tab) or the same organization with no
       // project (sidebar Documents page) — whichever this file belongs to.
-      const allInScope = await fileRepository.find({
-        where: file.project
-          ? { project: { id: file.project.id } }
-          : { workspace: { id: file.workspace!.id }, project: IsNull() },
+      const allInScope = await prisma.projectFile.findMany({
+        where:
+          file.projectId !== null
+            ? { projectId: file.projectId }
+            : { organizationId: file.organizationId!, projectId: null },
       });
-      const toDelete: ProjectFile[] = [];
+      const toDelete: typeof allInScope = [];
       const collect = (nodeId: number) => {
         const node = allInScope.find((f) => f.id === nodeId);
         if (node) toDelete.push(node);
@@ -362,7 +322,7 @@ export class ProjectFileController {
         }
       }
 
-      await fileRepository.remove(toDelete);
+      await prisma.projectFile.deleteMany({ where: { id: { in: toDelete.map((n) => n.id) } } });
       return res.status(200).json({ message: "Deleted" });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
@@ -373,28 +333,25 @@ export class ProjectFileController {
   static getFileAccess = async (req: AuthRequest, res: Response) => {
     const { fileId } = req.params;
     try {
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const file = await fileRepository.findOne({
+      const file = await prisma.projectFile.findFirst({
         where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace", "workspace"],
       });
-      if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
+      if (!file || ownerOrganizationId(file) !== req.organization!.id) {
         return res.status(404).json({ message: "File not found" });
       }
 
-      const accessRepository = AppDataSource.getRepository(FileAccess);
-      const grants = await accessRepository.find({
-        where: { file: { id: file.id } },
-        relations: ["user"],
-        order: { createdAt: "ASC" },
+      const grants = await prisma.fileAccess.findMany({
+        where: { fileId: file.id },
+        include: { user: true },
+        orderBy: { createdAt: "asc" },
       });
 
       const result: FileAccessGrantDto[] = grants.map((g) => ({
         id: g.id,
-        granteeType: g.granteeType,
+        granteeType: g.granteeType as FileGranteeType,
         user: g.user ? { id: g.user.id, fullName: g.user.fullName, email: g.user.email } : null,
-        role: g.role,
-        level: g.level,
+        role: g.role ?? undefined,
+        level: g.level as FileAccessLevel,
       }));
 
       return res.status(200).json({ grants: result });
@@ -413,16 +370,12 @@ export class ProjectFileController {
     }
 
     try {
-      const fileRepository = AppDataSource.getRepository(ProjectFile);
-      const file = await fileRepository.findOne({
+      const file = await prisma.projectFile.findFirst({
         where: { id: parseInt(fileId as string) },
-        relations: ["project", "project.workspace", "workspace"],
       });
-      if (!file || ownerWorkspaceId(file) !== req.workspace!.id) {
+      if (!file || ownerOrganizationId(file) !== req.organization!.id) {
         return res.status(404).json({ message: "File not found" });
       }
-
-      const accessRepository = AppDataSource.getRepository(FileAccess);
 
       const validated = grants.filter(
         (entry) =>
@@ -432,20 +385,26 @@ export class ProjectFileController {
           ((entry.granteeType === "user" && entry.userId) || (entry.granteeType === "role" && entry.role)),
       );
 
-      await accessRepository.delete({ file: { id: file.id } });
+      const saved = await prisma.$transaction(async (tx) => {
+        await tx.fileAccess.deleteMany({ where: { fileId: file.id } });
 
-      const created = validated.map((v) =>
-        accessRepository.create({
-          file,
-          granteeType: v.granteeType,
-          ...(v.granteeType === "user" ? { user: { id: v.userId } as User } : {}),
-          ...(v.granteeType === "role" ? { role: v.role } : {}),
-          level: v.level,
-          workspace: req.workspace!,
-          grantedBy: { id: req.user!.id } as User,
-        }),
-      );
-      const saved = created.length ? await accessRepository.save(created) : [];
+        const rows = [];
+        for (const v of validated) {
+          const row = await tx.fileAccess.create({
+            data: {
+              fileId: file.id,
+              granteeType: v.granteeType,
+              ...(v.granteeType === "user" && v.userId !== undefined ? { userId: v.userId } : {}),
+              ...(v.granteeType === "role" && v.role !== undefined ? { role: v.role } : {}),
+              level: v.level,
+              organizationId: req.organization!.id,
+              grantedById: req.user!.id,
+            },
+          });
+          rows.push(row);
+        }
+        return rows;
+      });
 
       return res.status(200).json({ message: "Access updated", grants: saved });
     } catch (error) {

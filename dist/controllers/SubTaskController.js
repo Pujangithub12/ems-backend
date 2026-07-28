@@ -1,52 +1,61 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SubTaskController = void 0;
-const data_source_1 = require("../config/data-source");
-const Task_1 = require("../entities/Task");
-const TaskEnums_1 = require("../entities/TaskEnums");
-const User_1 = require("../entities/User");
-const SubTask_1 = require("../entities/SubTask");
-const SubTaskComment_1 = require("../entities/SubTaskComment");
+const prisma_1 = require("../config/prisma");
+const enums_1 = require("../types/enums");
 const subtaskTree_1 = require("../utils/subtaskTree");
 class SubTaskController {
     static addSubTask = async (req, res) => {
         const { taskId } = req.params;
-        const { title, parentSubTaskId } = req.body;
+        const { title, parentSubTaskId, estimatedDays } = req.body;
         if (!title)
             return res.status(400).json({ message: "Subtask title is required" });
+        let parsedEstimatedDays;
+        if (estimatedDays !== undefined && estimatedDays !== null && estimatedDays !== "") {
+            const n = Number(estimatedDays);
+            if (Number.isNaN(n) || n < 0) {
+                return res.status(400).json({ message: "Estimated days must be a non-negative number" });
+            }
+            parsedEstimatedDays = n;
+        }
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
-            const task = await taskRepository.findOne({
+            const task = await prisma_1.prisma.task.findUnique({
                 where: { id: parseInt(taskId) },
-                relations: ["assignedUsers"],
+                include: { assignedUsers: true },
             });
             if (!task)
                 return res.status(404).json({ message: "Task not found" });
             const userId = req.user?.id;
-            const isAssigned = task.assignedUsers.some((user) => user.id === userId);
+            const isAssigned = task.assignedUsers.some((a) => a.userId === userId);
+            const isCreator = task.createdById === userId;
             if (!isAssigned &&
-                req.user?.role !== TaskEnums_1.UserRole.ADMIN &&
-                req.user?.role !== TaskEnums_1.UserRole.SUPER_ADMIN) {
+                !isCreator &&
+                req.user?.role !== enums_1.UserRole.SUPER_ADMIN) {
                 return res
                     .status(403)
                     .json({ message: "Forbidden: You are not assigned to this task." });
             }
-            const subTaskPayload = { title, task };
+            let parentId;
             if (parentSubTaskId) {
-                const parentSubTask = await subTaskRepository.findOneBy({
-                    id: parseInt(parentSubTaskId),
+                const parentSubTask = await prisma_1.prisma.subTask.findUnique({
+                    where: { id: parseInt(parentSubTaskId) },
                 });
                 if (!parentSubTask)
                     return res.status(404).json({ message: "Parent subtask not found" });
-                subTaskPayload.parent = parentSubTask;
+                parentId = parentSubTask.id;
             }
-            const subTask = subTaskRepository.create(subTaskPayload);
-            await subTaskRepository.save(subTask);
+            const subTask = await prisma_1.prisma.subTask.create({
+                data: {
+                    title,
+                    taskId: task.id,
+                    ...(parsedEstimatedDays !== undefined ? { estimatedDays: parsedEstimatedDays } : {}),
+                    ...(parentId !== undefined ? { parentId } : {}),
+                },
+            });
             const allSubTasks = await (0, subtaskTree_1.fetchSubTasksForTask)(task.id);
             const tree = (0, subtaskTree_1.buildSubTaskTree)(allSubTasks);
             const avg = (0, subtaskTree_1.computeAverageLeafProgress)(tree);
-            await taskRepository.update(task.id, { progress: avg });
+            await prisma_1.prisma.task.update({ where: { id: task.id }, data: { progress: avg } });
             return res.status(201).json({
                 message: "Subtask added",
                 subTask,
@@ -61,7 +70,7 @@ class SubTaskController {
     };
     static updateSubTask = async (req, res) => {
         const { taskId, subtaskId } = req.params;
-        const { title: updateText, status, progress } = req.body;
+        const { title: updateText, name, status, progress, estimatedDays } = req.body;
         console.log("=== updateSubTask called ===", {
             taskId,
             subtaskId,
@@ -69,30 +78,43 @@ class SubTaskController {
             progress,
         });
         try {
-            const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const subTaskCommentRepository = data_source_1.AppDataSource.getRepository(SubTaskComment_1.SubTaskComment);
-            const subTask = await subTaskRepository.findOne({
+            const subTask = await prisma_1.prisma.subTask.findUnique({
                 where: { id: parseInt(subtaskId) },
-                relations: ["task"],
             });
-            if (!subTask || subTask.task.id !== parseInt(taskId)) {
+            if (!subTask || subTask.taskId !== parseInt(taskId)) {
                 return res.status(404).json({ message: "Subtask not found" });
             }
-            const user = await userRepository.findOneBy({ id: req.user.id });
+            const user = await prisma_1.prisma.user.findUnique({ where: { id: req.user.id } });
             if (!user)
                 return res.status(404).json({ message: "User not found" });
             // Capture old progress for history
             const oldProgress = subTask.progress ?? 0;
-            // Only update status and progress, NOT the original title
-            if (status && Object.values(TaskEnums_1.TaskStatus).includes(status)) {
-                subTask.status = status;
+            const data = {};
+            // `name` renames the subtask itself; `title` above is a different
+            // thing — the free-text note for this particular progress update,
+            // logged into history/comments rather than persisted on the subtask.
+            if (typeof name === "string") {
+                const trimmedName = name.trim();
+                if (!trimmedName) {
+                    return res.status(400).json({ message: "Sub-task name cannot be empty" });
+                }
+                data.title = trimmedName;
+            }
+            if (status && Object.values(enums_1.TaskStatus).includes(status)) {
+                data.status = status;
             }
             if (progress !== undefined) {
-                subTask.progress = parseInt(progress);
+                data.progress = parseInt(progress);
+            }
+            if (estimatedDays !== undefined && estimatedDays !== null && estimatedDays !== "") {
+                const n = Number(estimatedDays);
+                if (Number.isNaN(n) || n < 0) {
+                    return res.status(400).json({ message: "Estimated days must be a non-negative number" });
+                }
+                data.estimatedDays = n;
             }
             // Add current state to history with the update text
-            const history = subTask.history || [];
+            const history = subTask.history ? JSON.parse(subTask.history) : [];
             history.unshift({
                 id: Date.now().toString(),
                 date: new Date().toISOString(),
@@ -102,28 +124,29 @@ class SubTaskController {
                 authorName: user.fullName,
             });
             // Keep only the last 10 updates to prevent database bloat
-            subTask.history = history.slice(0, 10);
+            data.history = JSON.stringify(history.slice(0, 10));
             // Save the subtask
-            await subTaskRepository.save(subTask);
+            const updated = await prisma_1.prisma.subTask.update({ where: { id: subTask.id }, data });
             // Create a SubTaskComment for this update so admin can give feedback
             if (updateText) {
-                const newComment = subTaskCommentRepository.create({
-                    commentText: updateText,
-                    author: user,
-                    subTask: subTask,
+                await prisma_1.prisma.subTaskComment.create({
+                    data: {
+                        commentText: updateText,
+                        authorId: user.id,
+                        subTaskId: subTask.id,
+                    },
                 });
-                await subTaskCommentRepository.save(newComment);
             }
             const allSubTasks = await (0, subtaskTree_1.fetchSubTasksForTask)(parseInt(taskId));
             const tree = (0, subtaskTree_1.buildSubTaskTree)(allSubTasks);
             const avg = (0, subtaskTree_1.computeAverageLeafProgress)(tree);
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            await taskRepository.update(parseInt(taskId), {
-                progress: avg,
+            await prisma_1.prisma.task.update({
+                where: { id: parseInt(taskId) },
+                data: { progress: avg },
             });
             return res.status(200).json({
                 message: "Subtask updated",
-                subTask,
+                subTask: { ...updated, history: JSON.parse(updated.history || "[]") },
                 subTasks: tree,
                 taskProgress: avg,
             });
@@ -135,21 +158,19 @@ class SubTaskController {
     static deleteSubTask = async (req, res) => {
         const { taskId, subtaskId } = req.params;
         try {
-            const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
-            const subTask = await subTaskRepository.findOne({
+            const subTask = await prisma_1.prisma.subTask.findUnique({
                 where: { id: parseInt(subtaskId) },
-                relations: ["task"],
             });
-            if (!subTask || subTask.task.id !== parseInt(taskId)) {
+            if (!subTask || subTask.taskId !== parseInt(taskId)) {
                 return res.status(404).json({ message: "Subtask not found" });
             }
-            await subTaskRepository.remove(subTask);
+            await prisma_1.prisma.subTask.delete({ where: { id: subTask.id } });
             const allSubTasks = await (0, subtaskTree_1.fetchSubTasksForTask)(parseInt(taskId));
             const tree = (0, subtaskTree_1.buildSubTaskTree)(allSubTasks);
             const avg = (0, subtaskTree_1.computeAverageLeafProgress)(tree);
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            await taskRepository.update(parseInt(taskId), {
-                progress: avg,
+            await prisma_1.prisma.task.update({
+                where: { id: parseInt(taskId) },
+                data: { progress: avg },
             });
             return res.status(200).json({
                 message: "Subtask deleted successfully",
@@ -164,6 +185,19 @@ class SubTaskController {
     static getSubTasks = async (req, res) => {
         const { taskId } = req.params;
         try {
+            const task = await prisma_1.prisma.task.findUnique({
+                where: { id: parseInt(taskId) },
+                include: { assignedUsers: true },
+            });
+            if (!task)
+                return res.status(404).json({ message: "Task not found" });
+            if (req.user?.role !== enums_1.UserRole.SUPER_ADMIN) {
+                // Only the assigner (creator) and the assignees may view a task's subtasks.
+                const isAssigned = task.assignedUsers.some((a) => a.userId === req.user?.id);
+                const isCreator = task.createdById === req.user?.id;
+                if (!isAssigned && !isCreator)
+                    return res.status(403).json({ message: "Forbidden" });
+            }
             const allSubTasks = await (0, subtaskTree_1.fetchSubTasksForTask)(parseInt(taskId));
             console.log("Raw subtasks from DB:", JSON.stringify(allSubTasks.map((st) => ({
                 id: st.id,

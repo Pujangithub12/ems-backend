@@ -1,9 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MyTaskController = void 0;
-const data_source_1 = require("../config/data-source");
-const MyTask_1 = require("../entities/MyTask");
-const User_1 = require("../entities/User");
+const prisma_1 = require("../config/prisma");
+const enums_1 = require("../types/enums");
 class MyTaskController {
     static createMyTask = async (req, res) => {
         const { title, description, dueDate } = req.body;
@@ -11,27 +10,23 @@ class MyTaskController {
             return res.status(400).json({ message: "Task title is required" });
         }
         try {
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const myTaskRepository = data_source_1.AppDataSource.getRepository(MyTask_1.MyTask);
-            const workspace = req.workspace;
-            const user = await userRepository.findOneBy({
-                id: req.user?.id,
+            const organization = req.organization;
+            const user = await prisma_1.prisma.user.findUnique({
+                where: { id: req.user?.id },
             });
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
-            const taskPayload = {
-                title,
-                ...(description !== undefined ? { description } : {}),
-                status: MyTask_1.MyTaskStatus.PENDING,
-                user,
-                workspace
-            };
-            if (dueDate) {
-                taskPayload.dueDate = new Date(dueDate);
-            }
-            const myTask = myTaskRepository.create(taskPayload);
-            await myTaskRepository.save(myTask);
+            const myTask = await prisma_1.prisma.myTask.create({
+                data: {
+                    title,
+                    ...(description !== undefined ? { description } : {}),
+                    status: enums_1.MyTaskStatus.PENDING,
+                    userId: user.id,
+                    organizationId: organization.id,
+                    ...(dueDate ? { dueDate: new Date(dueDate) } : {}),
+                },
+            });
             return res
                 .status(201)
                 .json({ message: "Personal task added", task: myTask });
@@ -42,15 +37,14 @@ class MyTaskController {
     };
     static getMyTasks = async (req, res) => {
         try {
-            const myTaskRepository = data_source_1.AppDataSource.getRepository(MyTask_1.MyTask);
             const userId = req.user?.id;
-            const workspace = req.workspace;
+            const organization = req.organization;
             if (!userId) {
                 return res.status(401).json({ message: "Unauthorized" });
             }
-            const tasks = await myTaskRepository.find({
-                where: { user: { id: userId }, workspace: { id: workspace.id } },
-                order: { createdAt: "DESC" },
+            const tasks = await prisma_1.prisma.myTask.findMany({
+                where: { userId, organizationId: organization.id },
+                orderBy: { createdAt: "desc" },
             });
             return res.status(200).json(tasks);
         }
@@ -62,34 +56,36 @@ class MyTaskController {
         const { id } = req.params;
         const { title, description, dueDate, status } = req.body;
         try {
-            const myTaskRepository = data_source_1.AppDataSource.getRepository(MyTask_1.MyTask);
-            const workspace = req.workspace;
-            const myTask = await myTaskRepository.findOne({
+            const organization = req.organization;
+            const myTask = await prisma_1.prisma.myTask.findFirst({
                 where: {
                     id: parseInt(id, 10),
-                    workspace: { id: workspace.id }
+                    organizationId: organization.id,
                 },
-                relations: ["user"],
             });
             if (!myTask) {
                 return res.status(404).json({ message: "Task not found" });
             }
-            if (myTask.user.id !== req.user?.id) {
+            if (myTask.userId !== req.user?.id) {
                 return res.status(403).json({ message: "Forbidden" });
             }
+            const data = {};
             if (title !== undefined)
-                myTask.title = title;
+                data.title = title;
             if (description !== undefined)
-                myTask.description = description;
+                data.description = description;
             if (dueDate !== undefined) {
-                myTask.dueDate = dueDate ? new Date(dueDate) : null;
+                data.dueDate = dueDate ? new Date(dueDate) : null;
             }
             if (status &&
-                Object.values(MyTask_1.MyTaskStatus).includes(status)) {
-                myTask.status = status;
+                Object.values(enums_1.MyTaskStatus).includes(status)) {
+                data.status = status;
             }
-            await myTaskRepository.save(myTask);
-            return res.status(200).json({ message: "Task updated", task: myTask });
+            const updated = await prisma_1.prisma.myTask.update({
+                where: { id: myTask.id },
+                data,
+            });
+            return res.status(200).json({ message: "Task updated", task: updated });
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });
@@ -98,22 +94,20 @@ class MyTaskController {
     static deleteMyTask = async (req, res) => {
         const { id } = req.params;
         try {
-            const myTaskRepository = data_source_1.AppDataSource.getRepository(MyTask_1.MyTask);
-            const workspace = req.workspace;
-            const myTask = await myTaskRepository.findOne({
+            const organization = req.organization;
+            const myTask = await prisma_1.prisma.myTask.findFirst({
                 where: {
                     id: parseInt(id, 10),
-                    workspace: { id: workspace.id }
+                    organizationId: organization.id,
                 },
-                relations: ["user"],
             });
             if (!myTask) {
                 return res.status(404).json({ message: "Task not found" });
             }
-            if (myTask.user.id !== req.user?.id) {
+            if (myTask.userId !== req.user?.id) {
                 return res.status(403).json({ message: "Forbidden" });
             }
-            await myTaskRepository.remove(myTask);
+            await prisma_1.prisma.myTask.delete({ where: { id: myTask.id } });
             return res.status(200).json({ message: "Task deleted" });
         }
         catch (error) {

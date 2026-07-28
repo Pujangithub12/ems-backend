@@ -1,14 +1,17 @@
 import { Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { HierarchyNode } from "../entities/HierarchyNode";
-import { UserRole } from "../entities/User";
-import { WorkspaceMembership } from "../entities/WorkspaceMembership";
+import { prisma } from "../config/prisma";
+import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import { HierarchyPersonDto, SaveHierarchyDto } from "../dto/hierarchy.dto";
 
+const HIERARCHY_INCLUDE = {
+  user: true,
+  secondaryManagers: { include: { node2: true } },
+} as const;
+
 const toDto = (
-  node: HierarchyNode,
-  roleByUserId: Map<number, UserRole>,
+  node: any,
+  roleByUserId: Map<number, string>,
 ): HierarchyPersonDto => ({
   id: node.id,
   userId: node.userId!,
@@ -18,46 +21,45 @@ const toDto = (
   role: roleByUserId.get(node.userId!) ?? UserRole.USER,
   joinDate: node.user!.joinDate as unknown as string,
   primaryManagerId: node.parentId ?? null,
-  secondaryManagerIds: (node.secondaryManagers || []).map((n) => n.id),
+  secondaryManagerIds: (node.secondaryManagers || []).map((sm: any) => sm.node2.id),
 });
 
 export class HierarchyController {
-  // Every workspace member always has exactly one node — this reconciles
+  // Every organization member always has exactly one node — this reconciles
   // the HierarchyNode table against current membership (creating nodes for
-  // new members, dropping nodes for members removed from the workspace)
+  // new members, dropping nodes for members removed from the organization)
   // before returning, so callers never see it out of sync.
   static async getHierarchy(req: AuthRequest, res: Response) {
     try {
-      const workspaceId = req.workspace?.id;
-      if (!workspaceId) {
-        return res.status(400).json({ message: "Workspace not found" });
+      const organizationId = req.organization?.id;
+      if (!organizationId) {
+        return res.status(400).json({ message: "Organization not found" });
       }
 
-      const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
-      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
-
-      const memberships = await membershipRepo.find({
-        where: { workspace: { id: workspaceId } },
-        relations: ["user"],
+      const memberships = await prisma.organizationMembership.findMany({
+        where: { organizationId },
+        include: { user: true },
       });
       const members = memberships.map((m) => m.user);
       const memberIds = new Set(members.map((m) => m.id));
-      // Role is scoped to this one workspace already, so a plain userId ->
-      // role map is unambiguous here (unlike WorkspaceController.getAccessMatrix,
-      // which spans several workspaces at once).
+      // Role is scoped to this one organization already, so a plain userId ->
+      // role map is unambiguous here (unlike OrganizationController.getAccessMatrix,
+      // which spans several organizations at once).
       const roleByUserId = new Map(memberships.map((m) => [m.user.id, m.role]));
 
-      let nodes = await hierarchyRepo.find({
-        where: { workspaceId },
-        relations: ["user", "secondaryManagers"],
+      let nodes = await prisma.hierarchyNode.findMany({
+        where: { organizationId },
+        include: HIERARCHY_INCLUDE,
       });
 
-      // Drop nodes for users no longer in this workspace.
+      // Drop nodes for users no longer in this organization.
       const staleNodes = nodes.filter(
-        (n) => n.userId === undefined || !memberIds.has(n.userId),
+        (n) => n.userId == null || !memberIds.has(n.userId),
       );
       if (staleNodes.length > 0) {
-        await hierarchyRepo.remove(staleNodes);
+        await prisma.hierarchyNode.deleteMany({
+          where: { id: { in: staleNodes.map((n) => n.id) } },
+        });
         nodes = nodes.filter((n) => !staleNodes.includes(n));
       }
 
@@ -65,14 +67,12 @@ export class HierarchyController {
       const existingUserIds = new Set(nodes.map((n) => n.userId));
       const missing = members.filter((m) => !existingUserIds.has(m.id));
       if (missing.length > 0) {
-        await hierarchyRepo.save(
-          missing.map((m) =>
-            hierarchyRepo.create({ userId: m.id, workspaceId }),
-          ),
-        );
-        nodes = await hierarchyRepo.find({
-          where: { workspaceId },
-          relations: ["user", "secondaryManagers"],
+        await prisma.hierarchyNode.createMany({
+          data: missing.map((m) => ({ userId: m.id, organizationId })),
+        });
+        nodes = await prisma.hierarchyNode.findMany({
+          where: { organizationId },
+          include: HIERARCHY_INCLUDE,
         });
       }
 
@@ -85,8 +85,11 @@ export class HierarchyController {
           n.parentId != null,
       );
       if (misplacedSuperAdmins.length > 0) {
+        await prisma.hierarchyNode.updateMany({
+          where: { id: { in: misplacedSuperAdmins.map((n) => n.id) } },
+          data: { parentId: null },
+        });
         misplacedSuperAdmins.forEach((n) => (n.parentId = null));
-        await hierarchyRepo.save(misplacedSuperAdmins);
       }
 
       const people = nodes
@@ -100,13 +103,13 @@ export class HierarchyController {
   }
 
   // Updates reporting relationships in place (nodes are stable/1:1 with
-  // workspace members, so unlike Schedule/Project full-replace patterns
+  // organization members, so unlike Schedule/Project full-replace patterns
   // elsewhere, there's nothing to delete-and-recreate here).
   static async saveHierarchy(req: AuthRequest, res: Response) {
     try {
-      const workspaceId = req.workspace?.id;
-      if (!workspaceId) {
-        return res.status(400).json({ message: "Workspace not found" });
+      const organizationId = req.organization?.id;
+      if (!organizationId) {
+        return res.status(400).json({ message: "Organization not found" });
       }
 
       const { people }: SaveHierarchyDto = req.body;
@@ -114,22 +117,20 @@ export class HierarchyController {
         return res.status(400).json({ message: "people array is required" });
       }
 
-      const hierarchyRepo = AppDataSource.getRepository(HierarchyNode);
-      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
-      const nodes = await hierarchyRepo.find({
-        where: { workspaceId },
-        relations: ["user"],
+      const nodes = await prisma.hierarchyNode.findMany({
+        where: { organizationId },
+        include: { user: true },
       });
       const nodeIds = new Set(nodes.map((n) => n.id));
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-      const memberships = await membershipRepo.find({
-        where: { workspace: { id: workspaceId } },
+      const memberships = await prisma.organizationMembership.findMany({
+        where: { organizationId },
       });
       const roleByUserId = new Map(memberships.map((m) => [m.userId, m.role]));
 
       // Validate every referenced id (self, primary manager, secondary
-      // managers) actually belongs to this workspace before touching anything.
+      // managers) actually belongs to this organization before touching anything.
       for (const p of people) {
         if (!nodeIds.has(p.id)) {
           return res.status(400).json({ message: "Unknown person in hierarchy update" });
@@ -176,17 +177,23 @@ export class HierarchyController {
       }
 
       for (const p of people) {
-        const node = nodeById.get(p.id)!;
-        node.parentId = p.primaryManagerId;
-        node.secondaryManagers = (p.secondaryManagerIds || [])
-          .map((id) => nodeById.get(id)!)
-          .filter(Boolean);
-        await hierarchyRepo.save(node);
+        await prisma.hierarchyNode.update({
+          where: { id: p.id },
+          data: {
+            parentId: p.primaryManagerId,
+            secondaryManagers: {
+              deleteMany: {},
+              create: (p.secondaryManagerIds || []).map((id) => ({
+                hierarchyNodeId_2: id,
+              })),
+            },
+          },
+        });
       }
 
-      const updated = await hierarchyRepo.find({
-        where: { workspaceId },
-        relations: ["user", "secondaryManagers"],
+      const updated = await prisma.hierarchyNode.findMany({
+        where: { organizationId },
+        include: HIERARCHY_INCLUDE,
       });
       const result = updated
         .map((n) => toDto(n, roleByUserId))

@@ -9,7 +9,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 const resend = new resend_1.Resend(process.env.RESEND_API_KEY);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const sendEmail = async (to, subject, text, customHtml) => {
+const sendEmail = async (to, subject, text, customHtml, category = "notification") => {
     const validEmails = to.filter((email) => email && email.trim() !== "");
     if (validEmails.length === 0) {
         console.log("No valid email addresses provided. Skipping email send.");
@@ -32,13 +32,15 @@ const sendEmail = async (to, subject, text, customHtml) => {
         try {
             const result = await resend.emails.send({
                 from: `EMS Management <${process.env.RESEND_FROM_EMAIL}>`,
+                replyTo: process.env.RESEND_FROM_EMAIL,
                 to: [email],
                 subject,
                 text,
                 html,
                 headers: {
-                    "X-Entity-Ref-ID": `ems-announcement-${Date.now()}`,
+                    "X-Entity-Ref-ID": `ems-${category}-${Date.now()}`,
                 },
+                tags: [{ name: "category", value: category }],
             });
             if (result.error) {
                 console.error(`Failed to send to ${email}:`, result.error);

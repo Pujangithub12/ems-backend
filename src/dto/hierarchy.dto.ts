@@ -1,5 +1,5 @@
 /**
- * Flat, per-person shape — one entry per workspace member. There's no more
+ * Flat, per-person shape — one entry per organization member. There's no more
  * nested tree or arbitrary label-only nodes; `primaryManagerId`/
  * `secondaryManagerIds` reference other entries' `id` directly.
  */

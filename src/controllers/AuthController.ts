@@ -1,14 +1,10 @@
 import { Request, Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { User, UserRole } from "../entities/User";
-import { Workspace } from "../entities/Workspace";
-import { WorkspaceMembership } from "../entities/WorkspaceMembership";
-import { PendingSignup } from "../entities/PendingSignup";
-import { PasswordResetOtp } from "../entities/PasswordResetOtp";
+import { randomInt } from "crypto";
+import { prisma } from "../config/prisma";
+import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import dotenv from "dotenv";
 import {
   LoginDto,
   ChangePasswordDto,
@@ -20,14 +16,15 @@ import {
 } from "../dto/auth.dto";
 import { sendEmail } from "../utils/emailService";
 import { getPasswordStrengthError } from "../utils/passwordPolicy";
+import { JWT_SECRET } from "../config/jwt";
 
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_OTP_ATTEMPTS = 5;
 
-dotenv.config();
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 
-const JWT_SECRET: string = process.env.JWT_SECRET || "your_jwt_secret_key";
-const THREE_HOURS_MS = 3 * 60 * 60 * 1000; 
+// Cryptographically strong 6-digit OTP (crypto.randomInt is a CSPRNG, unlike Math.random).
+const generateOtp = (): string => randomInt(100000, 1000000).toString();
 
 export class AuthController {
   static login = async (req: Request, res: Response) => {
@@ -40,8 +37,7 @@ export class AuthController {
     }
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const user = await userRepository.findOne({ where: { email } });
+      const user = await prisma.user.findUnique({ where: { email } });
 
       if (!user) {
         return res.status(401).json({ message: "Invalid email or password" });
@@ -52,8 +48,8 @@ export class AuthController {
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
-      // Role is per-workspace now (see WorkspaceMembership), so it can't be
-      // baked into a token that outlives any single workspace context —
+      // Role is per-organization now (see OrganizationMembership), so it can't be
+      // baked into a token that outlives any single organization context —
       // authMiddleware resolves req.user.role fresh on every request instead.
       const token = jwt.sign({ id: user.id }, JWT_SECRET, {
         expiresIn: "3h",
@@ -78,7 +74,7 @@ export class AuthController {
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
-          homeWorkspaceId: user.homeWorkspaceId,
+          homeOrganizationId: user.homeOrganizationId,
         },
       });
     } catch (error) {
@@ -104,11 +100,9 @@ export class AuthController {
     }
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const pendingRepository = AppDataSource.getRepository(PendingSignup);
       const normalizedEmail = email.trim();
 
-      const existingUser = await userRepository.findOne({
+      const existingUser = await prisma.user.findUnique({
         where: { email: normalizedEmail },
       });
       if (existingUser) {
@@ -118,20 +112,27 @@ export class AuthController {
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpCode = generateOtp();
+      const otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-      let pending = await pendingRepository.findOne({
+      await prisma.pendingSignup.upsert({
         where: { email: normalizedEmail },
+        create: {
+          email: normalizedEmail,
+          fullName: fullName.trim(),
+          password: hashedPassword,
+          otpCode,
+          otpExpiresAt,
+          attempts: 0,
+        },
+        update: {
+          fullName: fullName.trim(),
+          password: hashedPassword,
+          otpCode,
+          otpExpiresAt,
+          attempts: 0,
+        },
       });
-      if (!pending) {
-        pending = pendingRepository.create({ email: normalizedEmail });
-      }
-      pending.fullName = fullName.trim();
-      pending.password = hashedPassword;
-      pending.otpCode = otpCode;
-      pending.otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
-      pending.attempts = 0;
-      await pendingRepository.save(pending);
 
       const sent = await sendEmail(
         [normalizedEmail],
@@ -153,8 +154,8 @@ export class AuthController {
   };
 
   // Self-service signup, step 2: confirms the OTP and only then creates the
-  // account, as super_admin of a brand-new workspace it owns (there's no
-  // existing workspace to join yet — invites for adding other members are a
+  // account, as super_admin of a brand-new organization it owns (there's no
+  // existing organization to join yet — invites for adding other members are a
   // separate, later feature). Logs the new user in immediately on success.
   static registerVerify = async (req: Request, res: Response) => {
     const { email, otp }: RegisterVerifyDto = req.body;
@@ -166,12 +167,9 @@ export class AuthController {
     }
 
     try {
-      const pendingRepository = AppDataSource.getRepository(PendingSignup);
-      const userRepository = AppDataSource.getRepository(User);
-      const workspaceRepository = AppDataSource.getRepository(Workspace);
       const normalizedEmail = email.trim();
 
-      const pending = await pendingRepository.findOne({
+      const pending = await prisma.pendingSignup.findUnique({
         where: { email: normalizedEmail },
       });
       if (!pending) {
@@ -180,61 +178,62 @@ export class AuthController {
         });
       }
       if (pending.otpExpiresAt.getTime() < Date.now()) {
-        await pendingRepository.remove(pending);
+        await prisma.pendingSignup.delete({ where: { id: pending.id } });
         return res
           .status(400)
           .json({ message: "Verification code expired. Please start again." });
       }
       if (pending.attempts >= MAX_OTP_ATTEMPTS) {
-        await pendingRepository.remove(pending);
+        await prisma.pendingSignup.delete({ where: { id: pending.id } });
         return res.status(400).json({
           message: "Too many incorrect attempts. Please start again.",
         });
       }
       if (pending.otpCode !== otp.trim()) {
-        pending.attempts += 1;
-        await pendingRepository.save(pending);
+        await prisma.pendingSignup.update({
+          where: { id: pending.id },
+          data: { attempts: pending.attempts + 1 },
+        });
         return res.status(400).json({ message: "Incorrect verification code" });
       }
 
-      const existingUser = await userRepository.findOne({
+      const existingUser = await prisma.user.findUnique({
         where: { email: pending.email },
       });
       if (existingUser) {
-        await pendingRepository.remove(pending);
+        await prisma.pendingSignup.delete({ where: { id: pending.id } });
         return res
           .status(400)
           .json({ message: "An account with this email already exists" });
       }
 
-      const user = userRepository.create({
-        fullName: pending.fullName,
-        email: pending.email,
-        password: pending.password,
-        phoneNumber: "",
-        address: "",
-        jobPosition: "Owner",
-        joinDate: new Date(),
+      const user = await prisma.user.create({
+        data: {
+          fullName: pending.fullName,
+          email: pending.email,
+          password: pending.password,
+          phoneNumber: "",
+          address: "",
+          jobPosition: "Owner",
+          joinDate: new Date(),
+        },
       });
-      await userRepository.save(user);
 
-      const workspace = workspaceRepository.create({
-        name: `${pending.fullName}'s Workspace`,
+      const organization = await prisma.organization.create({
+        data: { name: `${pending.fullName}'s Organization` },
       });
-      await workspaceRepository.save(workspace);
 
-      const membershipRepository = AppDataSource.getRepository(WorkspaceMembership);
-      await membershipRepository.save(
-        membershipRepository.create({
-          user,
-          workspace,
+      await prisma.organizationMembership.create({
+        data: {
+          userId: user.id,
+          organizationId: organization.id,
           role: UserRole.SUPER_ADMIN,
-        }),
-      );
+        },
+      });
 
-      await pendingRepository.remove(pending);
+      await prisma.pendingSignup.delete({ where: { id: pending.id } });
 
-      // Role is per-workspace now — see the matching comment in login().
+      // Role is per-organization now — see the matching comment in login().
       const token = jwt.sign({ id: user.id }, JWT_SECRET, {
         expiresIn: "3h",
       });
@@ -245,7 +244,7 @@ export class AuthController {
         sameSite: isProduction ? "none" : "lax",
         maxAge: THREE_HOURS_MS,
       });
-      res.cookie("workspaceId", workspace.id.toString(), {
+      res.cookie("workspaceId", organization.id.toString(), {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "none" : "lax",
@@ -263,13 +262,13 @@ export class AuthController {
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
-          homeWorkspaceId: user.homeWorkspaceId,
+          homeOrganizationId: user.homeOrganizationId,
         },
-        workspace: {
-          id: workspace.id,
-          name: workspace.name,
-          description: workspace.description,
-          createdAt: workspace.createdAt,
+        organization: {
+          id: organization.id,
+          name: organization.name,
+          description: organization.description,
+          createdAt: organization.createdAt,
         },
       });
     } catch (error) {
@@ -292,26 +291,31 @@ export class AuthController {
     };
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const otpRepository = AppDataSource.getRepository(PasswordResetOtp);
       const normalizedEmail = email.trim();
 
-      const user = await userRepository.findOne({ where: { email: normalizedEmail } });
+      const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
       if (!user) {
         // Don't reveal whether the account exists — just respond as if it worked.
         return res.status(200).json(genericResponse);
       }
 
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpCode = generateOtp();
+      const otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-      let otpRecord = await otpRepository.findOne({ where: { email: normalizedEmail } });
-      if (!otpRecord) {
-        otpRecord = otpRepository.create({ email: normalizedEmail });
-      }
-      otpRecord.otpCode = otpCode;
-      otpRecord.otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
-      otpRecord.attempts = 0;
-      await otpRepository.save(otpRecord);
+      await prisma.passwordResetOtp.upsert({
+        where: { email: normalizedEmail },
+        create: {
+          email: normalizedEmail,
+          otpCode,
+          otpExpiresAt,
+          attempts: 0,
+        },
+        update: {
+          otpCode,
+          otpExpiresAt,
+          attempts: 0,
+        },
+      });
 
       const sent = await sendEmail(
         [normalizedEmail],
@@ -352,45 +356,49 @@ export class AuthController {
     }
 
     try {
-      const otpRepository = AppDataSource.getRepository(PasswordResetOtp);
-      const userRepository = AppDataSource.getRepository(User);
       const normalizedEmail = email.trim();
 
-      const otpRecord = await otpRepository.findOne({ where: { email: normalizedEmail } });
+      const otpRecord = await prisma.passwordResetOtp.findUnique({
+        where: { email: normalizedEmail },
+      });
       if (!otpRecord) {
         return res.status(400).json({
           message: "No password reset requested for this email. Please start again.",
         });
       }
       if (otpRecord.otpExpiresAt.getTime() < Date.now()) {
-        await otpRepository.remove(otpRecord);
+        await prisma.passwordResetOtp.delete({ where: { id: otpRecord.id } });
         return res
           .status(400)
           .json({ message: "Verification code expired. Please start again." });
       }
       if (otpRecord.attempts >= MAX_OTP_ATTEMPTS) {
-        await otpRepository.remove(otpRecord);
+        await prisma.passwordResetOtp.delete({ where: { id: otpRecord.id } });
         return res.status(400).json({
           message: "Too many incorrect attempts. Please start again.",
         });
       }
       if (otpRecord.otpCode !== otp.trim()) {
-        otpRecord.attempts += 1;
-        await otpRepository.save(otpRecord);
+        await prisma.passwordResetOtp.update({
+          where: { id: otpRecord.id },
+          data: { attempts: otpRecord.attempts + 1 },
+        });
         return res.status(400).json({ message: "Incorrect verification code" });
       }
 
-      const user = await userRepository.findOne({ where: { email: normalizedEmail } });
+      const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
       if (!user) {
-        await otpRepository.remove(otpRecord);
+        await prisma.passwordResetOtp.delete({ where: { id: otpRecord.id } });
         return res.status(404).json({ message: "Account no longer exists" });
       }
 
-      user.password = await bcrypt.hash(newPassword, 10);
-      await userRepository.save(user);
-      await otpRepository.remove(otpRecord);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { password: await bcrypt.hash(newPassword, 10) },
+      });
+      await prisma.passwordResetOtp.delete({ where: { id: otpRecord.id } });
 
-      // Role is per-workspace now — see the matching comment in login().
+      // Role is per-organization now — see the matching comment in login().
       const token = jwt.sign({ id: user.id }, JWT_SECRET, {
         expiresIn: "3h",
       });
@@ -413,7 +421,7 @@ export class AuthController {
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
-          homeWorkspaceId: user.homeWorkspaceId,
+          homeOrganizationId: user.homeOrganizationId,
         },
       });
     } catch (error) {
@@ -433,8 +441,7 @@ export class AuthController {
 
   static getMe = async (req: AuthRequest, res: Response) => {
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const user = await userRepository.findOne({ where: { id: req.user!.id } });
+      const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -445,15 +452,15 @@ export class AuthController {
           id: user.id,
           fullName: user.fullName,
           email: user.email,
-          // Already resolved by authMiddleware for the active workspace —
-          // role no longer lives on User (see WorkspaceMembership).
+          // Already resolved by authMiddleware for the active organization —
+          // role no longer lives on User (see OrganizationMembership).
           role: req.user!.role,
           phoneNumber: user.phoneNumber,
           address: user.address,
           jobPosition: user.jobPosition,
           joinDate: user.joinDate,
           createdAt: user.createdAt,
-          homeWorkspaceId: user.homeWorkspaceId,
+          homeOrganizationId: user.homeOrganizationId,
         },
       });
     } catch (error) {
@@ -465,16 +472,19 @@ export class AuthController {
     const { phoneNumber, address }: UpdateMeDto = req.body;
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const user = await userRepository.findOne({ where: { id: req.user!.id } });
+      const existingUser = await prisma.user.findUnique({ where: { id: req.user!.id } });
 
-      if (!user) {
+      if (!existingUser) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
-      if (address !== undefined) user.address = address;
-      await userRepository.save(user);
+      const user = await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          ...(phoneNumber !== undefined ? { phoneNumber } : {}),
+          ...(address !== undefined ? { address } : {}),
+        },
+      });
 
       return res.status(200).json({
         user: {
@@ -508,8 +518,7 @@ export class AuthController {
     }
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const user = await userRepository.findOne({ where: { id: req.user.id } });
+      const user = await prisma.user.findUnique({ where: { id: req.user.id } });
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -523,8 +532,10 @@ export class AuthController {
         return res.status(401).json({ message: "Current password is incorrect" });
       }
 
-      user.password = await bcrypt.hash(newPassword, 10);
-      await userRepository.save(user);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { password: await bcrypt.hash(newPassword, 10) },
+      });
 
       return res.status(200).json({ message: "Password updated successfully" });
     } catch (error) {

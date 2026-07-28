@@ -2,6 +2,8 @@
 export interface AddSubTaskDto {
   title: string;
   parentSubTaskId?: string | number;
+  /** Relative size/effort (e.g. days), used to weight this subtask in its parent task's rolled-up progress. */
+  estimatedDays?: string | number;
 }
 
 /** Body shape for PUT /tasks/:taskId/subtasks/:subtaskId. */
@@ -11,4 +13,6 @@ export interface UpdateSubTaskDto {
   name?: string;
   status?: string;
   progress?: string | number;
+  /** Relative size/effort (e.g. days), used to weight this subtask in its parent task's rolled-up progress. */
+  estimatedDays?: string | number;
 }

@@ -1,10 +1,4 @@
-import { AppDataSource } from "../config/data-source";
-import { InventoryItem } from "../entities/InventoryItem";
-import { InventoryBatch } from "../entities/InventoryBatch";
-import { InventorySerial } from "../entities/InventorySerial";
-import { InventoryAttachment } from "../entities/InventoryAttachment";
-import { InventoryTransaction } from "../entities/InventoryTransaction";
-import { StockTransfer } from "../entities/StockTransfer";
+import { prisma } from "../config/prisma";
 
 /**
  * One-time cleanup for InventoryItem rows created before addInventoryItem
@@ -16,23 +10,18 @@ import { StockTransfer } from "../entities/StockTransfer";
  * duplicates remain, every group has size 1 and the run is a no-op.
  */
 export async function consolidateInventoryDuplicates() {
-  if (!AppDataSource.isInitialized) {
-    await AppDataSource.initialize();
-  }
-
   console.log("Starting inventory duplicate consolidation...");
 
-  const itemRepository = AppDataSource.getRepository(InventoryItem);
-  const allItems = await itemRepository.find({
-    relations: ["item", "project", "workspace"],
-    order: { createdAt: "ASC" },
+  const allItems = await prisma.inventoryItem.findMany({
+    include: { item: true, project: true, organization: true },
+    orderBy: { createdAt: "asc" },
   });
 
-  const groups = new Map<string, InventoryItem[]>();
+  const groups = new Map<string, typeof allItems>();
   for (const item of allItems) {
     const key = item.item
-      ? `p${item.project.id}:c${item.item.id}`
-      : `p${item.project.id}:n${item.itemName.trim().toLowerCase()}`;
+      ? `p${item.project!.id}:c${item.item.id}`
+      : `p${item.project!.id}:n${item.itemName.trim().toLowerCase()}`;
     const group = groups.get(key);
     if (group) group.push(item);
     else groups.set(key, [item]);
@@ -53,7 +42,7 @@ export async function consolidateInventoryDuplicates() {
 
     const originalSurvivorQuantity = survivor.quantity;
 
-    await AppDataSource.transaction(async (manager) => {
+    await prisma.$transaction(async (tx) => {
       const totalQuantity = group.reduce((sum, i) => sum + i.quantity, 0);
       const totalReserved = group.reduce((sum, i) => sum + (i.reservedQuantity || 0), 0);
       const totalIncoming = group.reduce((sum, i) => sum + (i.incomingQuantity || 0), 0);
@@ -65,83 +54,80 @@ export async function consolidateInventoryDuplicates() {
             costed.reduce((sum, i) => sum + i.quantity, 0)
           : survivor.averageCost;
 
-      const survivorRepo = manager.getRepository(InventoryItem);
-      survivor.quantity = totalQuantity;
-      survivor.reservedQuantity = totalReserved;
-      survivor.incomingQuantity = totalIncoming;
-      if (weightedCost !== undefined) survivor.averageCost = weightedCost;
       // Freshest row's own info wins for display fields (most recently
       // entered), quantity fields above are summed across the whole group.
       // Only overwrite when freshest actually has a value, so an unset
       // field on the newest duplicate doesn't blank out the survivor's.
-      survivor.category = freshest.category;
-      survivor.status = freshest.status;
-      if (freshest.unit !== undefined) survivor.unit = freshest.unit;
-      if (freshest.notes !== undefined) survivor.notes = freshest.notes;
-      if (freshest.sku !== undefined) survivor.sku = freshest.sku;
-      if (freshest.lastRestockedDate !== undefined) survivor.lastRestockedDate = freshest.lastRestockedDate;
-      if (freshest.imageUrl !== undefined) survivor.imageUrl = freshest.imageUrl;
-      if (freshest.warrantyExpiryDate !== undefined) survivor.warrantyExpiryDate = freshest.warrantyExpiryDate;
-      if (freshest.supplier !== undefined) survivor.supplier = freshest.supplier;
-      if (freshest.warehouse) survivor.warehouse = freshest.warehouse;
-      if (freshest.vendor) survivor.vendor = freshest.vendor;
-      if (freshest.updatedBy) survivor.updatedBy = freshest.updatedBy;
-      await survivorRepo.save(survivor);
+      await tx.inventoryItem.update({
+        where: { id: survivor.id },
+        data: {
+          quantity: totalQuantity,
+          reservedQuantity: totalReserved,
+          incomingQuantity: totalIncoming,
+          ...(weightedCost != null ? { averageCost: weightedCost } : {}),
+          category: freshest.category,
+          status: freshest.status,
+          ...(freshest.unit !== undefined ? { unit: freshest.unit } : {}),
+          ...(freshest.notes !== undefined ? { notes: freshest.notes } : {}),
+          ...(freshest.sku !== undefined ? { sku: freshest.sku } : {}),
+          ...(freshest.lastRestockedDate !== undefined
+            ? { lastRestockedDate: freshest.lastRestockedDate }
+            : {}),
+          ...(freshest.imageUrl !== undefined ? { imageUrl: freshest.imageUrl } : {}),
+          ...(freshest.warrantyExpiryDate !== undefined
+            ? { warrantyExpiryDate: freshest.warrantyExpiryDate }
+            : {}),
+          ...(freshest.supplier !== undefined ? { supplier: freshest.supplier } : {}),
+          ...(freshest.warehouseId ? { warehouseId: freshest.warehouseId } : {}),
+          ...(freshest.vendorId ? { vendorId: freshest.vendorId } : {}),
+          ...(freshest.updatedById ? { updatedById: freshest.updatedById } : {}),
+        },
+      });
 
       // Re-point every child record from the duplicates onto the survivor
       // before deleting them, so batches/serials/transactions/transfers/
       // attachments (the item's history) aren't lost.
-      await manager
-        .createQueryBuilder()
-        .update(InventoryBatch)
-        .set({ inventoryItem: { id: survivor.id } as InventoryItem })
-        .where("inventoryItemId IN (:...ids)", { ids: duplicateIds })
-        .execute();
-      await manager
-        .createQueryBuilder()
-        .update(InventorySerial)
-        .set({ inventoryItem: { id: survivor.id } as InventoryItem })
-        .where("inventoryItemId IN (:...ids)", { ids: duplicateIds })
-        .execute();
-      await manager
-        .createQueryBuilder()
-        .update(InventoryAttachment)
-        .set({ inventoryItem: { id: survivor.id } as InventoryItem })
-        .where("inventoryItemId IN (:...ids)", { ids: duplicateIds })
-        .execute();
-      await manager
-        .createQueryBuilder()
-        .update(InventoryTransaction)
-        .set({ inventoryItem: { id: survivor.id } as InventoryItem })
-        .where("inventoryItemId IN (:...ids)", { ids: duplicateIds })
-        .execute();
-      await manager
-        .createQueryBuilder()
-        .update(StockTransfer)
-        .set({ inventoryItem: { id: survivor.id } as InventoryItem })
-        .where("inventoryItemId IN (:...ids)", { ids: duplicateIds })
-        .execute();
+      await tx.inventoryBatch.updateMany({
+        where: { inventoryItemId: { in: duplicateIds } },
+        data: { inventoryItemId: survivor.id },
+      });
+      await tx.inventorySerial.updateMany({
+        where: { inventoryItemId: { in: duplicateIds } },
+        data: { inventoryItemId: survivor.id },
+      });
+      await tx.inventoryAttachment.updateMany({
+        where: { inventoryItemId: { in: duplicateIds } },
+        data: { inventoryItemId: survivor.id },
+      });
+      await tx.inventoryTransaction.updateMany({
+        where: { inventoryItemId: { in: duplicateIds } },
+        data: { inventoryItemId: survivor.id },
+      });
+      await tx.stockTransfer.updateMany({
+        where: { inventoryItemId: { in: duplicateIds } },
+        data: { inventoryItemId: survivor.id },
+      });
 
       // A visible record of the merge itself, on top of the real re-pointed
       // history above.
-      await manager.getRepository(InventoryTransaction).save(
-        manager.getRepository(InventoryTransaction).create({
+      await tx.inventoryTransaction.create({
+        data: {
           type: "adjustment",
           quantityChange: totalQuantity - originalSurvivorQuantity,
           resultingQuantity: totalQuantity,
           reason: `Merged ${duplicates.length} duplicate entr${duplicates.length === 1 ? "y" : "ies"} of this item into one row`,
-          inventoryItem: survivor,
-          ...(survivor.workspace ? { workspace: survivor.workspace } : {}),
-        }),
-      );
+          inventoryItemId: survivor.id,
+          ...(survivor.organization ? { organizationId: survivor.organization.id } : {}),
+        },
+      });
 
-      await manager.getRepository(InventoryItem).delete(duplicateIds);
+      await tx.inventoryItem.deleteMany({ where: { id: { in: duplicateIds } } });
     });
 
     mergedGroups += 1;
     deletedRows += duplicateIds.length;
     console.log(
-      `Merged ${group.length} rows of "${survivor.itemName}" (project ${survivor.project.id}) into item #${survivor.id}`,
+      `Merged ${group.length} rows of "${survivor.itemName}" (project ${survivor.project!.id}) into item #${survivor.id}`,
     );
   }
 

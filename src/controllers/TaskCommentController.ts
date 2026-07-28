@@ -1,20 +1,18 @@
 import { Request, Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { Task } from "../entities/Task";
-import { SubTask } from "../entities/SubTask";
-import { TaskComment } from "../entities/TaskComment";
-import { SubTaskComment } from "../entities/SubTaskComment";
-import { User } from "../entities/User";
+import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { AddCommentDto, AddFeedbackDto } from "../dto/task-comment.dto";
 
-// `author` is an eager relation on TaskComment/SubTaskComment, so it is always
-// populated (and includes the password hash) regardless of the `relations`
-// option passed to the query — strip it before sending comments to the client.
-const sanitizeAuthor = (comment: TaskComment | SubTaskComment) => {
+// `author` was an eager relation on TaskComment/SubTaskComment under TypeORM
+// (always populated regardless of the `relations` option), so every
+// TypeORM `find`/`findOne` implicitly returned it too. Prisma has no eager
+// relations — every place below that needs `.author` in the response now
+// explicitly `include`s it (or attaches an already-loaded `user`) before
+// this helper trims it down to the public fields.
+const sanitizeAuthor = (comment: any) => {
   if (comment.author) {
     const { id, fullName, email } = comment.author;
-    comment.author = { id, fullName, email } as User;
+    comment.author = { id, fullName, email };
   }
 };
 
@@ -28,33 +26,28 @@ export class TaskCommentController {
       return res.status(400).json({ message: "Comment text is required" });
 
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const commentRepository = AppDataSource.getRepository(TaskComment);
-      const userRepository = AppDataSource.getRepository(User);
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers", "createdBy"],
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      const user = await userRepository.findOneBy({ id: req.user!.id });
+      const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
       if (!user) return res.status(404).json({ message: "User not found" });
 
       // Only the assigner (creator) and the assignees may view/comment on a task.
       const isAssigned = task.assignedUsers.some(
-        (assigned) => assigned.id === user.id,
+        (assigned) => assigned.userId === user.id,
       );
-      const isCreator = task.createdBy?.id === user.id;
+      const isCreator = task.createdById === user.id;
       if (!isAssigned && !isCreator && req.user?.role !== "super_admin")
         return res.status(403).json({ message: "Forbidden" });
 
-      const comment = commentRepository.create({
-        commentText,
-        author: user,
-        task,
+      const created = await prisma.taskComment.create({
+        data: { commentText, authorId: user.id, taskId: task.id },
       });
-      await commentRepository.save(comment);
+      const comment: any = { ...created, author: user };
       sanitizeAuthor(comment);
 
       return res.status(201).json({ message: "Comment added", comment });
@@ -67,10 +60,9 @@ export class TaskCommentController {
     const { taskId } = req.params;
 
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers", "createdBy"],
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
@@ -78,18 +70,17 @@ export class TaskCommentController {
       // Only the assigner (creator) and the assignees may view a task's comments.
       if (req.user?.role !== "super_admin") {
         const isAssigned = task.assignedUsers.some(
-          (assigned) => assigned.id === req.user?.id,
+          (assigned) => assigned.userId === req.user?.id,
         );
-        const isCreator = task.createdBy?.id === req.user?.id;
+        const isCreator = task.createdById === req.user?.id;
         if (!isAssigned && !isCreator)
           return res.status(403).json({ message: "Forbidden" });
       }
 
-      const commentRepository = AppDataSource.getRepository(TaskComment);
-      const comments = await commentRepository.find({
-        where: { task: { id: task.id } },
-        relations: ["author"],
-        order: { createdAt: "ASC" },
+      const comments = await prisma.taskComment.findMany({
+        where: { taskId: task.id },
+        include: { author: true },
+        orderBy: { createdAt: "asc" },
       });
       comments.forEach(sanitizeAuthor);
 
@@ -107,21 +98,25 @@ export class TaskCommentController {
       return res.status(400).json({ message: "Feedback is required" });
 
     try {
-      const commentRepository = AppDataSource.getRepository(TaskComment);
-      const comment = await commentRepository.findOne({
+      const comment = await prisma.taskComment.findUnique({
         where: { id: parseInt(commentId as string) },
-        relations: ["task"],
+        include: { author: true },
       });
 
-      if (!comment || comment.task.id !== parseInt(taskId as string)) {
+      if (!comment || comment.taskId !== parseInt(taskId as string)) {
         return res.status(404).json({ message: "Comment not found" });
       }
 
-      comment.feedback = feedback;
-      await commentRepository.save(comment);
-      sanitizeAuthor(comment);
+      const updated = await prisma.taskComment.update({
+        where: { id: comment.id },
+        data: { feedback },
+      });
+      const responseComment: any = { ...updated, author: comment.author };
+      sanitizeAuthor(responseComment);
 
-      return res.status(200).json({ message: "Feedback added", comment });
+      return res
+        .status(200)
+        .json({ message: "Feedback added", comment: responseComment });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }
@@ -137,45 +132,38 @@ export class TaskCommentController {
       return res.status(400).json({ message: "Comment text is required" });
 
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
-      const commentRepository = AppDataSource.getRepository(SubTaskComment);
-      const userRepository = AppDataSource.getRepository(User);
-
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers"],
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      const subTask = await subTaskRepository.findOne({
+      const subTask = await prisma.subTask.findFirst({
         where: {
           id: parseInt(subtaskId as string),
-          task: { id: parseInt(taskId as string) },
+          taskId: parseInt(taskId as string),
         },
       });
 
       if (!subTask)
         return res.status(404).json({ message: "Subtask not found" });
 
-      const user = await userRepository.findOneBy({ id: req.user!.id });
+      const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
       if (!user) return res.status(404).json({ message: "User not found" });
 
       const isAssigned = task.assignedUsers.some(
-        (assigned) => assigned.id === user.id,
+        (assigned) => assigned.userId === user.id,
       );
       // Writing a subtask update is the assignee's job — the assigner reviews
       // it and gives feedback instead (see addSubTaskFeedback below).
       if (!isAssigned && req.user?.role !== "super_admin")
         return res.status(403).json({ message: "Forbidden" });
 
-      const comment = commentRepository.create({
-        commentText,
-        author: user,
-        subTask,
+      const created = await prisma.subTaskComment.create({
+        data: { commentText, authorId: user.id, subTaskId: subTask.id },
       });
-      await commentRepository.save(comment);
+      const comment: any = { ...created, author: user };
       sanitizeAuthor(comment);
 
       return res.status(201).json({ message: "Comment added", comment });
@@ -190,21 +178,17 @@ export class TaskCommentController {
     const { taskId, subtaskId } = req.params;
 
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
-      const commentRepository = AppDataSource.getRepository(SubTaskComment);
-
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers", "createdBy"],
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      const subTask = await subTaskRepository.findOne({
+      const subTask = await prisma.subTask.findFirst({
         where: {
           id: parseInt(subtaskId as string),
-          task: { id: parseInt(taskId as string) },
+          taskId: parseInt(taskId as string),
         },
       });
 
@@ -214,17 +198,17 @@ export class TaskCommentController {
       // Viewable by the assignee (who wrote the update) and the assigner (who
       // reviews it and gives feedback), plus super_admin as a fallback.
       const isAssigned = task.assignedUsers.some(
-        (assigned) => assigned.id === req.user?.id,
+        (assigned) => assigned.userId === req.user?.id,
       );
-      const isAssigner = task.createdBy?.id === req.user?.id;
+      const isAssigner = task.createdById === req.user?.id;
       if (!isAssigned && !isAssigner && req.user?.role !== "super_admin") {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      const comments = await commentRepository.find({
-        where: { subTask: { id: subTask.id } },
-        relations: ["author"],
-        order: { createdAt: "ASC" },
+      const comments = await prisma.subTaskComment.findMany({
+        where: { subTaskId: subTask.id },
+        include: { author: true },
+        orderBy: { createdAt: "asc" },
       });
       comments.forEach(sanitizeAuthor);
 
@@ -242,16 +226,18 @@ export class TaskCommentController {
       return res.status(400).json({ message: "Feedback is required" });
 
     try {
-      const commentRepository = AppDataSource.getRepository(SubTaskComment);
-      const comment = await commentRepository.findOne({
+      const comment = await prisma.subTaskComment.findUnique({
         where: { id: parseInt(commentId as string) },
-        relations: ["subTask", "subTask.task", "subTask.task.createdBy"],
+        include: {
+          author: true,
+          subTask: { include: { task: { include: { createdBy: true } } } },
+        },
       });
 
       if (
         !comment ||
-        comment.subTask.id !== parseInt(subtaskId as string) ||
-        comment.subTask.task.id !== parseInt(taskId as string)
+        comment.subTaskId !== parseInt(subtaskId as string) ||
+        comment.subTask?.taskId !== parseInt(taskId as string)
       ) {
         return res.status(404).json({ message: "Comment not found" });
       }
@@ -259,15 +245,20 @@ export class TaskCommentController {
       // Only the person who assigned this task may give feedback on the
       // assignee's update — a super_admin can too, as a fallback in case the
       // original assigner's account was removed.
-      const isAssigner = comment.subTask.task.createdBy?.id === req.user?.id;
+      const isAssigner = comment.subTask?.task?.createdById === req.user?.id;
       if (!isAssigner && req.user?.role !== "super_admin")
         return res.status(403).json({ message: "Forbidden" });
 
-      comment.feedback = feedback;
-      await commentRepository.save(comment);
-      sanitizeAuthor(comment);
+      const updated = await prisma.subTaskComment.update({
+        where: { id: comment.id },
+        data: { feedback },
+      });
+      const responseComment: any = { ...updated, author: comment.author };
+      sanitizeAuthor(responseComment);
 
-      return res.status(200).json({ message: "Feedback added", comment });
+      return res
+        .status(200)
+        .json({ message: "Feedback added", comment: responseComment });
     } catch (error) {
       return res.status(500).json({ message: "Internal server error", error });
     }

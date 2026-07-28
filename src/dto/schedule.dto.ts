@@ -149,3 +149,152 @@ export function validateScheduleTasks(input: unknown): ScheduleTaskInput[] {
 
   return tasks;
 }
+
+/** MS-Project-style dependency relationship: Finish-to-Start, Start-to-Start, Finish-to-Finish, Start-to-Finish. */
+export type ScheduleLinkType = "FS" | "SS" | "FF" | "SF";
+const VALID_LINK_TYPES = new Set<ScheduleLinkType>(["FS", "SS", "FF", "SF"]);
+
+/** Shape the frontend sends/receives for a single dependency link. Record-and-display only — never used for date auto-scheduling. */
+export interface ScheduleTaskLinkInput {
+  /** Predecessor's task id (ScheduleTaskInput.id). */
+  predecessorId: string;
+  /** Successor's task id (ScheduleTaskInput.id). */
+  successorId: string;
+  type: ScheduleLinkType;
+  /** Days of delay after the predecessor's reference point; negative = lead/overlap. */
+  lag: number;
+}
+
+/**
+ * Validates and normalizes the raw `links` array sent alongside `tasks` to
+ * PUT /projects/:projectId/schedule. `taskIds` must be the set of ids
+ * already validated by validateScheduleTasks for the same save, so
+ * referential checks are against the *same* task list being saved.
+ * Throws ValidationError with a human-readable message on any problem,
+ * including a real (non-tree) cycle-detection pass over the whole link
+ * graph — dependency type has no bearing on whether a cycle exists, since
+ * cycle detection only cares about edge direction (predecessor -> successor).
+ */
+export function validateScheduleLinks(input: unknown, taskIds: Set<string>): ScheduleTaskLinkInput[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    throw new ValidationError("`links` must be an array.");
+  }
+
+  const links: ScheduleTaskLinkInput[] = input.map((raw, index) => {
+    if (!isPlainObject(raw)) {
+      throw new ValidationError(`Dependency link at index ${index} must be an object.`);
+    }
+
+    const predecessorId =
+      raw.predecessorId !== undefined && raw.predecessorId !== null
+        ? String(raw.predecessorId).trim()
+        : "";
+    const successorId =
+      raw.successorId !== undefined && raw.successorId !== null
+        ? String(raw.successorId).trim()
+        : "";
+    if (!predecessorId || !successorId) {
+      throw new ValidationError(
+        `Dependency link at index ${index} is missing a predecessor or successor task id.`,
+      );
+    }
+
+    const typeRaw = typeof raw.type === "string" ? raw.type.trim().toUpperCase() : "";
+    if (!VALID_LINK_TYPES.has(typeRaw as ScheduleLinkType)) {
+      throw new ValidationError(
+        `Dependency link between "${predecessorId}" and "${successorId}" has an invalid type "${String(raw.type)}" (expected FS, SS, FF, or SF).`,
+      );
+    }
+    const type = typeRaw as ScheduleLinkType;
+
+    let lag = 0;
+    if (raw.lag !== undefined && raw.lag !== null && raw.lag !== "") {
+      const n = Number(raw.lag);
+      if (!Number.isFinite(n)) {
+        throw new ValidationError(
+          `Dependency link between "${predecessorId}" and "${successorId}" has a non-numeric lag.`,
+        );
+      }
+      lag = n;
+    }
+
+    return { predecessorId, successorId, type, lag };
+  });
+
+  // Referential checks — both ends must resolve to a task in this same save.
+  links.forEach((link) => {
+    if (!taskIds.has(link.predecessorId)) {
+      throw new ValidationError(
+        `Dependency link references missing predecessor task "${link.predecessorId}".`,
+      );
+    }
+    if (!taskIds.has(link.successorId)) {
+      throw new ValidationError(
+        `Dependency link references missing successor task "${link.successorId}".`,
+      );
+    }
+  });
+
+  // Self-link check — done before the duplicate-pair/cycle checks so it can't corrupt them.
+  links.forEach((link) => {
+    if (link.predecessorId === link.successorId) {
+      throw new ValidationError(`Task "${link.predecessorId}" cannot depend on itself.`);
+    }
+  });
+
+  // Duplicate-pair check — MS Project itself only allows one link per ordered task pair.
+  const seenPairs = new Set<string>();
+  links.forEach((link) => {
+    const key = `${link.predecessorId}->${link.successorId}`;
+    if (seenPairs.has(key)) {
+      throw new ValidationError(
+        `Duplicate dependency between "${link.predecessorId}" and "${link.successorId}" — only one link is allowed per task pair.`,
+      );
+    }
+    seenPairs.add(key);
+  });
+
+  // Cycle detection: real DFS over a general directed graph (a task can have
+  // multiple predecessors AND multiple successors), not the single-parent
+  // chain walk used for HierarchyNode.parentId — that shortcut only works
+  // for trees. Recursion-stack coloring reconstructs the actual cycle path
+  // for a readable error message.
+  const adjacency = new Map<string, string[]>();
+  links.forEach((link) => {
+    const successors = adjacency.get(link.predecessorId) ?? [];
+    successors.push(link.successorId);
+    adjacency.set(link.predecessorId, successors);
+  });
+
+  const WHITE = 0;
+  const GRAY = 1;
+  const BLACK = 2;
+  const color = new Map<string, number>();
+  const stack: string[] = [];
+
+  const visit = (node: string): void => {
+    color.set(node, GRAY);
+    stack.push(node);
+    for (const next of adjacency.get(node) ?? []) {
+      const nextColor = color.get(next) ?? WHITE;
+      if (nextColor === WHITE) {
+        visit(next);
+      } else if (nextColor === GRAY) {
+        const cycleStart = stack.indexOf(next);
+        const cycle = stack.slice(cycleStart).concat(next);
+        throw new ValidationError(`Circular dependency detected: ${cycle.join(" → ")}.`);
+      }
+    }
+    stack.pop();
+    color.set(node, BLACK);
+  };
+
+  for (const taskId of taskIds) {
+    if ((color.get(taskId) ?? WHITE) === WHITE) {
+      visit(taskId);
+    }
+  }
+
+  return links;
+}

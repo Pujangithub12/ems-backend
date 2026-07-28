@@ -1,66 +1,67 @@
 import { Response } from "express";
-import { In } from "typeorm";
-import { AppDataSource } from "../config/data-source";
-import { Task } from "../entities/Task";
-import { TaskPriority, TaskStatus } from "../entities/TaskEnums";
-import { LeaveRequest } from "../entities/LeaveRequest";
+import { prisma } from "../config/prisma";
+import { TaskPriority, TaskStatus } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
+import { toSimpleArray } from "../utils/simpleArray";
 
 /** Aggregated stats for the main dashboard (task counts, high priority list, pending leave requests). */
 export class DashboardController {
   static getDashboard = async (req: AuthRequest, res: Response) => {
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const leaveRequestRepository = AppDataSource.getRepository(LeaveRequest);
       const isSuperAdmin = req.user?.role === "super_admin";
       const isAdminOrAbove =
         req.user?.role === "admin" || req.user?.role === "super_admin";
       const userId = req.user?.id;
-      const workspace = req.workspace!;
+      const organization = req.organization!;
 
       // Admins (and super admins) review every pending leave request in the
-      // workspace; regular users only see the status of their own.
-      const pendingLeaveRequests = await leaveRequestRepository.count({
+      // organization; regular users only see the status of their own.
+      const pendingLeaveRequests = await prisma.leaveRequest.count({
         where: isAdminOrAbove
-          ? { status: "pending", workspace: { id: workspace.id } }
+          ? { status: "pending", organizationId: organization.id }
           : {
               status: "pending",
-              workspace: { id: workspace.id },
-              user: { id: req.user!.id },
+              organizationId: organization.id,
+              userId: req.user!.id,
             },
       });
 
       if (isSuperAdmin) {
-        // Only the super admin sees stats across every task in the workspace.
-        const total = await taskRepository.count({
-          where: { workspace: { id: workspace.id } },
+        // Only the super admin sees stats across every task in the organization.
+        const total = await prisma.task.count({
+          where: { organizationId: organization.id },
         });
-        const pending = await taskRepository.count({
+        const pending = await prisma.task.count({
           where: {
             status: TaskStatus.PENDING,
-            workspace: { id: workspace.id },
+            organizationId: organization.id,
           },
         });
-        const inProgress = await taskRepository.count({
+        const inProgress = await prisma.task.count({
           where: {
             status: TaskStatus.IN_PROGRESS,
-            workspace: { id: workspace.id },
+            organizationId: organization.id,
           },
         });
-        const completed = await taskRepository.count({
+        const completed = await prisma.task.count({
           where: {
             status: TaskStatus.COMPLETED,
-            workspace: { id: workspace.id },
+            organizationId: organization.id,
           },
         });
-        const highPriorityTasks = await taskRepository.find({
+        const highPriorityRows = await prisma.task.findMany({
           where: {
             priority: TaskPriority.HIGH,
-            workspace: { id: workspace.id },
+            organizationId: organization.id,
           },
-          relations: ["assignedUsers"],
-          order: { createdAt: "DESC" },
+          include: { assignedUsers: { include: { user: true } } },
+          orderBy: { createdAt: "desc" },
         });
+        const highPriorityTasks = highPriorityRows.map((task) => ({
+          ...task,
+          files: toSimpleArray(task.files),
+          assignedUsers: task.assignedUsers.map((a) => a.user),
+        }));
 
         return res.status(200).json({
           total,
@@ -74,45 +75,42 @@ export class DashboardController {
 
       // Everyone else (including regular admins) only sees stats for tasks
       // they assigned (created) or were assigned to.
-      const baseVisibleTasksQuery = () =>
-        taskRepository
-          .createQueryBuilder("task")
-          .leftJoin("task.assignedUsers", "user")
-          .leftJoin("task.createdBy", "createdByUser")
-          .where("task.workspace.id = :workspaceId", {
-            workspaceId: workspace.id,
-          })
-          .andWhere("(user.id = :userId OR createdByUser.id = :userId)", {
-            userId,
-          });
+      const baseVisibleWhere = {
+        organizationId: organization.id,
+        OR: [{ assignedUsers: { some: { userId: userId! } } }, { createdById: userId! }],
+      };
 
-      const total = await baseVisibleTasksQuery().getCount();
-      const pending = await baseVisibleTasksQuery()
-        .andWhere("task.status = :status", { status: TaskStatus.PENDING })
-        .getCount();
-      const inProgress = await baseVisibleTasksQuery()
-        .andWhere("task.status = :status", { status: TaskStatus.IN_PROGRESS })
-        .getCount();
-      const completed = await baseVisibleTasksQuery()
-        .andWhere("task.status = :status", { status: TaskStatus.COMPLETED })
-        .getCount();
+      const total = await prisma.task.count({ where: baseVisibleWhere });
+      const pending = await prisma.task.count({
+        where: { ...baseVisibleWhere, status: TaskStatus.PENDING },
+      });
+      const inProgress = await prisma.task.count({
+        where: { ...baseVisibleWhere, status: TaskStatus.IN_PROGRESS },
+      });
+      const completed = await prisma.task.count({
+        where: { ...baseVisibleWhere, status: TaskStatus.COMPLETED },
+      });
 
       // Resolve visible high-priority task ids first, then re-fetch with full
       // relations — filtering directly on the joined "assignedUsers" alias
       // would silently truncate that relation to just the caller's own row.
-      const highPriorityRows = await baseVisibleTasksQuery()
-        .andWhere("task.priority = :priority", { priority: TaskPriority.HIGH })
-        .select("task.id", "id")
-        .distinct(true)
-        .getRawMany();
-      const highPriorityTaskIds = highPriorityRows.map((row) => row.id);
-      const highPriorityTasks = highPriorityTaskIds.length
-        ? await taskRepository.find({
-            where: { id: In(highPriorityTaskIds) },
-            relations: ["assignedUsers"],
-            order: { createdAt: "DESC" },
+      const highPriorityRowIds = await prisma.task.findMany({
+        where: { ...baseVisibleWhere, priority: TaskPriority.HIGH },
+        select: { id: true },
+        distinct: ["id"],
+      });
+      const highPriorityTaskIds = highPriorityRowIds.map((row) => row.id);
+      const highPriorityRows = highPriorityTaskIds.length
+        ? await prisma.task.findMany({
+            where: { id: { in: highPriorityTaskIds } },
+            include: { assignedUsers: { include: { user: true } } },
+            orderBy: { createdAt: "desc" },
           })
         : [];
+      const highPriorityTasks = highPriorityRows.map((task) => ({
+        ...task,
+        assignedUsers: task.assignedUsers.map((a) => a.user),
+      }));
 
       return res.status(200).json({
         total,

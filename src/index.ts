@@ -1,22 +1,20 @@
-import express from "express";
+import express, { ErrorRequestHandler } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import helmet from "helmet";
+import multer from "multer";
 import path from "path";
 import dotenv from "dotenv";
 import cron from "node-cron";
-import { AppDataSource } from "./config/data-source";
+import { prisma } from "./config/prisma";
 import routes from "./routes";
-import { User, UserRole } from "./entities/User";
-import { Workspace } from "./entities/Workspace";
-import { WorkspaceMembership } from "./entities/WorkspaceMembership";
-import { Announcement } from "./entities/Announcement";
-import { LeaveRequest } from "./entities/LeaveRequest";
-import { SiteVisitRequest } from "./entities/SiteVisitRequest";
-import { ExpenseRequest } from "./entities/ExpenseRequest";
-import { In, LessThan } from "typeorm";
+import { UserRole } from "./types/enums";
+import type { UserModel as User } from "./generated/prisma/models";
 import bcrypt from "bcrypt";
-import { backfillWorkspace } from "./utils/backfill-workspace";
+import { backfillOrganization } from "./utils/backfill-organization";
 import { seedRolePermissions } from "./utils/permissionService";
+import { authMiddleware } from "./middlewares/auth";
+import { verifyUploadAccess } from "./middlewares/uploadAccess";
 
 dotenv.config();
 
@@ -33,6 +31,20 @@ process.on("unhandledRejection", (reason, promise) => {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(
+  helmet({
+    // This app is a pure JSON/file API consumed by a separately-hosted SPA —
+    // CSP is a browser-rendered-document concept that doesn't apply to that
+    // shape and risks unexpected breakage, so it's left off; the resource
+    // policy below is what actually matters here (see comment below).
+    contentSecurityPolicy: false,
+    // Default helmet policy is "same-origin", which would block the frontend
+    // (a different origin) from loading /uploads images/files via <img>/<a> —
+    // this app's whole design relies on cross-origin cookie-authenticated
+    // asset loading, so that's explicitly preserved.
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  }),
+);
 app.use(
   cors({
     origin: [
@@ -54,66 +66,92 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files from uploads directory
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+// Serve static files from uploads directory — gated behind auth + an
+// organization-ownership check (see uploadAccess.ts) so attachments from one
+// organization can't be read via URL by a user of another, or by anyone
+// unauthenticated at all.
+app.use(
+  "/uploads",
+  authMiddleware,
+  verifyUploadAccess,
+  express.static(path.join(__dirname, "../uploads")),
+);
 
 app.use("/api", routes);
 
-// Role lives on WorkspaceMembership now, not User — both seed functions
-// find-or-create the same default "EMS Workspace" that backfillWorkspace
-// (called right after these) also ensures exists, then upsert their
-// membership row's role in it. Safe to call before backfillWorkspace runs:
-// the workspace only needs to exist once, whichever of these creates it.
-const ensureMembershipRole = async (user: User, role: UserRole) => {
-  const workspaceRepository = AppDataSource.getRepository(Workspace);
-  const membershipRepository = AppDataSource.getRepository(WorkspaceMembership);
+// Turns a rejected upload (blocked file type, size-limit) into a clean 400
+// instead of falling through to Express's default 500/HTML error page.
+const uploadErrorHandler: ErrorRequestHandler = (err, _req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ message: err.message });
+  }
+  if (err instanceof Error && /not allowed/i.test(err.message)) {
+    return res.status(400).json({ message: err.message });
+  }
+  next(err);
+};
+app.use(uploadErrorHandler);
 
-  let workspace = await workspaceRepository.findOne({
+// Role lives on OrganizationMembership now, not User — both seed functions
+// find-or-create the same default "EMS Workspace" that backfillOrganization
+// (called right after these) also ensures exists, then upsert their
+// membership row's role in it. Safe to call before backfillOrganization
+// runs: the organization only needs to exist once, whichever of these
+// creates it.
+const ensureMembershipRole = async (user: User, role: UserRole) => {
+  // NOTE: "EMS Workspace" is an existing stored data value (the default
+  // organization's `name` column), not a code identifier — left exactly as
+  // written so this lookup still matches the row already in production DBs.
+  let organization = await prisma.organization.findFirst({
     where: { name: "EMS Workspace" },
   });
-  if (!workspace) {
-    workspace = workspaceRepository.create({
-      name: "EMS Workspace",
-      description: "Default workspace for all EMS data",
+  if (!organization) {
+    organization = await prisma.organization.create({
+      data: {
+        name: "EMS Workspace",
+        description: "Default organization for all EMS data",
+      },
     });
-    await workspaceRepository.save(workspace);
   }
 
-  let membership = await membershipRepository.findOne({
-    where: { user: { id: user.id }, workspace: { id: workspace.id } },
+  const membership = await prisma.organizationMembership.findFirst({
+    where: { userId: user.id, organizationId: organization.id },
   });
   if (!membership) {
-    membership = membershipRepository.create({ user, workspace, role });
-    await membershipRepository.save(membership);
+    await prisma.organizationMembership.create({
+      data: { userId: user.id, organizationId: organization.id, role },
+    });
     return true;
   }
   if (membership.role !== role) {
-    membership.role = role;
-    await membershipRepository.save(membership);
+    await prisma.organizationMembership.update({
+      where: { id: membership.id },
+      data: { role },
+    });
     return true;
   }
   return false;
 };
 
 const seedAdmin = async () => {
-  const userRepository = AppDataSource.getRepository(User);
   const adminEmail = "admin@ems.com";
-  let adminExists = await userRepository.findOne({
+  let adminExists = await prisma.user.findUnique({
     where: { email: adminEmail },
   });
 
   if (!adminExists) {
     const hashedPassword = await bcrypt.hash("admin123", 10);
-    adminExists = userRepository.create({
-      fullName: "System Admin",
-      email: adminEmail,
-      password: hashedPassword,
-      phoneNumber: "0000000000",
-      address: "System",
-      jobPosition: "Administrator",
-      joinDate: new Date(),
+    adminExists = await prisma.user.create({
+      data: {
+        fullName: "System Admin",
+        email: adminEmail,
+        password: hashedPassword,
+        phoneNumber: "0000000000",
+        address: "System",
+        jobPosition: "Administrator",
+        joinDate: new Date(),
+      },
     });
-    await userRepository.save(adminExists);
     console.log(`Default admin created: ${adminEmail} / admin123`);
   }
 
@@ -126,24 +164,24 @@ const seedAdmin = async () => {
 };
 
 const seedSuperAdmin = async () => {
-  const userRepository = AppDataSource.getRepository(User);
   const superAdminEmail = "superadmin@ems.com";
-  let superAdminExists = await userRepository.findOne({
+  let superAdminExists = await prisma.user.findUnique({
     where: { email: superAdminEmail },
   });
 
   if (!superAdminExists) {
     const hashedPassword = await bcrypt.hash("superadmin123", 10);
-    superAdminExists = userRepository.create({
-      fullName: "Super Admin",
-      email: superAdminEmail,
-      password: hashedPassword,
-      phoneNumber: "0000000000",
-      address: "System",
-      jobPosition: "Super Administrator",
-      joinDate: new Date(),
+    superAdminExists = await prisma.user.create({
+      data: {
+        fullName: "Super Admin",
+        email: superAdminEmail,
+        password: hashedPassword,
+        phoneNumber: "0000000000",
+        address: "System",
+        jobPosition: "Super Administrator",
+        joinDate: new Date(),
+      },
     });
-    await userRepository.save(superAdminExists);
     console.log(`Default super admin created: ${superAdminEmail} / superadmin123`);
   }
 
@@ -157,19 +195,15 @@ const seedSuperAdmin = async () => {
 
 const deleteOldAnnouncements = async () => {
   try {
-    const announcementRepository = AppDataSource.getRepository(Announcement);
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const result = await announcementRepository
-      .createQueryBuilder()
-      .delete()
-      .from(Announcement)
-      .where("createdAt < :sevenDaysAgo", { sevenDaysAgo })
-      .execute();
+    const result = await prisma.announcement.deleteMany({
+      where: { createdAt: { lt: sevenDaysAgo } },
+    });
 
-    if (result.affected && result.affected > 0) {
-      console.log(`Deleted ${result.affected} old announcement(s) (older than 7 days)`);
+    if (result.count > 0) {
+      console.log(`Deleted ${result.count} old announcement(s) (older than 7 days)`);
     }
   } catch (error) {
     console.error("Error deleting old announcements:", error);
@@ -180,37 +214,49 @@ const deleteOldApprovedRequests = async () => {
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-  const requestTypes = [
-    { label: "leave request", entity: LeaveRequest },
-    { label: "site visit request", entity: SiteVisitRequest },
-    { label: "expense request", entity: ExpenseRequest },
-  ] as const;
-
-  for (const { label, entity } of requestTypes) {
-    try {
-      const repository = AppDataSource.getRepository(entity);
-      const result = await repository.delete({
-        status: In(["approved", "rejected"]),
-        approvedAt: LessThan(sevenDaysAgo),
-      });
-
-      if (result.affected && result.affected > 0) {
-        console.log(`Deleted ${result.affected} old resolved ${label}(s) (approved/rejected over 7 days ago)`);
-      }
-    } catch (error) {
-      console.error(`Error deleting old resolved ${label}s:`, error);
+  try {
+    const result = await prisma.leaveRequest.deleteMany({
+      where: { status: { in: ["approved", "rejected"] }, approvedAt: { lt: sevenDaysAgo } },
+    });
+    if (result.count > 0) {
+      console.log(`Deleted ${result.count} old resolved leave request(s) (approved/rejected over 7 days ago)`);
     }
+  } catch (error) {
+    console.error("Error deleting old resolved leave requests:", error);
+  }
+
+  try {
+    const result = await prisma.siteVisitRequest.deleteMany({
+      where: { status: { in: ["approved", "rejected"] }, approvedAt: { lt: sevenDaysAgo } },
+    });
+    if (result.count > 0) {
+      console.log(`Deleted ${result.count} old resolved site visit request(s) (approved/rejected over 7 days ago)`);
+    }
+  } catch (error) {
+    console.error("Error deleting old resolved site visit requests:", error);
+  }
+
+  try {
+    const result = await prisma.expenseRequest.deleteMany({
+      where: { status: { in: ["approved", "rejected"] }, approvedAt: { lt: sevenDaysAgo } },
+    });
+    if (result.count > 0) {
+      console.log(`Deleted ${result.count} old resolved expense request(s) (approved/rejected over 7 days ago)`);
+    }
+  } catch (error) {
+    console.error("Error deleting old resolved expense requests:", error);
   }
 };
 
-AppDataSource.initialize()
+prisma
+  .$connect()
   .then(async () => {
     console.log("Data Source has been initialized!");
     await seedAdmin();
     await seedSuperAdmin();
-    await backfillWorkspace(); // Backfill all existing data to default workspace!
+    await backfillOrganization(); // Backfill all existing data to default organization!
     await seedRolePermissions();
-    
+
     // Delete old announcements immediately on startup
     await deleteOldAnnouncements();
     await deleteOldApprovedRequests();
@@ -221,7 +267,7 @@ AppDataSource.initialize()
       deleteOldAnnouncements();
       deleteOldApprovedRequests();
     });
-    
+
     app.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`);
     });

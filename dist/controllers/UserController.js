@@ -3,99 +3,44 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UserController = void 0;
-const data_source_1 = require("../config/data-source");
-const User_1 = require("../entities/User");
+exports.UserController = exports.countSuperAdminsInOrganization = void 0;
+const prisma_1 = require("../config/prisma");
+const enums_1 = require("../types/enums");
 const bcrypt_1 = __importDefault(require("bcrypt"));
+// At most one super admin per organization. `excludeUserId` lets an update check
+// exclude the user being updated (a no-op re-save of an existing super admin
+// shouldn't trip over itself). Exported for InviteController, which enforces
+// the same rule when sending/accepting an invite.
+const countSuperAdminsInOrganization = async (organizationId, excludeUserId) => {
+    return prisma_1.prisma.organizationMembership.count({
+        where: {
+            organizationId,
+            role: enums_1.UserRole.SUPER_ADMIN,
+            ...(excludeUserId !== undefined ? { userId: { not: excludeUserId } } : {}),
+        },
+    });
+};
+exports.countSuperAdminsInOrganization = countSuperAdminsInOrganization;
 class UserController {
-    static addUser = async (req, res) => {
-        const { fullName, email, password, phoneNumber, address, jobPosition, joinDate, role, } = req.body;
-        if (!fullName ||
-            !email ||
-            !password ||
-            !phoneNumber ||
-            !address ||
-            !jobPosition ||
-            !joinDate) {
-            return res.status(400).json({ message: "All fields are required" });
-        }
-        try {
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const workspace = req.workspace;
-            // Check if user already exists
-            const existingUser = await userRepository.findOne({ where: { email } });
-            if (existingUser) {
-                return res
-                    .status(400)
-                    .json({ message: "User with this email already exists" });
-            }
-            // Enforce role creation rules
-            const currentUserRole = req.user?.role;
-            let finalRole = role || User_1.UserRole.USER;
-            if (currentUserRole === User_1.UserRole.ADMIN) {
-                // Admin can create users or admins, but not super admins
-                if (finalRole === User_1.UserRole.USER || finalRole === User_1.UserRole.ADMIN) {
-                    // Keep the requested role (user or admin)
-                }
-                else {
-                    // Fallback to user if invalid role
-                    finalRole = User_1.UserRole.USER;
-                }
-            }
-            else if (currentUserRole !== User_1.UserRole.SUPER_ADMIN) {
-                // Users can't create anyone
-                return res
-                    .status(403)
-                    .json({ message: "Not authorized to create users" });
-            }
-            const hashedPassword = await bcrypt_1.default.hash(password, 10);
-            const newUser = userRepository.create({
-                fullName,
-                email,
-                password: hashedPassword,
-                phoneNumber,
-                address,
-                jobPosition,
-                joinDate: new Date(joinDate),
-                role: finalRole,
-                workspaces: [workspace],
-            });
-            await userRepository.save(newUser);
-            return res.status(201).json({
-                message: "User created successfully",
-                user: {
-                    id: newUser.id,
-                    fullName: newUser.fullName,
-                    email: newUser.email,
-                    role: newUser.role,
-                },
-            });
-        }
-        catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
-        }
-    };
     static getAllUsers = async (req, res) => {
         try {
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const workspace = req.workspace;
-            // Get all users that are members of the current workspace
-            const users = await userRepository
-                .createQueryBuilder("user")
-                .innerJoin("user.workspaces", "workspace")
-                .where("workspace.id = :workspaceId", { workspaceId: workspace.id })
-                .select([
-                "user.id",
-                "user.fullName",
-                "user.email",
-                "user.phoneNumber",
-                "user.address",
-                "user.jobPosition",
-                "user.joinDate",
-                "user.role",
-                "user.createdAt",
-            ])
-                .getMany();
+            const organization = req.organization;
+            // Get all members of the current organization, with their role in it.
+            const memberships = await prisma_1.prisma.organizationMembership.findMany({
+                where: { organizationId: organization.id },
+                include: { user: true },
+            });
+            const users = memberships.map((m) => ({
+                id: m.user.id,
+                fullName: m.user.fullName,
+                email: m.user.email,
+                phoneNumber: m.user.phoneNumber,
+                address: m.user.address,
+                jobPosition: m.user.jobPosition,
+                joinDate: m.user.joinDate,
+                role: m.role,
+                createdAt: m.user.createdAt,
+            }));
             return res.status(200).json(users);
         }
         catch (error) {
@@ -108,27 +53,32 @@ class UserController {
             return res.status(400).json({ message: "User ID is required" });
         }
         try {
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const workspace = req.workspace;
-            // Find user only if they are in current workspace
-            const user = await userRepository
-                .createQueryBuilder("user")
-                .innerJoin("user.workspaces", "workspace")
-                .where("user.id = :id", { id: parseInt(id) })
-                .andWhere("workspace.id = :workspaceId", { workspaceId: workspace.id })
-                .getOne();
-            if (!user) {
+            const organization = req.organization;
+            // Find the membership only if they are in the current organization
+            const membership = await prisma_1.prisma.organizationMembership.findFirst({
+                where: {
+                    userId: parseInt(id),
+                    organizationId: organization.id,
+                },
+            });
+            if (!membership) {
                 return res.status(404).json({ message: "User not found" });
             }
-            // Remove user from workspace
-            await userRepository
-                .createQueryBuilder()
-                .relation(User_1.User, "workspaces")
-                .of(user)
-                .remove(workspace);
+            // Admins can remove regular users/finance, but not peers or super admins
+            // — only a super admin can remove another admin (or a user).
+            const currentUserRole = req.user?.role;
+            if (currentUserRole === enums_1.UserRole.ADMIN &&
+                (membership.role === enums_1.UserRole.ADMIN || membership.role === enums_1.UserRole.SUPER_ADMIN)) {
+                return res.status(403).json({
+                    message: "Admins cannot remove other admins or super admins",
+                });
+            }
+            // Remove user from organization (their membership in any other organization
+            // is untouched).
+            await prisma_1.prisma.organizationMembership.delete({ where: { id: membership.id } });
             return res
                 .status(200)
-                .json({ message: "User removed from workspace successfully" });
+                .json({ message: "User removed from organization successfully" });
         }
         catch (error) {
             return res.status(500).json({ message: "Internal server error", error });
@@ -141,49 +91,69 @@ class UserController {
             return res.status(400).json({ message: "User ID is required" });
         }
         try {
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const workspace = req.workspace;
-            // Find user only if they are in current workspace
-            const user = await userRepository
-                .createQueryBuilder("user")
-                .innerJoin("user.workspaces", "workspace")
-                .where("user.id = :id", { id: parseInt(id) })
-                .andWhere("workspace.id = :workspaceId", { workspaceId: workspace.id })
-                .getOne();
-            if (!user) {
+            const organization = req.organization;
+            // Find the membership (and its user) only if they are in the current
+            // organization — role updates below apply to this membership, i.e. this
+            // organization only.
+            const membership = await prisma_1.prisma.organizationMembership.findFirst({
+                where: {
+                    userId: parseInt(id),
+                    organizationId: organization.id,
+                },
+                include: { user: true },
+            });
+            if (!membership) {
                 return res.status(404).json({ message: "User not found" });
             }
+            const user = membership.user;
+            const userData = {};
             if (fullName)
-                user.fullName = fullName;
+                userData.fullName = fullName;
             if (email)
-                user.email = email;
+                userData.email = email;
             if (phoneNumber)
-                user.phoneNumber = phoneNumber;
+                userData.phoneNumber = phoneNumber;
             if (address)
-                user.address = address;
+                userData.address = address;
             if (jobPosition)
-                user.jobPosition = jobPosition;
+                userData.jobPosition = jobPosition;
             if (joinDate)
-                user.joinDate = new Date(joinDate);
+                userData.joinDate = new Date(joinDate);
             // Enforce role update rules
+            let newRole;
             const currentUserRole = req.user?.role;
             if (role) {
-                if (currentUserRole === User_1.UserRole.ADMIN) {
-                    // Admin can set role to user or admin, but not super admin
-                    if (role === User_1.UserRole.USER || role === User_1.UserRole.ADMIN) {
-                        user.role = role;
+                if (currentUserRole === enums_1.UserRole.ADMIN) {
+                    // Admin can set role to user, finance, or admin, but not super admin
+                    if (role === enums_1.UserRole.USER ||
+                        role === enums_1.UserRole.FINANCE ||
+                        role === enums_1.UserRole.ADMIN) {
+                        newRole = role;
                     }
                 }
-                else if (currentUserRole === User_1.UserRole.SUPER_ADMIN) {
-                    // Super admin can set any role
-                    user.role = role;
+                else if (currentUserRole === enums_1.UserRole.SUPER_ADMIN) {
+                    // Super admin can set any role, but only one super admin is
+                    // allowed per organization.
+                    if (role === enums_1.UserRole.SUPER_ADMIN && membership.role !== enums_1.UserRole.SUPER_ADMIN) {
+                        const existingSuperAdmins = await (0, exports.countSuperAdminsInOrganization)(organization.id, user.id);
+                        if (existingSuperAdmins > 0) {
+                            return res
+                                .status(400)
+                                .json({ message: "This organization already has a super admin" });
+                        }
+                    }
+                    newRole = role;
                 }
                 // Regular users can't change roles
             }
             if (password) {
-                user.password = await bcrypt_1.default.hash(password, 10);
+                userData.password = await bcrypt_1.default.hash(password, 10);
             }
-            await userRepository.save(user);
+            await prisma_1.prisma.user.update({ where: { id: user.id }, data: userData });
+            await prisma_1.prisma.organizationMembership.update({
+                where: { id: membership.id },
+                data: newRole !== undefined ? { role: newRole } : {},
+            });
             return res.status(200).json({ message: "User updated successfully" });
         }
         catch (error) {

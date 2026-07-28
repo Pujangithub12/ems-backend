@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { ScheduleService } from "../services/schedule.service";
-import { validateScheduleTasks, ValidationError } from "../dto/schedule.dto";
+import { validateScheduleTasks, validateScheduleLinks, ValidationError } from "../dto/schedule.dto";
 
 // schedule endpoints (get/save) — full-replace persistence
 export class ScheduleController {
@@ -13,8 +13,8 @@ export class ScheduleController {
       return;
     }
     try {
-      const tasks = await this.scheduleService.getSchedule(projectId);
-      res.json({ tasks });
+      const { tasks, links } = await this.scheduleService.getSchedule(projectId);
+      res.json({ tasks, links });
     } catch (err) {
       if (err instanceof ValidationError) {
         res.status(400).json({ message: err.message });
@@ -33,8 +33,10 @@ export class ScheduleController {
     }
     try {
       const tasks = validateScheduleTasks(req.body?.tasks);
-      const saved = await this.scheduleService.saveSchedule(projectId, tasks);
-      res.json({ tasks: saved });
+      const taskIds = new Set(tasks.map((task) => task.id));
+      const links = validateScheduleLinks(req.body?.links, taskIds);
+      const saved = await this.scheduleService.saveSchedule(projectId, tasks, links);
+      res.json({ tasks: saved.tasks, links: saved.links });
     } catch (err) {
       if (err instanceof ValidationError) {
         res.status(400).json({ message: err.message });

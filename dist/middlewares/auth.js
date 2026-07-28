@@ -3,12 +3,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.roleMiddleware = exports.authMiddleware = void 0;
+exports.anyPermissionMiddleware = exports.permissionMiddleware = exports.roleMiddleware = exports.authMiddleware = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const dotenv_1 = __importDefault(require("dotenv"));
-const data_source_1 = require("../config/data-source");
-const Workspace_1 = require("../entities/Workspace");
-const User_1 = require("../entities/User");
+const prisma_1 = require("../config/prisma");
+const enums_1 = require("../types/enums");
+const permissionService_1 = require("../utils/permissionService");
 dotenv_1.default.config();
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
@@ -22,131 +22,145 @@ const authMiddleware = async (req, res, next) => {
         return res.status(401).json({ message: "No token provided" });
     }
     try {
+        // The JWT only ever carries the user id now — role is per-organization
+        // (see OrganizationMembership), so it can't be baked into a token that
+        // outlives any single organization context. `req.user.role` is filled in
+        // below once `req.organization` is resolved.
         const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
         req.user = {
             id: decoded.id,
-            role: decoded.role,
+            role: "",
         };
-        const workspaceRepo = data_source_1.AppDataSource.getRepository(Workspace_1.Workspace);
-        const userRepo = data_source_1.AppDataSource.getRepository(User_1.User);
-        // The frontend is URL-driven: each request declares which workspace it's
-        // operating on via this header (derived from the route, not shared cookie
-        // state), so switching workspaces takes effect on the very next request
-        // instead of racing a cookie update. Falls back to the cookie below for
-        // requests that can't set custom headers (e.g. the static /uploads route).
-        const headerWorkspaceId = req.headers["x-workspace-id"];
-        if (headerWorkspaceId) {
-            const raw = Array.isArray(headerWorkspaceId)
-                ? headerWorkspaceId[0]
-                : headerWorkspaceId;
-            const parsedId = Number(raw);
-            if (!Number.isInteger(parsedId) || parsedId <= 0) {
-                return res.status(400).json({ message: "Invalid workspace id" });
-            }
-            const user = await userRepo.findOne({
-                where: { id: req.user.id },
-                relations: ["workspaces"],
-            });
-            if (!user) {
-                return res.status(404).json({ message: "User not found" });
-            }
-            const targetWorkspace = user.workspaces.find((w) => w.id === parsedId);
-            if (!targetWorkspace) {
+        const user = await prisma_1.prisma.user.findUnique({
+            where: { id: req.user.id },
+            include: { memberships: { include: { organization: true } } },
+        });
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+        const userOrganizations = user.memberships.map((m) => m.organization);
+        let memberships = user.memberships;
+        const headerOrganizationId = req.headers["x-workspace-id"];
+        const rawHeader = Array.isArray(headerOrganizationId)
+            ? headerOrganizationId[0]
+            : headerOrganizationId;
+        let resolvedOrganization = null;
+        // Accounts created via an accepted organization invite are permanently
+        // pinned to the one organization they were invited into — resolved here,
+        // before any header/cookie logic, so nothing below can ever put them in
+        // a different organization's context.
+        if (user.homeOrganizationId != null) {
+            const home = userOrganizations.find((w) => w.id === user.homeOrganizationId);
+            if (!home) {
+                // Home organization was deleted, or this account's membership in it
+                // was otherwise removed — never fall through to the "no organization
+                // -> create a default one" path below, which would hand a
+                // restricted account an organization of its own.
                 return res
                     .status(403)
-                    .json({ message: "Not a member of this workspace" });
+                    .json({ message: "Access Forbidden", code: "WORKSPACE_ACCESS_FORBIDDEN" });
             }
-            req.workspace = targetWorkspace;
-            // Keep the cookie in sync as the "last used" default for requests
-            // without the header.
-            const isProduction = process.env.NODE_ENV === "production";
-            res.cookie("workspaceId", targetWorkspace.id.toString(), {
-                httpOnly: true,
-                secure: isProduction,
-                sameSite: isProduction ? "none" : "lax",
-                maxAge: THREE_HOURS_MS,
-            });
-            return next();
+            const requestedId = rawHeader != null
+                ? Number(rawHeader)
+                : req.cookies.workspaceId
+                    ? Number(req.cookies.workspaceId)
+                    : null;
+            if (requestedId != null &&
+                Number.isInteger(requestedId) &&
+                requestedId !== home.id) {
+                return res
+                    .status(403)
+                    .json({ message: "Access Forbidden", code: "WORKSPACE_ACCESS_FORBIDDEN" });
+            }
+            resolvedOrganization = home;
         }
-        // Now get the current workspace
-        let workspaceId = req.cookies.workspaceId;
-        if (!workspaceId) {
-            // Try to get user's first workspace or create default
-            const user = await userRepo.findOne({
-                where: { id: req.user.id },
-                relations: ["workspaces"],
-            });
-            if (!user) {
-                return res.status(404).json({ message: "User not found" });
+        else if (headerOrganizationId) {
+            // The frontend is URL-driven: each request declares which organization
+            // it's operating on via this header (derived from the route, not
+            // shared cookie state), so switching organizations takes effect on the
+            // very next request instead of racing a cookie update. Falls back to
+            // the cookie below for requests that can't set custom headers (e.g.
+            // the static /uploads route).
+            const parsedId = Number(rawHeader);
+            if (!Number.isInteger(parsedId) || parsedId <= 0) {
+                return res.status(400).json({ message: "Invalid organization id" });
             }
-            if (user.workspaces.length === 0) {
-                // Create default workspace
-                const defaultWorkspace = workspaceRepo.create({
-                    name: "EMS Workspace",
-                    members: [user],
-                });
-                await workspaceRepo.save(defaultWorkspace);
-                workspaceId = defaultWorkspace.id.toString();
-                // Set cookie
-                const isProduction = process.env.NODE_ENV === "production";
-                res.cookie("workspaceId", workspaceId, {
-                    httpOnly: true,
-                    secure: isProduction,
-                    sameSite: isProduction ? "none" : "lax",
-                    maxAge: THREE_HOURS_MS, // 3 hours
-                });
-                req.workspace = defaultWorkspace;
+            const targetOrganization = userOrganizations.find((w) => w.id === parsedId);
+            if (!targetOrganization) {
+                return res
+                    .status(403)
+                    .json({ message: "Not a member of this organization" });
             }
-            else {
-                const firstWorkspace = user.workspaces[0];
-                if (!firstWorkspace) {
-                    return res.status(404).json({ message: "Workspace not found" });
-                }
-                workspaceId = firstWorkspace.id.toString();
-                // Set cookie
-                const isProduction = process.env.NODE_ENV === "production";
-                res.cookie("workspaceId", workspaceId, {
-                    httpOnly: true,
-                    secure: isProduction,
-                    sameSite: isProduction ? "none" : "lax",
-                    maxAge: THREE_HOURS_MS, // 3 hours
-                });
-                req.workspace = firstWorkspace;
-            }
+            resolvedOrganization = targetOrganization;
         }
         else {
-            // Get workspace from cookie
-            const workspace = await workspaceRepo.findOne({
-                where: { id: Number(workspaceId) },
-            });
-            if (!workspace) {
-                // Invalid workspace cookie, fallback to first
-                const user = await userRepo.findOne({
-                    where: { id: req.user.id },
-                    relations: ["workspaces"],
-                });
-                if (user && user.workspaces.length > 0) {
-                    const fallbackWorkspace = user.workspaces[0];
-                    if (!fallbackWorkspace) {
-                        return res.status(404).json({ message: "Workspace not found" });
-                    }
-                    req.workspace = fallbackWorkspace;
-                    const isProduction = process.env.NODE_ENV === "production";
-                    res.cookie("workspaceId", fallbackWorkspace.id.toString(), {
-                        httpOnly: true,
-                        secure: isProduction,
-                        sameSite: isProduction ? "none" : "lax",
-                        maxAge: THREE_HOURS_MS, // 3 hours
+            // Now get the current organization
+            const workspaceId = req.cookies.workspaceId;
+            if (!workspaceId) {
+                if (userOrganizations.length === 0) {
+                    // Brand new account with no organization at all — create a
+                    // default one and make them its super admin (mirrors
+                    // OrganizationController.create / AuthController.registerVerify).
+                    const defaultOrganization = await prisma_1.prisma.organization.create({
+                        data: { name: "EMS Workspace" },
                     });
+                    const membership = await prisma_1.prisma.organizationMembership.create({
+                        data: {
+                            userId: user.id,
+                            organizationId: defaultOrganization.id,
+                            role: enums_1.UserRole.SUPER_ADMIN,
+                        },
+                    });
+                    memberships = [...memberships, { ...membership, organization: defaultOrganization }];
+                    resolvedOrganization = defaultOrganization;
                 }
                 else {
-                    return res.status(404).json({ message: "Workspace not found" });
+                    resolvedOrganization = userOrganizations[0];
                 }
             }
             else {
-                req.workspace = workspace;
+                // Get organization from cookie — re-verified against this user's
+                // actual memberships on every request. The cookie is
+                // client-controlled, so trusting its id alone would let anyone
+                // read/write another organization's data just by setting
+                // workspaceId to its id.
+                const cookieOrganization = userOrganizations.find((w) => w.id === Number(workspaceId));
+                if (!cookieOrganization) {
+                    // Cookie is stale, invalid, or points to an organization this user
+                    // is no longer (or never was) a member of — fall back to their first.
+                    if (userOrganizations.length > 0) {
+                        resolvedOrganization = userOrganizations[0];
+                    }
+                    else {
+                        return res.status(404).json({ message: "Organization not found" });
+                    }
+                }
+                else {
+                    resolvedOrganization = cookieOrganization;
+                }
             }
         }
+        if (!resolvedOrganization) {
+            return res.status(404).json({ message: "Organization not found" });
+        }
+        const membership = memberships.find((m) => m.organization.id === resolvedOrganization.id);
+        if (!membership) {
+            // Shouldn't happen — resolvedOrganization is always derived from
+            // userOrganizations/user.memberships above — but never let a request
+            // through with an unresolved role.
+            return res
+                .status(403)
+                .json({ message: "Access Forbidden", code: "WORKSPACE_ACCESS_FORBIDDEN" });
+        }
+        req.user.role = membership.role;
+        req.organization = resolvedOrganization;
+        const isProduction = process.env.NODE_ENV === "production";
+        res.cookie("workspaceId", resolvedOrganization.id.toString(), {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax",
+            maxAge: THREE_HOURS_MS,
+        });
         next();
     }
     catch (error) {
@@ -167,4 +181,43 @@ const roleMiddleware = (roles) => {
     };
 };
 exports.roleMiddleware = roleMiddleware;
+/**
+ * Gates a route by a dynamic, DB-backed permission instead of a hardcoded
+ * role list — see config/permissions.ts and utils/permissionService.ts.
+ * A super admin can grant/revoke these per role from the Roles & Permissions
+ * settings tab; this middleware is what actually enforces the change.
+ */
+const permissionMiddleware = (key) => {
+    return async (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ message: "Not authenticated" });
+        }
+        const allowed = await (0, permissionService_1.roleHasPermission)(req.user.role, key);
+        if (!allowed) {
+            return res.status(403).json({ message: "Forbidden: Access denied" });
+        }
+        next();
+    };
+};
+exports.permissionMiddleware = permissionMiddleware;
+/**
+ * Same as permissionMiddleware, but passes if the role holds ANY of the given
+ * keys — for routes shared across features gated by different permissions
+ * (e.g. the item catalog, writable from both the Inventory and Procurement
+ * "Add item" forms, each gated by its own permission key).
+ */
+const anyPermissionMiddleware = (keys) => {
+    return async (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ message: "Not authenticated" });
+        }
+        for (const key of keys) {
+            if (await (0, permissionService_1.roleHasPermission)(req.user.role, key)) {
+                return next();
+            }
+        }
+        return res.status(403).json({ message: "Forbidden: Access denied" });
+    };
+};
+exports.anyPermissionMiddleware = anyPermissionMiddleware;
 //# sourceMappingURL=auth.js.map

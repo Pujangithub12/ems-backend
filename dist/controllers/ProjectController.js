@@ -1,16 +1,70 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProjectController = void 0;
-const data_source_1 = require("../config/data-source");
-const Project_1 = require("../entities/Project");
-const User_1 = require("../entities/User");
-const ProjectHeading_1 = require("../entities/ProjectHeading");
-const Task_1 = require("../entities/Task");
-const TaskEnums_1 = require("../entities/TaskEnums");
-const typeorm_1 = require("typeorm");
+const prisma_1 = require("../config/prisma");
+const enums_1 = require("../types/enums");
+const hierarchyAuthority_1 = require("../utils/hierarchyAuthority");
+/** Deep relation tree matching the old QueryBuilder's leftJoinAndSelect chain:
+ * assignees, files, headings -> tasks -> assignedUsers, headings -> subHeadings
+ * -> tasks -> assignedUsers, and projectTasks -> assignedUsers. */
+const PROJECT_INCLUDE = {
+    assignees: { include: { user: true } },
+    files: true,
+    headings: {
+        include: {
+            tasks: { include: { assignedUsers: { include: { user: true } } } },
+            subHeadings: {
+                include: {
+                    tasks: { include: { assignedUsers: { include: { user: true } } } },
+                },
+            },
+        },
+    },
+    projectTasks: { include: { assignedUsers: { include: { user: true } } } },
+};
+/** Flattens a Prisma TaskAssignee join-row list back into the plain User[]
+ * shape the frontend has always received for a task's assignedUsers. */
+const shapeTaskAssignees = (task) => ({
+    ...task,
+    assignedUsers: Array.isArray(task.assignedUsers)
+        ? task.assignedUsers.map((a) => a.user)
+        : task.assignedUsers,
+});
+/** Flattens Prisma's ProjectAssignee join rows (and the same join rows nested
+ * inside every task in the heading/subHeading/projectTasks trees) back into
+ * the plain shape the frontend has always received. */
+const shapeProject = (project) => ({
+    ...project,
+    assignees: Array.isArray(project.assignees)
+        ? project.assignees.map((a) => a.user)
+        : project.assignees,
+    headings: Array.isArray(project.headings)
+        ? project.headings.map((h) => ({
+            ...h,
+            tasks: Array.isArray(h.tasks) ? h.tasks.map(shapeTaskAssignees) : h.tasks,
+            subHeadings: Array.isArray(h.subHeadings)
+                ? h.subHeadings.map((sh) => ({
+                    ...sh,
+                    tasks: Array.isArray(sh.tasks) ? sh.tasks.map(shapeTaskAssignees) : sh.tasks,
+                }))
+                : h.subHeadings,
+        }))
+        : project.headings,
+    projectTasks: Array.isArray(project.projectTasks)
+        ? project.projectTasks.map(shapeTaskAssignees)
+        : project.projectTasks,
+});
+const sanitizeAssignees = (project) => {
+    if (project.assignees) {
+        project.assignees = project.assignees.map((u) => {
+            const { password, ...rest } = u;
+            return rest;
+        });
+    }
+};
 class ProjectController {
     static createProject = async (req, res) => {
-        const { name, description, dueDate, status, priority, assigneeIds } = req.body;
+        const { name, description, dueDate, status, priority, assigneeIds, contractDate, kickoffDate, estimatedTotalCost, sellingPrice, } = req.body;
         if (!name) {
             return res.status(400).json({ message: "Project name is required" });
         }
@@ -22,30 +76,33 @@ class ProjectController {
                     .status(403)
                     .json({ message: "Not authorized to create projects" });
             }
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
             let assignees = [];
             if (assigneeIds && Array.isArray(assigneeIds) && assigneeIds.length > 0) {
-                assignees = await userRepository.findBy({ id: (0, typeorm_1.In)(assigneeIds) });
+                assignees = await prisma_1.prisma.user.findMany({ where: { id: { in: assigneeIds } } });
             }
-            const workspace = req.workspace;
-            const projectPayload = {
-                name,
-                description,
-                status: status && Object.values(TaskEnums_1.TaskStatus).includes(status)
-                    ? status
-                    : TaskEnums_1.TaskStatus.PENDING,
-                priority: priority && Object.values(TaskEnums_1.TaskPriority).includes(priority)
-                    ? priority
-                    : TaskEnums_1.TaskPriority.MEDIUM,
-                assignees,
-                workspace,
-            };
-            if (dueDate) {
-                projectPayload.dueDate = new Date(dueDate);
-            }
-            const project = projectRepository.create(projectPayload);
-            await projectRepository.save(project);
+            const organization = req.organization;
+            const newProjectRow = await prisma_1.prisma.project.create({
+                data: {
+                    name,
+                    ...(description !== undefined ? { description } : {}),
+                    status: status && Object.values(enums_1.TaskStatus).includes(status)
+                        ? status
+                        : enums_1.TaskStatus.PENDING,
+                    priority: priority && Object.values(enums_1.TaskPriority).includes(priority)
+                        ? priority
+                        : enums_1.TaskPriority.MEDIUM,
+                    organizationId: organization.id,
+                    ...(dueDate ? { dueDate: new Date(dueDate) } : {}),
+                    ...(contractDate ? { contractDate: new Date(contractDate) } : {}),
+                    ...(kickoffDate ? { kickoffDate: new Date(kickoffDate) } : {}),
+                    ...(estimatedTotalCost !== undefined ? { estimatedTotalCost } : {}),
+                    ...(sellingPrice !== undefined ? { sellingPrice } : {}),
+                    assignees: {
+                        create: assignees.map((u) => ({ userId: u.id })),
+                    },
+                },
+            });
+            const project = { ...newProjectRow, assignees, organization };
             return res.status(201).json({ message: "Project created", project });
         }
         catch (error) {
@@ -54,52 +111,31 @@ class ProjectController {
     };
     static getAllProjects = async (req, res) => {
         try {
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            const workspace = req.workspace; // Assert not undefined (set by middleware)
+            const organization = req.organization; // Assert not undefined (set by middleware)
             const user = req.user;
             let projects;
             if (user.role === "admin" || user.role === "super_admin") {
                 // Admin or super admin see all projects
-                projects = await projectRepository.find({
-                    where: { workspace: { id: workspace.id } },
-                    relations: [
-                        "assignees",
-                        "files",
-                        "headings",
-                        "headings.tasks",
-                        "headings.tasks.assignedUsers",
-                        "headings.subHeadings",
-                        "headings.subHeadings.tasks",
-                        "headings.subHeadings.tasks.assignedUsers",
-                        "projectTasks",
-                        "projectTasks.assignedUsers",
-                    ],
-                    order: { createdAt: "DESC" },
+                projects = await prisma_1.prisma.project.findMany({
+                    where: { organizationId: organization.id },
+                    include: PROJECT_INCLUDE,
+                    orderBy: { createdAt: "desc" },
                 });
             }
             else {
                 // Regular users only see projects they are assigned to
-                projects = await projectRepository
-                    .createQueryBuilder("project")
-                    .leftJoinAndSelect("project.assignees", "assignee")
-                    .leftJoinAndSelect("project.files", "file")
-                    .leftJoinAndSelect("project.headings", "heading")
-                    .leftJoinAndSelect("heading.tasks", "headingTask")
-                    .leftJoinAndSelect("headingTask.assignedUsers", "headingTaskUser")
-                    .leftJoinAndSelect("heading.subHeadings", "subHeading")
-                    .leftJoinAndSelect("subHeading.tasks", "subHeadingTask")
-                    .leftJoinAndSelect("subHeadingTask.assignedUsers", "subHeadingTaskUser")
-                    .leftJoinAndSelect("project.projectTasks", "projectTask")
-                    .leftJoinAndSelect("projectTask.assignedUsers", "projectTaskUser")
-                    .where("project.workspaceId = :workspaceId", {
-                    workspaceId: workspace.id,
-                })
-                    .andWhere("assignee.id = :userId", { userId: user.id })
-                    .orderBy("project.createdAt", "DESC")
-                    .getMany();
+                projects = await prisma_1.prisma.project.findMany({
+                    where: {
+                        organizationId: organization.id,
+                        assignees: { some: { userId: user.id } },
+                    },
+                    include: PROJECT_INCLUDE,
+                    orderBy: { createdAt: "desc" },
+                });
             }
-            console.log("[ProjectController.getAllProjects] Projects count:", projects.length);
-            return res.status(200).json(projects);
+            const shaped = projects.map(shapeProject);
+            console.log("[ProjectController.getAllProjects] Projects count:", shaped.length);
+            return res.status(200).json(shaped);
         }
         catch (error) {
             console.error("[ProjectController.getAllProjects] Error:", error);
@@ -109,56 +145,33 @@ class ProjectController {
     static getProjectById = async (req, res) => {
         const { id } = req.params;
         const user = req.user;
-        const workspace = req.workspace;
+        const organization = req.organization;
         try {
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            let project;
+            let projectRow;
             if (user.role === "admin" || user.role === "super_admin") {
-                project = await projectRepository.findOne({
+                projectRow = await prisma_1.prisma.project.findFirst({
                     where: {
                         id: parseInt(id),
-                        workspace: { id: workspace.id },
+                        organizationId: organization.id,
                     },
-                    relations: [
-                        "assignees",
-                        "files",
-                        "headings",
-                        "headings.tasks",
-                        "headings.tasks.assignedUsers",
-                        "headings.subHeadings",
-                        "headings.subHeadings.tasks",
-                        "headings.subHeadings.tasks.assignedUsers",
-                        "projectTasks",
-                        "projectTasks.assignedUsers",
-                    ],
+                    include: PROJECT_INCLUDE,
                 });
             }
             else {
                 // Check that the user is assigned to the project
-                project = await projectRepository
-                    .createQueryBuilder("project")
-                    .leftJoinAndSelect("project.assignees", "assignee")
-                    .leftJoinAndSelect("project.files", "file")
-                    .leftJoinAndSelect("project.headings", "heading")
-                    .leftJoinAndSelect("heading.tasks", "headingTask")
-                    .leftJoinAndSelect("headingTask.assignedUsers", "headingTaskUser")
-                    .leftJoinAndSelect("heading.subHeadings", "subHeading")
-                    .leftJoinAndSelect("subHeading.tasks", "subHeadingTask")
-                    .leftJoinAndSelect("subHeadingTask.assignedUsers", "subHeadingTaskUser")
-                    .leftJoinAndSelect("project.projectTasks", "projectTask")
-                    .leftJoinAndSelect("projectTask.assignedUsers", "projectTaskUser")
-                    .where("project.id = :projectId", {
-                    projectId: parseInt(id),
-                })
-                    .andWhere("project.workspaceId = :workspaceId", {
-                    workspaceId: workspace.id,
-                })
-                    .andWhere("assignee.id = :userId", { userId: user.id })
-                    .getOne();
+                projectRow = await prisma_1.prisma.project.findFirst({
+                    where: {
+                        id: parseInt(id),
+                        organizationId: organization.id,
+                        assignees: { some: { userId: user.id } },
+                    },
+                    include: PROJECT_INCLUDE,
+                });
             }
-            if (!project) {
+            if (!projectRow) {
                 return res.status(404).json({ message: "Project not found" });
             }
+            const project = shapeProject(projectRow);
             console.log("[ProjectController.getProjectById] Found project:", project?.id, project?.name);
             console.log("[ProjectController.getProjectById] projectTasks length:", project?.projectTasks?.length);
             console.log("[ProjectController.getProjectById] headings tasks:");
@@ -168,6 +181,7 @@ class ProjectController {
                     console.log(`    - Subheading ${sh.name}: ${sh.tasks?.length} tasks`);
                 });
             });
+            sanitizeAssignees(project);
             return res.status(200).json(project);
         }
         catch (error) {
@@ -189,12 +203,10 @@ class ProjectController {
                     .status(403)
                     .json({ message: "Not authorized to add project headings" });
             }
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            const headingRepository = data_source_1.AppDataSource.getRepository(ProjectHeading_1.ProjectHeading);
-            const project = await projectRepository.findOne({
+            const project = await prisma_1.prisma.project.findFirst({
                 where: {
                     id: parseInt(projectId),
-                    workspace: { id: req.workspace.id },
+                    organizationId: req.organization.id,
                 },
             });
             if (!project) {
@@ -202,19 +214,21 @@ class ProjectController {
             }
             let parentHeading;
             if (parentHeadingId) {
-                parentHeading = await headingRepository.findOneBy({
-                    id: parseInt(parentHeadingId),
+                parentHeading = await prisma_1.prisma.projectHeading.findFirst({
+                    where: { id: parseInt(parentHeadingId) },
                 });
             }
-            const headingData = {
-                name,
-                project,
-            };
+            const headingRow = await prisma_1.prisma.projectHeading.create({
+                data: {
+                    name,
+                    projectId: project.id,
+                    ...(parentHeading ? { parentHeadingId: parentHeading.id } : {}),
+                },
+            });
+            const heading = { ...headingRow, project };
             if (parentHeading) {
-                headingData.parentHeading = parentHeading;
+                heading.parentHeading = parentHeading;
             }
-            const heading = headingRepository.create(headingData);
-            await headingRepository.save(heading);
             return res.status(201).json({ message: "Heading added", heading });
         }
         catch (error) {
@@ -237,14 +251,10 @@ class ProjectController {
                     .status(403)
                     .json({ message: "Not authorized to add project tasks" });
             }
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            const headingRepository = data_source_1.AppDataSource.getRepository(ProjectHeading_1.ProjectHeading);
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const project = await projectRepository.findOne({
+            const project = await prisma_1.prisma.project.findFirst({
                 where: {
                     id: parseInt(projectId),
-                    workspace: { id: req.workspace.id },
+                    organizationId: req.organization.id,
                 },
             });
             if (!project) {
@@ -252,33 +262,47 @@ class ProjectController {
             }
             let heading;
             if (headingId) {
-                heading = await headingRepository.findOneBy({
-                    id: parseInt(headingId),
+                heading = await prisma_1.prisma.projectHeading.findFirst({
+                    where: { id: parseInt(headingId) },
                 });
             }
             let assignedUsers = [];
             if (assignedUserIds && Array.isArray(assignedUserIds)) {
-                assignedUsers = await userRepository.findBy({
-                    id: (0, typeorm_1.In)(assignedUserIds),
+                if (user.role !== "super_admin") {
+                    const descendantIds = new Set(await (0, hierarchyAuthority_1.getDescendantUserIds)(req.organization.id, user.id));
+                    const invalidIds = assignedUserIds.filter((uid) => uid !== user.id && !descendantIds.has(uid));
+                    if (invalidIds.length > 0) {
+                        return res.status(403).json({
+                            message: "You can only assign a task to yourself or someone below you in the hierarchy",
+                        });
+                    }
+                }
+                assignedUsers = await prisma_1.prisma.user.findMany({
+                    where: { id: { in: assignedUserIds } },
                 });
             }
-            const workspace = req.workspace;
-            const taskData = {
-                title,
-                description,
-                dueDate: new Date(dueDate),
-                priority: priority || TaskEnums_1.TaskPriority.MEDIUM,
-                project,
-                assignedUsers,
-                status: status || TaskEnums_1.TaskStatus.PENDING,
-                progress: 0,
-                workspace,
-            };
+            const organization = req.organization;
+            const newTaskRow = await prisma_1.prisma.task.create({
+                data: {
+                    title,
+                    description,
+                    dueDate: new Date(dueDate),
+                    priority: (priority || enums_1.TaskPriority.MEDIUM),
+                    projectId: project.id,
+                    projectName: project.name,
+                    status: (status || enums_1.TaskStatus.PENDING),
+                    progress: 0,
+                    organizationId: organization.id,
+                    ...(heading ? { projectHeadingId: heading.id } : {}),
+                    assignedUsers: {
+                        create: assignedUsers.map((u) => ({ userId: u.id })),
+                    },
+                },
+            });
+            const task = { ...newTaskRow, project, assignedUsers };
             if (heading) {
-                taskData.projectHeading = heading;
+                task.projectHeading = heading;
             }
-            const task = taskRepository.create(taskData);
-            await taskRepository.save(task);
             return res.status(201).json({ message: "Task added", task });
         }
         catch (error) {
@@ -289,26 +313,26 @@ class ProjectController {
         const { taskId } = req.params;
         const { description, dueDate, progress, status, priority, title } = req.body;
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const task = await taskRepository.findOneBy({
-                id: parseInt(taskId),
+            const existing = await prisma_1.prisma.task.findUnique({
+                where: { id: parseInt(taskId) },
             });
-            if (!task) {
+            if (!existing) {
                 return res.status(404).json({ message: "Task not found" });
             }
+            const data = {};
             if (title !== undefined)
-                task.title = title;
+                data.title = title;
             if (description !== undefined)
-                task.description = description;
+                data.description = description;
             if (dueDate !== undefined)
-                task.dueDate = new Date(dueDate);
+                data.dueDate = new Date(dueDate);
             if (progress !== undefined)
-                task.progress = progress;
+                data.progress = progress;
             if (status !== undefined)
-                task.status = status;
+                data.status = status;
             if (priority !== undefined)
-                task.priority = priority;
-            await taskRepository.save(task);
+                data.priority = priority;
+            const task = await prisma_1.prisma.task.update({ where: { id: existing.id }, data });
             return res.status(200).json({ message: "Task updated", task });
         }
         catch (error) {
@@ -318,14 +342,13 @@ class ProjectController {
     static deleteProjectTask = async (req, res) => {
         const { taskId } = req.params;
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const task = await taskRepository.findOneBy({
-                id: parseInt(taskId),
+            const task = await prisma_1.prisma.task.findUnique({
+                where: { id: parseInt(taskId) },
             });
             if (!task) {
                 return res.status(404).json({ message: "Task not found" });
             }
-            await taskRepository.remove(task);
+            await prisma_1.prisma.task.delete({ where: { id: task.id } });
             return res.status(200).json({ message: "Task deleted" });
         }
         catch (error) {
@@ -334,7 +357,7 @@ class ProjectController {
     };
     static updateProject = async (req, res) => {
         const { id } = req.params;
-        const { name, description, dueDate, status, priority, assigneeIds } = req.body;
+        const { name, description, dueDate, status, priority, assigneeIds, contractDate, kickoffDate, estimatedTotalCost, sellingPrice, } = req.body;
         try {
             const user = req.user;
             // Only admins or super admins can update projects
@@ -343,39 +366,56 @@ class ProjectController {
                     .status(403)
                     .json({ message: "Not authorized to update projects" });
             }
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const project = await projectRepository.findOne({
+            const existing = await prisma_1.prisma.project.findFirst({
                 where: {
                     id: parseInt(id),
-                    workspace: { id: req.workspace.id },
+                    organizationId: req.organization.id,
                 },
-                relations: ["assignees"],
+                include: { assignees: { include: { user: true } } },
             });
-            if (!project) {
+            if (!existing) {
                 return res.status(404).json({ message: "Project not found" });
             }
+            const data = {};
             if (name)
-                project.name = name;
+                data.name = name;
             if (description !== undefined)
-                project.description = description;
-            if (dueDate !== undefined) {
-                project.dueDate = dueDate
-                    ? new Date(dueDate)
-                    : undefined;
+                data.description = description;
+            // Only set when truthy — mirrors the pre-Prisma behavior of leaving the
+            // column untouched (rather than nulling it) for a falsy dueDate.
+            if (dueDate) {
+                data.dueDate = new Date(dueDate);
             }
-            if (status && Object.values(TaskEnums_1.TaskStatus).includes(status)) {
-                project.status = status;
+            if (status && Object.values(enums_1.TaskStatus).includes(status)) {
+                data.status = status;
             }
-            if (priority && Object.values(TaskEnums_1.TaskPriority).includes(priority)) {
-                project.priority = priority;
+            if (priority && Object.values(enums_1.TaskPriority).includes(priority)) {
+                data.priority = priority;
             }
+            let assignees = existing.assignees.map((a) => a.user);
             if (assigneeIds && Array.isArray(assigneeIds)) {
-                project.assignees = await userRepository.findBy({
-                    id: (0, typeorm_1.In)(assigneeIds),
-                });
+                assignees = await prisma_1.prisma.user.findMany({ where: { id: { in: assigneeIds } } });
+                data.assignees = {
+                    deleteMany: {},
+                    create: assigneeIds.map((userId) => ({ userId })),
+                };
             }
-            await projectRepository.save(project);
+            if (contractDate !== undefined) {
+                // null (not undefined) is required here so Prisma actually issues
+                // `SET "contractDate" = NULL` — an omitted property leaves the old value in place.
+                data.contractDate = contractDate ? new Date(contractDate) : null;
+            }
+            if (kickoffDate !== undefined) {
+                data.kickoffDate = kickoffDate ? new Date(kickoffDate) : null;
+            }
+            if (estimatedTotalCost !== undefined) {
+                data.estimatedTotalCost = estimatedTotalCost === null ? null : estimatedTotalCost;
+            }
+            if (sellingPrice !== undefined) {
+                data.sellingPrice = sellingPrice === null ? null : sellingPrice;
+            }
+            const updatedRow = await prisma_1.prisma.project.update({ where: { id: existing.id }, data });
+            const project = { ...updatedRow, assignees };
             return res.status(200).json({ message: "Project updated", project });
         }
         catch (error) {
@@ -392,17 +432,16 @@ class ProjectController {
                     .status(403)
                     .json({ message: "Not authorized to delete projects" });
             }
-            const projectRepository = data_source_1.AppDataSource.getRepository(Project_1.Project);
-            const project = await projectRepository.findOne({
+            const project = await prisma_1.prisma.project.findFirst({
                 where: {
                     id: parseInt(id),
-                    workspace: { id: req.workspace.id },
+                    organizationId: req.organization.id,
                 },
             });
             if (!project) {
                 return res.status(404).json({ message: "Project not found" });
             }
-            await projectRepository.remove(project);
+            await prisma_1.prisma.project.delete({ where: { id: project.id } });
             return res.status(200).json({ message: "Project deleted successfully" });
         }
         catch (error) {
