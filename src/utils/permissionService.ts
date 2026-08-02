@@ -1,5 +1,4 @@
-import { AppDataSource } from "../config/data-source";
-import { RolePermission } from "../entities/RolePermission";
+import { prisma } from "../config/prisma";
 import {
   ALL_PERMISSION_KEYS,
   ALL_PERMISSION_ROLES,
@@ -13,27 +12,24 @@ import {
  * behavior. Called from index.ts alongside seedAdmin/seedSuperAdmin.
  */
 export async function seedRolePermissions() {
-  const repo = AppDataSource.getRepository(RolePermission);
-  const existing = await repo.find();
+  const existing = await prisma.rolePermission.findMany();
   const existingKeys = new Set(existing.map((r) => `${r.role}:${r.permissionKey}`));
 
-  const toInsert: RolePermission[] = [];
+  const toInsert: { role: string; permissionKey: string; granted: boolean }[] = [];
   for (const role of ALL_PERMISSION_ROLES) {
     for (const key of ALL_PERMISSION_KEYS) {
       if (!existingKeys.has(`${role}:${key}`)) {
-        toInsert.push(
-          repo.create({
-            role,
-            permissionKey: key,
-            granted: DEFAULT_ROLE_PERMISSIONS[role].includes(key),
-          }),
-        );
+        toInsert.push({
+          role,
+          permissionKey: key,
+          granted: DEFAULT_ROLE_PERMISSIONS[role].includes(key),
+        });
       }
     }
   }
 
   if (toInsert.length > 0) {
-    await repo.save(toInsert);
+    await prisma.rolePermission.createMany({ data: toInsert });
   }
 }
 
@@ -41,8 +37,7 @@ export async function seedRolePermissions() {
 export async function getPermissionMatrix(): Promise<
   Record<string, Record<string, boolean>>
 > {
-  const repo = AppDataSource.getRepository(RolePermission);
-  const rows = await repo.find();
+  const rows = await prisma.rolePermission.findMany();
 
   const matrix: Record<string, Record<string, boolean>> = {};
   for (const role of ALL_PERMISSION_ROLES) {
@@ -66,8 +61,7 @@ export async function roleHasPermission(
   key: PermissionKey,
 ): Promise<boolean> {
   if (!role) return false;
-  const repo = AppDataSource.getRepository(RolePermission);
-  const row = await repo.findOne({ where: { role, permissionKey: key } });
+  const row = await prisma.rolePermission.findFirst({ where: { role, permissionKey: key } });
   if (row) return row.granted;
   return (
     DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS]?.includes(

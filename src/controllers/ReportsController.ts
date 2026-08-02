@@ -1,16 +1,8 @@
 import { Response } from "express";
-import { Between, In } from "typeorm";
-import { AppDataSource } from "../config/data-source";
-import { InventoryItem, InventoryCategory } from "../entities/InventoryItem";
-import { ProcurementItem } from "../entities/ProcurementItem";
-import { InventoryTransaction } from "../entities/InventoryTransaction";
-import { ProcurementStatusHistory } from "../entities/ProcurementStatusHistory";
-import { Warehouse } from "../entities/Warehouse";
-import { Vendor } from "../entities/Vendor";
-import { ReportComment } from "../entities/ReportComment";
-import { ReportActivity, ReportActivityAction } from "../entities/ReportActivity";
-import { User } from "../entities/User";
+import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
+import { InventoryCategory, ReportActivityAction, PurchaseOrderStatus } from "../types/domain";
+import type { InventoryItemModel as InventoryItem } from "../generated/prisma/models";
 
 /** Postgres `numeric` columns come back as strings via the driver — coerce defensively everywhere. */
 const num = (v: any): number => {
@@ -21,6 +13,13 @@ const num = (v: any): number => {
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 const monthKey = (d: Date) => d.toISOString().slice(0, 7);
+
+/** Prisma always returns a Date object for @db.Date columns (TypeORM's `type: "date"`
+ * columns read back as a plain "YYYY-MM-DD" string) — reformats it back to the same
+ * string shape the frontend has always received wherever it's sent directly in a response. */
+function formatDate(d: Date | null | undefined): string | null {
+  return d ? new Date(d).toISOString().slice(0, 10) : null;
+}
 
 type RangeKey = "30d" | "month" | "3m" | "12m" | "year";
 
@@ -112,58 +111,63 @@ function suggestedAction(status: string): string {
 
 export class ReportsController {
   /**
-   * GET /workspace/reports/summary — every dataset the Reports dashboard needs,
+   * GET /organization/reports/summary — every dataset the Reports dashboard needs,
    * computed in one round-trip from data that already exists. Query params:
    * projectId?, warehouseId?, vendorId?, category?, range? (30d|month|3m|12m|year).
+   *
+   * Procurement-side figures are sourced from the PurchaseOrder pipeline (v2) rather
+   * than the legacy ProcurementItem table — a PO's "cost" is the sum of its line
+   * items' quantity*unitPrice. The old `category` (hardware/software/service)
+   * dimension doesn't exist on PurchaseOrder/PurchaseOrderItem (the new PR/PO spec
+   * never had a category field), so the `category` filter and `spendByCategory`
+   * chart now apply to Inventory data only; `spendByCategory` is returned empty.
    */
   static getSummary = async (req: AuthRequest, res: Response) => {
     try {
-      const wsId = req.workspace!.id;
+      const wsId = req.organization!.id;
       const { projectId, warehouseId, vendorId, category } = req.query as Record<string, string | undefined>;
       const { start, end } = getRangeBounds(req.query.range as string | undefined);
 
-      const inventoryWhere: any = { project: { workspace: { id: wsId } } };
-      if (projectId) inventoryWhere.project.id = parseInt(projectId);
-      if (warehouseId) inventoryWhere.warehouse = { id: parseInt(warehouseId) };
-      if (vendorId) inventoryWhere.vendor = { id: parseInt(vendorId) };
+      const inventoryWhere: any = { project: { organizationId: wsId } };
+      if (projectId) inventoryWhere.projectId = parseInt(projectId);
+      if (warehouseId) inventoryWhere.warehouseId = parseInt(warehouseId);
+      if (vendorId) inventoryWhere.vendorId = parseInt(vendorId);
       if (category) inventoryWhere.category = category as InventoryCategory;
 
-      const procurementWhere: any = { project: { workspace: { id: wsId } } };
-      if (projectId) procurementWhere.project.id = parseInt(projectId);
-      if (vendorId) procurementWhere.vendor = { id: parseInt(vendorId) };
-      if (category) procurementWhere.category = category;
+      const purchaseOrderWhere: any = { organizationId: wsId };
+      if (projectId) purchaseOrderWhere.projectId = parseInt(projectId);
+      if (vendorId) purchaseOrderWhere.vendorId = parseInt(vendorId);
 
-      const inventoryItems = await AppDataSource.getRepository(InventoryItem).find({
+      const inventoryItems = await prisma.inventoryItem.findMany({
         where: inventoryWhere,
-        relations: ["project", "warehouse", "vendor"],
+        include: { project: true, warehouse: true, vendor: true },
       });
-      const procurementItems = await AppDataSource.getRepository(ProcurementItem).find({
-        where: procurementWhere,
-        relations: ["project", "vendor", "requestedBy"],
+      const purchaseOrders = await prisma.purchaseOrder.findMany({
+        where: purchaseOrderWhere,
+        include: { project: true, vendor: true, items: true },
       });
 
       const itemIds = inventoryItems.map((i) => i.id);
-      const procurementIds = procurementItems.map((p) => p.id);
+      const purchaseOrderIds = purchaseOrders.map((p) => p.id);
 
       const transactions = itemIds.length
-        ? await AppDataSource.getRepository(InventoryTransaction).find({
-            where: { inventoryItem: { id: In(itemIds) } },
-            relations: ["inventoryItem"],
+        ? await prisma.inventoryTransaction.findMany({
+            where: { inventoryItemId: { in: itemIds } },
+            include: { inventoryItem: true },
           })
         : [];
-      const statusHistory = procurementIds.length
-        ? await AppDataSource.getRepository(ProcurementStatusHistory).find({
-            where: { procurementItem: { id: In(procurementIds) } },
-            relations: ["procurementItem", "procurementItem.vendor"],
-            order: { createdAt: "ASC" },
+      const statusHistory = purchaseOrderIds.length
+        ? await prisma.purchaseOrderStatusHistory.findMany({
+            where: { purchaseOrderId: { in: purchaseOrderIds } },
+            orderBy: { createdAt: "asc" },
           })
         : [];
 
-      const warehouses = await AppDataSource.getRepository(Warehouse).find({
-        where: warehouseId ? { id: parseInt(warehouseId), workspace: { id: wsId } } : { workspace: { id: wsId } },
+      const warehouses = await prisma.warehouse.findMany({
+        where: warehouseId ? { id: parseInt(warehouseId), organizationId: wsId } : { organizationId: wsId },
       });
-      const vendors = await AppDataSource.getRepository(Vendor).find({
-        where: vendorId ? { id: parseInt(vendorId), workspace: { id: wsId } } : { workspace: { id: wsId } },
+      const vendors = await prisma.vendor.findMany({
+        where: vendorId ? { id: parseInt(vendorId), organizationId: wsId } : { organizationId: wsId },
       });
 
       const inRange = (d?: Date | null) => !!d && d >= start && d <= end;
@@ -181,15 +185,16 @@ export class ReportsController {
 
       const monthStart = new Date(end.getFullYear(), end.getMonth(), 1);
       const prevMonthStart = new Date(end.getFullYear(), end.getMonth() - 1, 1);
-      const poCost = (p: ProcurementItem) => p.quantity * num(p.unitCost ?? p.estimatedCost);
-      const monthlyProcurementCost = procurementItems
+      const poCost = (po: (typeof purchaseOrders)[number]) =>
+        po.items.reduce((s, item) => s + item.quantity * num(item.unitPrice), 0);
+      const monthlyProcurementCost = purchaseOrders
         .filter((p) => p.createdAt >= monthStart)
         .reduce((s, p) => s + poCost(p), 0);
-      const prevMonthProcurementCost = procurementItems
+      const prevMonthProcurementCost = purchaseOrders
         .filter((p) => p.createdAt >= prevMonthStart && p.createdAt < monthStart)
         .reduce((s, p) => s + poCost(p), 0);
       const costSeries = dailySeries(
-        procurementItems.filter((p) => inRange(p.createdAt)),
+        purchaseOrders.filter((p) => inRange(p.createdAt)),
         (p) => p.createdAt,
         poCost,
         start,
@@ -198,8 +203,8 @@ export class ReportsController {
 
       const lowStockItems = inventoryItems.filter((i) => i.status === "low_stock");
       const outOfStockItems = inventoryItems.filter((i) => i.status === "out_of_stock");
-      const activePOs = procurementItems.filter((p) => p.status !== "delivered");
-      const activeVendorIds = new Set(procurementItems.filter((p) => p.vendor).map((p) => p.vendor!.id));
+      const activePOs = purchaseOrders.filter((p) => p.status !== "completed" && p.status !== "cancelled");
+      const activeVendorIds = new Set(purchaseOrders.filter((p) => p.vendorId).map((p) => p.vendorId));
 
       const issuedInRange = transactionsInRange.filter((t) => t.type === "issue");
       const totalIssuedQty = issuedInRange.reduce((s, t) => s + Math.abs(t.quantityChange), 0);
@@ -247,10 +252,10 @@ export class ReportsController {
         activeVendors: {
           value: activeVendorIds.size,
           trendPct: trendPct(
-            dailySeries(procurementItems.filter((p) => p.vendor && inRange(p.createdAt)), (p) => p.createdAt, () => 1, start, end),
+            dailySeries(purchaseOrders.filter((p) => p.vendorId && inRange(p.createdAt)), (p) => p.createdAt, () => 1, start, end),
           ),
           sparkline: dailySeries(
-            procurementItems.filter((p) => p.vendor && inRange(p.createdAt)),
+            purchaseOrders.filter((p) => p.vendorId && inRange(p.createdAt)),
             (p) => p.createdAt,
             () => 1,
             start,
@@ -266,7 +271,7 @@ export class ReportsController {
 
       // ---- Charts ----
       const procurementCostTrend: Record<string, number> = {};
-      procurementItems
+      purchaseOrders
         .filter((p) => inRange(p.createdAt))
         .forEach((p) => {
           const key = monthKey(p.createdAt);
@@ -274,19 +279,18 @@ export class ReportsController {
         });
 
       const categories: InventoryCategory[] = ["hardware", "software", "service"];
-      const spendByCategory = categories.map((c) => ({
-        category: c,
-        value: procurementItems.filter((p) => p.category === c).reduce((s, p) => s + poCost(p), 0),
-      }));
+      // Procurement no longer has a category dimension (see class-level doc comment above) —
+      // kept as an empty array so the response shape/frontend chart doesn't break.
+      const spendByCategory: { category: InventoryCategory; value: number }[] = [];
       const inventoryValueByCategory = categories.map((c) => ({
         category: c,
         value: inventoryItems.filter((i) => i.category === c).reduce((s, i) => s + i.quantity * num(i.averageCost), 0),
       }));
 
-      const poStatuses: ProcurementItem["status"][] = ["pending", "approved", "ordered", "delivered"];
+      const poStatuses: PurchaseOrderStatus[] = ["created", "sent", "accepted", "cancelled", "completed"];
       const poStatusBreakdown = poStatuses.map((s) => ({
         status: s,
-        count: procurementItems.filter((p) => p.status === s).length,
+        count: purchaseOrders.filter((p) => p.status === s).length,
       }));
 
       const warehouseUtilization = warehouses.map((w) => ({
@@ -308,11 +312,11 @@ export class ReportsController {
       });
 
       const yearStart = new Date(end.getFullYear(), 0, 1);
-      const topPurchasedItems = [...procurementItems]
+      const topPurchasedItems = [...purchaseOrders]
         .filter((p) => p.createdAt >= yearStart)
         .sort((a, b) => poCost(b) - poCost(a))
         .slice(0, 10)
-        .map((p) => ({ id: p.id, itemName: p.itemName, value: poCost(p) }));
+        .map((p) => ({ id: p.id, itemName: p.items.map((i) => i.itemName).join(", ") || p.poNumber || `PO #${p.id}`, value: poCost(p) }));
 
       const consumptionByProject = new Map<string, number>();
       inventoryItems.forEach((i) => {
@@ -367,16 +371,16 @@ export class ReportsController {
         };
       });
 
-      // Vendor performance: avg days between a PO's "ordered" and "delivered" status-history rows.
+      // Vendor performance: avg days between a PO's "sent" and "completed" status-history rows.
       const vendorPerformance = vendors.map((v) => {
-        const vendorPOs = procurementItems.filter((p) => p.vendor?.id === v.id);
+        const vendorPOs = purchaseOrders.filter((p) => p.vendorId === v.id);
         const deliveryDays: number[] = [];
         vendorPOs.forEach((p) => {
-          const rows = statusHistory.filter((h) => h.procurementItem.id === p.id);
-          const ordered = rows.find((h) => h.toStatus === "ordered");
-          const delivered = rows.find((h) => h.toStatus === "delivered" && (!ordered || h.createdAt > ordered.createdAt));
-          if (ordered && delivered) {
-            deliveryDays.push((delivered.createdAt.getTime() - ordered.createdAt.getTime()) / (24 * 60 * 60 * 1000));
+          const rows = statusHistory.filter((h) => h.purchaseOrderId === p.id);
+          const sent = rows.find((h) => h.toStatus === "sent");
+          const completed = rows.find((h) => h.toStatus === "completed" && (!sent || h.createdAt > sent.createdAt));
+          if (sent && completed) {
+            deliveryDays.push((completed.createdAt.getTime() - sent.createdAt.getTime()) / (24 * 60 * 60 * 1000));
           }
         });
         return {
@@ -392,20 +396,25 @@ export class ReportsController {
 
       // ---- Alerts ----
       const now = new Date();
-      const delayedPOs = procurementItems
-        .filter((p) => p.status !== "delivered" && p.neededByDate && new Date(p.neededByDate) < now)
-        .map((p) => ({ id: p.id, itemName: p.itemName, neededByDate: p.neededByDate, vendorName: p.vendor?.name || p.vendorName || null }));
+      const delayedPOs = purchaseOrders
+        .filter((p) => p.status !== "completed" && p.deliveryDate && new Date(p.deliveryDate) < now)
+        .map((p) => ({
+          id: p.id,
+          itemName: p.items.map((i) => i.itemName).join(", ") || p.poNumber || `PO #${p.id}`,
+          neededByDate: formatDate(p.deliveryDate),
+          vendorName: p.vendor?.name || null,
+        }));
 
-      const vendorDelays: { itemName: string; vendorName: string; neededByDate: Date; deliveredAt: Date }[] = [];
-      procurementItems.forEach((p) => {
-        if (!p.neededByDate) return;
-        const delivered = statusHistory.find((h) => h.procurementItem.id === p.id && h.toStatus === "delivered");
-        if (delivered && delivered.createdAt > new Date(p.neededByDate)) {
+      const vendorDelays: { itemName: string; vendorName: string; neededByDate: string | null; deliveredAt: Date }[] = [];
+      purchaseOrders.forEach((p) => {
+        if (!p.deliveryDate) return;
+        const completed = statusHistory.find((h) => h.purchaseOrderId === p.id && h.toStatus === "completed");
+        if (completed && completed.createdAt > new Date(p.deliveryDate)) {
           vendorDelays.push({
-            itemName: p.itemName,
-            vendorName: p.vendor?.name || p.vendorName || "Unknown vendor",
-            neededByDate: p.neededByDate,
-            deliveredAt: delivered.createdAt,
+            itemName: p.items.map((i) => i.itemName).join(", ") || p.poNumber || `PO #${p.id}`,
+            vendorName: p.vendor?.name || "Unknown vendor",
+            neededByDate: formatDate(p.deliveryDate),
+            deliveredAt: completed.createdAt,
           });
         }
       });
@@ -413,15 +422,15 @@ export class ReportsController {
       const soon = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
       const contractsExpiring = vendors
         .filter((v) => v.contractExpiryDate && new Date(v.contractExpiryDate) <= soon)
-        .map((v) => ({ id: v.id, name: v.name, contractExpiryDate: v.contractExpiryDate }));
+        .map((v) => ({ id: v.id, name: v.name, contractExpiryDate: formatDate(v.contractExpiryDate) }));
 
       // ---- Insights ----
       const inventoryValueTrendPct = kpis.totalInventoryValue.trendPct;
       const procurementCostTrendPct = kpis.monthlyProcurementCost.trendPct;
-      const monthPOs = procurementItems.filter((p) => p.createdAt >= monthStart);
+      const monthPOs = purchaseOrders.filter((p) => p.createdAt >= monthStart);
       const spendByVendorThisMonth = new Map<string, number>();
       monthPOs.forEach((p) => {
-        const name = p.vendor?.name || p.vendorName || "Unknown";
+        const name = p.vendor?.name || "Unknown";
         spendByVendorThisMonth.set(name, (spendByVendorThisMonth.get(name) || 0) + poCost(p));
       });
       const topVendorThisMonth =
@@ -457,87 +466,91 @@ export class ReportsController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** GET /workspace/reports/activity?action=viewed|exported — footer's Recent Exports / Recently Viewed. */
+  /** GET /organization/reports/activity?action=viewed|exported — footer's Recent Exports / Recently Viewed. */
   static getReportActivity = async (req: AuthRequest, res: Response) => {
     try {
       const { action } = req.query as { action?: ReportActivityAction };
-      const activityRepository = AppDataSource.getRepository(ReportActivity);
-      const activity = await activityRepository.find({
-        where: action ? { workspace: { id: req.workspace!.id }, action } : { workspace: { id: req.workspace!.id } },
-        relations: ["performedBy"],
-        order: { createdAt: "DESC" },
+      const activity = await prisma.reportActivity.findMany({
+        where: action
+          ? { organizationId: req.organization!.id, action }
+          : { organizationId: req.organization!.id },
+        include: { performedBy: true },
+        orderBy: { createdAt: "desc" },
         take: 20,
       });
       return res.status(200).json({ activity });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** POST /workspace/reports/activity — log a view/export action. */
+  /** POST /organization/reports/activity — log a view/export action. */
   static logReportActivity = async (req: AuthRequest, res: Response) => {
     const { reportType, action, format } = req.body as { reportType: string; action: ReportActivityAction; format?: string };
     if (!reportType || !action) {
       return res.status(400).json({ message: "reportType and action are required" });
     }
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const performedBy = await userRepository.findOneBy({ id: req.user!.id });
-      const activityRepository = AppDataSource.getRepository(ReportActivity);
-      const activity = activityRepository.create({
-        reportType,
-        action,
-        workspace: req.workspace!,
-        ...(format ? { format } : {}),
-        ...(performedBy ? { performedBy } : {}),
+      const performedBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
+      const activity = await prisma.reportActivity.create({
+        data: {
+          reportType,
+          action,
+          organizationId: req.organization!.id,
+          ...(format ? { format } : {}),
+          ...(performedBy ? { performedById: performedBy.id } : {}),
+        },
       });
-      await activityRepository.save(activity);
       return res.status(201).json({ message: "Activity logged", activity });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** GET /workspace/reports/comments?key=... — comments for one chart/section. */
+  /** GET /organization/reports/comments?key=... — comments for one chart/section. */
   static getReportComments = async (req: AuthRequest, res: Response) => {
     const { key } = req.query as { key?: string };
     if (!key) return res.status(400).json({ message: "key is required" });
     try {
-      const comments = await AppDataSource.getRepository(ReportComment).find({
-        where: { workspace: { id: req.workspace!.id }, reportKey: key },
-        relations: ["createdBy"],
-        order: { createdAt: "DESC" },
+      const comments = await prisma.reportComment.findMany({
+        where: { organizationId: req.organization!.id, reportKey: key },
+        include: { createdBy: true },
+        orderBy: { createdAt: "desc" },
       });
       return res.status(200).json({ comments });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** POST /workspace/reports/comments — add a comment to a chart/section. */
+  /** POST /organization/reports/comments — add a comment to a chart/section. */
   static addReportComment = async (req: AuthRequest, res: Response) => {
     const { reportKey, body } = req.body as { reportKey: string; body: string };
     if (!reportKey || !body || !body.trim()) {
       return res.status(400).json({ message: "reportKey and body are required" });
     }
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const createdBy = await userRepository.findOneBy({ id: req.user!.id });
-      const commentRepository = AppDataSource.getRepository(ReportComment);
-      const comment = commentRepository.create({
-        reportKey,
-        body: body.trim(),
-        workspace: req.workspace!,
-        ...(createdBy ? { createdBy } : {}),
+      const createdBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
+      const comment = await prisma.reportComment.create({
+        data: {
+          reportKey,
+          body: body.trim(),
+          organizationId: req.organization!.id,
+          ...(createdBy ? { createdById: createdBy.id } : {}),
+        },
       });
-      await commentRepository.save(comment);
       return res.status(201).json({ message: "Comment added", comment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

@@ -1,7 +1,6 @@
-import { Request, Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { MyTask, MyTaskStatus } from "../entities/MyTask";
-import { User } from "../entities/User";
+import { Response } from "express";
+import { prisma } from "../config/prisma";
+import { MyTaskStatus } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import { CreateMyTaskDto, UpdateMyTaskDto } from "../dto/my-task.dto";
 
@@ -14,59 +13,54 @@ export class MyTaskController {
     }
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const myTaskRepository = AppDataSource.getRepository(MyTask);
-      const workspace = req.workspace!;
+      const organization = req.organization!;
 
-      const user = await userRepository.findOneBy({
-        id: req.user?.id as number,
+      const user = await prisma.user.findUnique({
+        where: { id: req.user?.id as number },
       });
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      const taskPayload: Partial<MyTask> = {
-        title,
-        ...(description !== undefined ? { description } : {}),
-        status: MyTaskStatus.PENDING,
-        user,
-        workspace
-      };
-
-      if (dueDate) {
-        taskPayload.dueDate = new Date(dueDate);
-      }
-
-      const myTask = myTaskRepository.create(taskPayload);
-      await myTaskRepository.save(myTask);
+      const myTask = await prisma.myTask.create({
+        data: {
+          title,
+          ...(description !== undefined ? { description } : {}),
+          status: MyTaskStatus.PENDING,
+          userId: user.id,
+          organizationId: organization.id,
+          ...(dueDate ? { dueDate: new Date(dueDate) } : {}),
+        },
+      });
 
       return res
         .status(201)
         .json({ message: "Personal task added", task: myTask });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static getMyTasks = async (req: AuthRequest, res: Response) => {
     try {
-      const myTaskRepository = AppDataSource.getRepository(MyTask);
       const userId = req.user?.id;
-      const workspace = req.workspace!;
+      const organization = req.organization!;
 
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const tasks = await myTaskRepository.find({
-        where: { user: { id: userId }, workspace: { id: workspace.id } },
-        order: { createdAt: "DESC" },
+      const tasks = await prisma.myTask.findMany({
+        where: { userId, organizationId: organization.id },
+        orderBy: { createdAt: "desc" },
       });
 
       return res.status(200).json(tasks);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -75,40 +69,43 @@ export class MyTaskController {
     const { title, description, dueDate, status }: UpdateMyTaskDto = req.body;
 
     try {
-      const myTaskRepository = AppDataSource.getRepository(MyTask);
-      const workspace = req.workspace!;
-      const myTask = await myTaskRepository.findOne({
-        where: { 
+      const organization = req.organization!;
+      const myTask = await prisma.myTask.findFirst({
+        where: {
           id: parseInt(id as string, 10),
-          workspace: { id: workspace.id }
+          organizationId: organization.id,
         },
-        relations: ["user"],
       });
 
       if (!myTask) {
         return res.status(404).json({ message: "Task not found" });
       }
 
-      if (myTask.user.id !== req.user?.id) {
+      if (myTask.userId !== req.user?.id) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      if (title !== undefined) myTask.title = title;
-      if (description !== undefined) myTask.description = description;
+      const data: any = {};
+      if (title !== undefined) data.title = title;
+      if (description !== undefined) data.description = description;
       if (dueDate !== undefined) {
-        myTask.dueDate = dueDate ? new Date(dueDate) : null;
+        data.dueDate = dueDate ? new Date(dueDate) : null;
       }
       if (
         status &&
         Object.values(MyTaskStatus).includes(status as MyTaskStatus)
       ) {
-        myTask.status = status as MyTaskStatus;
+        data.status = status as MyTaskStatus;
       }
 
-      await myTaskRepository.save(myTask);
-      return res.status(200).json({ message: "Task updated", task: myTask });
+      const updated = await prisma.myTask.update({
+        where: { id: myTask.id },
+        data,
+      });
+      return res.status(200).json({ message: "Task updated", task: updated });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -116,28 +113,27 @@ export class MyTaskController {
     const { id } = req.params;
 
     try {
-      const myTaskRepository = AppDataSource.getRepository(MyTask);
-      const workspace = req.workspace!;
-      const myTask = await myTaskRepository.findOne({
-        where: { 
+      const organization = req.organization!;
+      const myTask = await prisma.myTask.findFirst({
+        where: {
           id: parseInt(id as string, 10),
-          workspace: { id: workspace.id }
+          organizationId: organization.id,
         },
-        relations: ["user"],
       });
 
       if (!myTask) {
         return res.status(404).json({ message: "Task not found" });
       }
 
-      if (myTask.user.id !== req.user?.id) {
+      if (myTask.userId !== req.user?.id) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      await myTaskRepository.remove(myTask);
+      await prisma.myTask.delete({ where: { id: myTask.id } });
       return res.status(200).json({ message: "Task deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

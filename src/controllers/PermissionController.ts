@@ -1,6 +1,5 @@
 import { Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { RolePermission } from "../entities/RolePermission";
+import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { isPermissionKey, isPermissionRole } from "../config/permissions";
 import { getPermissionMatrix } from "../utils/permissionService";
@@ -14,7 +13,8 @@ export class PermissionController {
       const permissions = await getPermissionMatrix();
       return res.status(200).json({ permissions });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -28,8 +28,6 @@ export class PermissionController {
     }
 
     try {
-      const repo = AppDataSource.getRepository(RolePermission);
-
       for (const update of updates) {
         if (
           !update ||
@@ -39,23 +37,24 @@ export class PermissionController {
           continue;
         }
 
-        let row = await repo.findOne({
-          where: { role: update.role, permissionKey: update.permissionKey },
-        });
-        if (!row) {
-          row = repo.create({
+        await prisma.rolePermission.upsert({
+          where: {
+            role_permissionKey: { role: update.role, permissionKey: update.permissionKey },
+          },
+          update: { granted: !!update.granted },
+          create: {
             role: update.role,
             permissionKey: update.permissionKey,
-          });
-        }
-        row.granted = !!update.granted;
-        await repo.save(row);
+            granted: !!update.granted,
+          },
+        });
       }
 
       const permissions = await getPermissionMatrix();
       return res.status(200).json({ permissions });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

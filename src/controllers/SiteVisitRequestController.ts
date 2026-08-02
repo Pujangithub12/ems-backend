@@ -1,7 +1,6 @@
 import { Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { SiteVisitRequest } from "../entities/SiteVisitRequest";
-import { User, UserRole } from "../entities/User";
+import { prisma } from "../config/prisma";
+import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import {
   CreateSiteVisitRequestDto,
@@ -9,14 +8,17 @@ import {
   UpdateSiteVisitRequestStatusDto,
 } from "../dto/site-visit-request.dto";
 import { canApprove } from "../utils/hierarchyAuthority";
+import { notifyUsers, getUserIdsByRole } from "../services/notificationService";
 
-// `user` is an eager relation on SiteVisitRequest, so it is always populated
-// (and includes the password hash) regardless of the `relations` option
-// passed to the query — strip it before sending requests to the client.
-const sanitizeUser = (sv: SiteVisitRequest) => {
+// `user` was an eager relation on SiteVisitRequest under TypeORM, so it was
+// always populated (and included the password hash) regardless of the
+// `relations` option passed to the query. Prisma has no eager-loading
+// concept, so every query below explicitly `include`s `user` — this still
+// strips it down to the safe subset before sending requests to the client.
+const sanitizeUser = (sv: any) => {
   if (sv.user) {
     const { id, fullName, email } = sv.user;
-    sv.user = { id, fullName, email } as User;
+    sv.user = { id, fullName, email };
   }
 };
 
@@ -32,66 +34,91 @@ export class SiteVisitRequestController {
 
     try {
       const userId = req.user?.id;
-      const userRepository = AppDataSource.getRepository(User);
-      const svRepository = AppDataSource.getRepository(SiteVisitRequest);
-      const workspace = req.workspace!;
+      const organization = req.organization!;
 
-      const user = await userRepository.findOne({
+      const user = await prisma.user.findFirst({
         where: { id: userId as number },
       });
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      const newRequest = svRepository.create({
-        user,
-        title,
-        location,
-        visitDate: new Date(visitDate),
-        reason,
-        status: "pending",
-        workspace,
+      const newRequest = await prisma.siteVisitRequest.create({
+        data: {
+          userId: user.id,
+          title,
+          location,
+          visitDate: new Date(visitDate),
+          reason,
+          status: "pending",
+          organizationId: organization.id,
+        },
       });
 
-      await svRepository.save(newRequest);
-      sanitizeUser(newRequest);
+      const siteVisitRequest: any = { ...newRequest, user };
+      sanitizeUser(siteVisitRequest);
+
+      getUserIdsByRole(organization.id, [UserRole.ADMIN, UserRole.SUPER_ADMIN])
+        .then((approverIds) =>
+          notifyUsers(
+            approverIds.filter((id) => id !== user.id),
+            {
+              organizationId: organization.id,
+              type: "approval_requested",
+              title: "New site visit request",
+              message: `${user.fullName} submitted a site visit request: "${title}"`,
+              link: `/${organization.id}/leaverequests`,
+            },
+          ),
+        )
+        .catch((err) => console.error("Failed to send site-visit-request notification:", err));
 
       return res
         .status(201)
-        .json({ message: "Site visit request created", siteVisitRequest: newRequest });
+        .json({ message: "Site visit request created", siteVisitRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static getAllSiteVisitRequests = async (req: AuthRequest, res: Response) => {
     try {
-      const svRepository = AppDataSource.getRepository(SiteVisitRequest);
-      const workspace = req.workspace!;
+      const organization = req.organization!;
 
       if (
         req.user?.role === UserRole.ADMIN ||
         req.user?.role === UserRole.SUPER_ADMIN
       ) {
-        const all = await svRepository.find({
-          where: { workspace: { id: workspace.id } },
-          order: { createdAt: "DESC" },
-          relations: ["user"],
+        const all = await prisma.siteVisitRequest.findMany({
+          where: { organizationId: organization.id },
+          orderBy: { createdAt: "desc" },
+          include: { user: true },
         });
-        all.forEach(sanitizeUser);
-        return res.status(200).json(all);
+        const shaped = all.map((sv) => {
+          const s: any = { ...sv };
+          sanitizeUser(s);
+          return s;
+        });
+        return res.status(200).json(shaped);
       }
 
-      const mine = await svRepository.find({
+      const mine = await prisma.siteVisitRequest.findMany({
         where: {
-          user: { id: req.user?.id },
-          workspace: { id: workspace.id },
+          userId: req.user!.id,
+          organizationId: organization.id,
         },
-        order: { createdAt: "DESC" },
-      } as any);
-      mine.forEach(sanitizeUser);
+        orderBy: { createdAt: "desc" },
+        include: { user: true },
+      });
+      const mineShaped = mine.map((sv) => {
+        const s: any = { ...sv };
+        sanitizeUser(s);
+        return s;
+      });
 
-      return res.status(200).json(mine);
+      return res.status(200).json(mineShaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -104,23 +131,23 @@ export class SiteVisitRequestController {
     }
 
     try {
-      const svRepository = AppDataSource.getRepository(SiteVisitRequest);
-      const workspace = req.workspace!;
-      const sv = await svRepository.findOne({
+      const organization = req.organization!;
+      const sv = await prisma.siteVisitRequest.findFirst({
         where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id },
+          organizationId: organization.id,
         },
+        include: { user: true },
       });
 
       if (!sv)
         return res.status(404).json({ message: "Site visit request not found" });
 
       const allowed = await canApprove(
-        workspace.id,
+        organization.id,
         req.user!.id,
         req.user!.role,
-        sv.user.id,
+        sv.userId as number,
       );
       if (!allowed) {
         return res.status(403).json({
@@ -128,29 +155,43 @@ export class SiteVisitRequestController {
         });
       }
 
-      sv.status = status;
-      sv.approvedAt = new Date();
-      await svRepository.save(sv);
-      sanitizeUser(sv);
+      const updated = await prisma.siteVisitRequest.update({
+        where: { id: sv.id },
+        data: { status: status as "approved" | "rejected", approvedAt: new Date() },
+      });
+
+      const siteVisitRequest: any = { ...updated, user: sv.user };
+      sanitizeUser(siteVisitRequest);
+
+      if (sv.userId) {
+        notifyUsers([sv.userId], {
+          organizationId: organization.id,
+          type: "approval_decided",
+          title: `Site visit request ${status}`,
+          message: `Your site visit request "${sv.title}" was ${status}`,
+          link: `/${organization.id}/leaverequests`,
+        }).catch((err) => console.error("Failed to send site-visit-decision notification:", err));
+      }
 
       return res
         .status(200)
-        .json({ message: `Site visit request ${status}`, siteVisitRequest: sv });
+        .json({ message: `Site visit request ${status}`, siteVisitRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static getSiteVisitRequestById = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      const svRepository = AppDataSource.getRepository(SiteVisitRequest);
-      const workspace = req.workspace!;
-      const sv = await svRepository.findOne({
+      const organization = req.organization!;
+      const sv = await prisma.siteVisitRequest.findFirst({
         where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id },
+          organizationId: organization.id,
         },
+        include: { user: true },
       });
 
       if (!sv)
@@ -159,15 +200,17 @@ export class SiteVisitRequestController {
       if (
         req.user?.role !== UserRole.ADMIN &&
         req.user?.role !== UserRole.SUPER_ADMIN &&
-        sv.user.id !== req.user?.id
+        sv.userId !== req.user?.id
       ) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      sanitizeUser(sv);
-      return res.status(200).json(sv);
+      const shaped: any = { ...sv };
+      sanitizeUser(shaped);
+      return res.status(200).json(shaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -176,13 +219,13 @@ export class SiteVisitRequestController {
     const { location, visitDate, reason }: UpdateSiteVisitRequestDto = req.body;
 
     try {
-      const svRepository = AppDataSource.getRepository(SiteVisitRequest);
-      const workspace = req.workspace!;
-      const sv = await svRepository.findOne({
+      const organization = req.organization!;
+      const sv = await prisma.siteVisitRequest.findFirst({
         where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id },
+          organizationId: organization.id,
         },
+        include: { user: true },
       });
 
       if (!sv)
@@ -191,46 +234,53 @@ export class SiteVisitRequestController {
       if (
         req.user?.role !== UserRole.ADMIN &&
         req.user?.role !== UserRole.SUPER_ADMIN &&
-        sv.user.id !== req.user?.id
+        sv.userId !== req.user?.id
       ) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      if (location) sv.location = location;
-      if (visitDate) sv.visitDate = new Date(visitDate);
-      if (reason) sv.reason = reason;
+      const data: { location?: string; visitDate?: Date; reason?: string } = {};
+      if (location) data.location = location;
+      if (visitDate) data.visitDate = new Date(visitDate);
+      if (reason) data.reason = reason;
 
-      await svRepository.save(sv);
-      sanitizeUser(sv);
+      const updated = await prisma.siteVisitRequest.update({
+        where: { id: sv.id },
+        data,
+      });
+
+      const siteVisitRequest: any = { ...updated, user: sv.user };
+      sanitizeUser(siteVisitRequest);
 
       return res
         .status(200)
-        .json({ message: "Site visit request updated", siteVisitRequest: sv });
+        .json({ message: "Site visit request updated", siteVisitRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static deleteSiteVisitRequest = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      const svRepository = AppDataSource.getRepository(SiteVisitRequest);
-      const workspace = req.workspace!;
-      const sv = await svRepository.findOne({
+      const organization = req.organization!;
+      const sv = await prisma.siteVisitRequest.findFirst({
         where: {
           id: parseInt(id as string),
-          workspace: { id: workspace.id },
+          organizationId: organization.id,
         },
       });
 
       if (!sv)
         return res.status(404).json({ message: "Site visit request not found" });
 
-      await svRepository.remove(sv);
+      await prisma.siteVisitRequest.delete({ where: { id: sv.id } });
 
       return res.status(200).json({ message: "Site visit request deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

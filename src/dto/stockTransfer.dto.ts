@@ -1,4 +1,4 @@
-import { StockTransferStatus } from "../entities/StockTransfer";
+import { StockTransferStatus } from "../types/domain";
 
 /** Body shape for POST /projects/inventory/:itemId/transfers. */
 export interface CreateStockTransferDto {

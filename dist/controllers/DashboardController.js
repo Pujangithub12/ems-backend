@@ -1,53 +1,64 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DashboardController = void 0;
-const data_source_1 = require("../config/data-source");
-const Task_1 = require("../entities/Task");
-const TaskEnums_1 = require("../entities/TaskEnums");
-const LeaveRequest_1 = require("../entities/LeaveRequest");
+const prisma_1 = require("../config/prisma");
+const enums_1 = require("../types/enums");
+const simpleArray_1 = require("../utils/simpleArray");
 /** Aggregated stats for the main dashboard (task counts, high priority list, pending leave requests). */
 class DashboardController {
     static getDashboard = async (req, res) => {
         try {
-            const taskRepository = data_source_1.AppDataSource.getRepository(Task_1.Task);
-            const leaveRequestRepository = data_source_1.AppDataSource.getRepository(LeaveRequest_1.LeaveRequest);
-            const isAdmin = req.user?.role === "admin" || req.user?.role === "super_admin";
+            const isSuperAdmin = req.user?.role === "super_admin";
+            const isAdminOrAbove = req.user?.role === "admin" || req.user?.role === "super_admin";
             const userId = req.user?.id;
-            const workspace = req.workspace;
-            if (isAdmin) {
-                const total = await taskRepository.count({
-                    where: { workspace: { id: workspace.id } },
+            const organization = req.organization;
+            // Admins (and super admins) review every pending leave request in the
+            // organization; regular users only see the status of their own.
+            const pendingLeaveRequests = await prisma_1.prisma.leaveRequest.count({
+                where: isAdminOrAbove
+                    ? { status: "pending", organizationId: organization.id }
+                    : {
+                        status: "pending",
+                        organizationId: organization.id,
+                        userId: req.user.id,
+                    },
+            });
+            if (isSuperAdmin) {
+                // Only the super admin sees stats across every task in the organization.
+                const total = await prisma_1.prisma.task.count({
+                    where: { organizationId: organization.id },
                 });
-                const pending = await taskRepository.count({
+                const pending = await prisma_1.prisma.task.count({
                     where: {
-                        status: TaskEnums_1.TaskStatus.PENDING,
-                        workspace: { id: workspace.id },
+                        status: enums_1.TaskStatus.PENDING,
+                        organizationId: organization.id,
                     },
                 });
-                const inProgress = await taskRepository.count({
+                const inProgress = await prisma_1.prisma.task.count({
                     where: {
-                        status: TaskEnums_1.TaskStatus.IN_PROGRESS,
-                        workspace: { id: workspace.id },
+                        status: enums_1.TaskStatus.IN_PROGRESS,
+                        organizationId: organization.id,
                     },
                 });
-                const completed = await taskRepository.count({
+                const completed = await prisma_1.prisma.task.count({
                     where: {
-                        status: TaskEnums_1.TaskStatus.COMPLETED,
-                        workspace: { id: workspace.id },
+                        status: enums_1.TaskStatus.COMPLETED,
+                        organizationId: organization.id,
                     },
                 });
-                const highPriorityTasks = await taskRepository.find({
+                const highPriorityRows = await prisma_1.prisma.task.findMany({
                     where: {
-                        priority: TaskEnums_1.TaskPriority.HIGH,
-                        workspace: { id: workspace.id },
+                        priority: enums_1.TaskPriority.HIGH,
+                        organizationId: organization.id,
                     },
-                    relations: ["assignedUsers"],
-                    order: { createdAt: "DESC" },
+                    include: { assignedUsers: { include: { user: true } } },
+                    orderBy: { createdAt: "desc" },
                 });
-                // Admins review every pending leave request in the workspace.
-                const pendingLeaveRequests = await leaveRequestRepository.count({
-                    where: { status: "pending", workspace: { id: workspace.id } },
-                });
+                const highPriorityTasks = highPriorityRows.map((task) => ({
+                    ...task,
+                    files: (0, simpleArray_1.toSimpleArray)(task.files),
+                    assignedUsers: task.assignedUsers.map((a) => a.user),
+                }));
                 return res.status(200).json({
                     total,
                     pending,
@@ -57,59 +68,42 @@ class DashboardController {
                     pendingLeaveRequests,
                 });
             }
-            // Regular users only see the status of their own leave requests.
-            const pendingLeaveRequests = await leaveRequestRepository.count({
-                where: {
-                    status: "pending",
-                    workspace: { id: workspace.id },
-                    user: { id: req.user.id },
-                },
+            // Everyone else (including regular admins) only sees stats for tasks
+            // they assigned (created) or were assigned to.
+            const baseVisibleWhere = {
+                organizationId: organization.id,
+                OR: [{ assignedUsers: { some: { userId: userId } } }, { createdById: userId }],
+            };
+            const total = await prisma_1.prisma.task.count({ where: baseVisibleWhere });
+            const pending = await prisma_1.prisma.task.count({
+                where: { ...baseVisibleWhere, status: enums_1.TaskStatus.PENDING },
             });
-            const total = await taskRepository
-                .createQueryBuilder("task")
-                .leftJoin("task.assignedUsers", "user")
-                .where("user.id = :userId", { userId })
-                .andWhere("task.workspace.id = :workspaceId", {
-                workspaceId: workspace.id,
-            })
-                .getCount();
-            const pending = await taskRepository
-                .createQueryBuilder("task")
-                .leftJoin("task.assignedUsers", "user")
-                .where("user.id = :userId", { userId })
-                .andWhere("task.workspace.id = :workspaceId", {
-                workspaceId: workspace.id,
-            })
-                .andWhere("task.status = :status", { status: TaskEnums_1.TaskStatus.PENDING })
-                .getCount();
-            const inProgress = await taskRepository
-                .createQueryBuilder("task")
-                .leftJoin("task.assignedUsers", "user")
-                .where("user.id = :userId", { userId })
-                .andWhere("task.workspace.id = :workspaceId", {
-                workspaceId: workspace.id,
-            })
-                .andWhere("task.status = :status", { status: TaskEnums_1.TaskStatus.IN_PROGRESS })
-                .getCount();
-            const completed = await taskRepository
-                .createQueryBuilder("task")
-                .leftJoin("task.assignedUsers", "user")
-                .where("user.id = :userId", { userId })
-                .andWhere("task.workspace.id = :workspaceId", {
-                workspaceId: workspace.id,
-            })
-                .andWhere("task.status = :status", { status: TaskEnums_1.TaskStatus.COMPLETED })
-                .getCount();
-            const highPriorityTasks = await taskRepository
-                .createQueryBuilder("task")
-                .leftJoinAndSelect("task.assignedUsers", "user")
-                .where("user.id = :userId", { userId })
-                .andWhere("task.workspace.id = :workspaceId", {
-                workspaceId: workspace.id,
-            })
-                .andWhere("task.priority = :priority", { priority: TaskEnums_1.TaskPriority.HIGH })
-                .orderBy("task.createdAt", "DESC")
-                .getMany();
+            const inProgress = await prisma_1.prisma.task.count({
+                where: { ...baseVisibleWhere, status: enums_1.TaskStatus.IN_PROGRESS },
+            });
+            const completed = await prisma_1.prisma.task.count({
+                where: { ...baseVisibleWhere, status: enums_1.TaskStatus.COMPLETED },
+            });
+            // Resolve visible high-priority task ids first, then re-fetch with full
+            // relations — filtering directly on the joined "assignedUsers" alias
+            // would silently truncate that relation to just the caller's own row.
+            const highPriorityRowIds = await prisma_1.prisma.task.findMany({
+                where: { ...baseVisibleWhere, priority: enums_1.TaskPriority.HIGH },
+                select: { id: true },
+                distinct: ["id"],
+            });
+            const highPriorityTaskIds = highPriorityRowIds.map((row) => row.id);
+            const highPriorityRows = highPriorityTaskIds.length
+                ? await prisma_1.prisma.task.findMany({
+                    where: { id: { in: highPriorityTaskIds } },
+                    include: { assignedUsers: { include: { user: true } } },
+                    orderBy: { createdAt: "desc" },
+                })
+                : [];
+            const highPriorityTasks = highPriorityRows.map((task) => ({
+                ...task,
+                assignedUsers: task.assignedUsers.map((a) => a.user),
+            }));
             return res.status(200).json({
                 total,
                 pending,
@@ -120,7 +114,8 @@ class DashboardController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

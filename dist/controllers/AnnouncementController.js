@@ -1,10 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AnnouncementController = void 0;
-const data_source_1 = require("../config/data-source");
-const Announcement_1 = require("../entities/Announcement");
-const User_1 = require("../entities/User");
+const prisma_1 = require("../config/prisma");
 const emailService_1 = require("../utils/emailService");
+const simpleArray_1 = require("../utils/simpleArray");
+const notificationService_1 = require("../services/notificationService");
 class AnnouncementController {
     static createAnnouncement = async (req, res) => {
         const { subject, message, targetType, targetEmails } = req.body;
@@ -14,11 +14,9 @@ class AnnouncementController {
                 .json({ message: "Subject, message, and targetType are required" });
         }
         try {
-            const userRepository = data_source_1.AppDataSource.getRepository(User_1.User);
-            const announcementRepository = data_source_1.AppDataSource.getRepository(Announcement_1.Announcement);
             let recipientEmails = [];
             if (targetType === "all") {
-                const users = await userRepository.find({ select: ["email"] });
+                const users = await prisma_1.prisma.user.findMany({ select: { email: true } });
                 // Filter out users who don't have an email address
                 recipientEmails = users.map((u) => u.email).filter((email) => email);
             }
@@ -33,46 +31,56 @@ class AnnouncementController {
             if (recipientEmails.length === 0) {
                 return res.status(400).json({ message: "No recipients found" });
             }
-            const workspace = req.workspace;
+            const organization = req.organization;
             // Save to history
-            const newAnnouncement = announcementRepository.create({
-                subject,
-                message,
-                targetType,
-                targetEmails: targetType === "specific" ? recipientEmails : [],
-                workspace,
+            const newAnnouncement = await prisma_1.prisma.announcement.create({
+                data: {
+                    subject,
+                    message,
+                    targetType,
+                    targetEmails: (0, simpleArray_1.fromSimpleArray)(targetType === "specific" ? recipientEmails : []),
+                    organizationId: organization.id,
+                },
             });
-            await announcementRepository.save(newAnnouncement);
-            (0, emailService_1.sendEmail)(recipientEmails, subject, message).catch((err) => {
+            (0, emailService_1.sendEmail)(recipientEmails, subject, message, undefined, "announcement").catch((err) => {
                 console.error("Failed to send announcement emails:", err);
             });
+            (0, notificationService_1.notifyOrganization)(organization.id, {
+                organizationId: organization.id,
+                type: "announcement",
+                title: subject,
+                message,
+                link: `/${organization.id}/announcements`,
+            }, req.user?.id).catch((err) => console.error("Failed to send announcement notification:", err));
             return res.status(201).json({
                 message: "Announcement created and emails are being sent",
-                announcement: newAnnouncement,
+                announcement: { ...newAnnouncement, targetEmails: (0, simpleArray_1.toSimpleArray)(newAnnouncement.targetEmails) },
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getHistory = async (req, res) => {
         try {
-            const announcementRepository = data_source_1.AppDataSource.getRepository(Announcement_1.Announcement);
-            const workspace = req.workspace;
+            const organization = req.organization;
             const sevenDaysAgo = new Date();
             sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-            const history = await announcementRepository
-                .createQueryBuilder("announcement")
-                .where("announcement.workspaceId = :workspaceId", {
-                workspaceId: workspace.id,
-            })
-                .andWhere("announcement.createdAt >= :sevenDaysAgo", { sevenDaysAgo })
-                .orderBy("announcement.createdAt", "DESC")
-                .getMany();
-            return res.status(200).json(history);
+            const history = await prisma_1.prisma.announcement.findMany({
+                where: {
+                    organizationId: organization.id,
+                    createdAt: { gte: sevenDaysAgo },
+                },
+                orderBy: { createdAt: "desc" },
+            });
+            return res
+                .status(200)
+                .json(history.map((h) => ({ ...h, targetEmails: (0, simpleArray_1.toSimpleArray)(h.targetEmails) })));
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteAnnouncement = async (req, res) => {
@@ -82,25 +90,24 @@ class AnnouncementController {
             return res.status(400).json({ message: "ID is required" });
         }
         try {
-            const announcementRepository = data_source_1.AppDataSource.getRepository(Announcement_1.Announcement);
-            const workspace = req.workspace;
-            // Cast id to string for parseInt
-            const announcement = await announcementRepository.findOne({
+            const organization = req.organization;
+            const announcement = await prisma_1.prisma.announcement.findFirst({
                 where: {
                     id: parseInt(id),
-                    workspace: { id: workspace.id },
+                    organizationId: organization.id,
                 },
             });
             if (!announcement) {
                 return res.status(404).json({ message: "Announcement not found" });
             }
-            await announcementRepository.remove(announcement);
+            await prisma_1.prisma.announcement.delete({ where: { id: announcement.id } });
             return res
                 .status(200)
                 .json({ message: "Announcement history deleted successfully" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

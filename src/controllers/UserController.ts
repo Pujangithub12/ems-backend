@@ -1,39 +1,36 @@
 import { Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { User, UserRole } from "../entities/User";
-import { WorkspaceMembership } from "../entities/WorkspaceMembership";
+import { prisma } from "../config/prisma";
+import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import bcrypt from "bcrypt";
 import { UpdateUserDto } from "../dto/user.dto";
 
-// At most one super admin per workspace. `excludeUserId` lets an update check
+// At most one super admin per organization. `excludeUserId` lets an update check
 // exclude the user being updated (a no-op re-save of an existing super admin
 // shouldn't trip over itself). Exported for InviteController, which enforces
 // the same rule when sending/accepting an invite.
-export const countSuperAdminsInWorkspace = async (
-  workspaceId: number,
+export const countSuperAdminsInOrganization = async (
+  organizationId: number,
   excludeUserId?: number,
 ): Promise<number> => {
-  const qb = AppDataSource.getRepository(WorkspaceMembership)
-    .createQueryBuilder("membership")
-    .where("membership.workspaceId = :workspaceId", { workspaceId })
-    .andWhere("membership.role = :role", { role: UserRole.SUPER_ADMIN });
-  if (excludeUserId !== undefined) {
-    qb.andWhere("membership.userId != :excludeUserId", { excludeUserId });
-  }
-  return qb.getCount();
+  return prisma.organizationMembership.count({
+    where: {
+      organizationId,
+      role: UserRole.SUPER_ADMIN,
+      ...(excludeUserId !== undefined ? { userId: { not: excludeUserId } } : {}),
+    },
+  });
 };
 
 export class UserController {
   static getAllUsers = async (req: AuthRequest, res: Response) => {
     try {
-      const workspace = req.workspace!;
-      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
+      const organization = req.organization!;
 
-      // Get all members of the current workspace, with their role in it.
-      const memberships = await membershipRepo.find({
-        where: { workspace: { id: workspace.id } },
-        relations: ["user"],
+      // Get all members of the current organization, with their role in it.
+      const memberships = await prisma.organizationMembership.findMany({
+        where: { organizationId: organization.id },
+        include: { user: true },
       });
 
       const users = memberships.map((m) => ({
@@ -50,7 +47,8 @@ export class UserController {
 
       return res.status(200).json(users);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -62,16 +60,14 @@ export class UserController {
     }
 
     try {
-      const workspace = req.workspace!;
-      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
+      const organization = req.organization!;
 
-      // Find the membership only if they are in the current workspace
-      const membership = await membershipRepo.findOne({
+      // Find the membership only if they are in the current organization
+      const membership = await prisma.organizationMembership.findFirst({
         where: {
-          user: { id: parseInt(id as string) },
-          workspace: { id: workspace.id },
+          userId: parseInt(id as string),
+          organizationId: organization.id,
         },
-        relations: ["user"],
       });
 
       if (!membership) {
@@ -90,15 +86,16 @@ export class UserController {
         });
       }
 
-      // Remove user from workspace (their membership in any other workspace
+      // Remove user from organization (their membership in any other organization
       // is untouched).
-      await membershipRepo.remove(membership);
+      await prisma.organizationMembership.delete({ where: { id: membership.id } });
 
       return res
         .status(200)
-        .json({ message: "User removed from workspace successfully" });
+        .json({ message: "User removed from organization successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -120,19 +117,17 @@ export class UserController {
     }
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const membershipRepo = AppDataSource.getRepository(WorkspaceMembership);
-      const workspace = req.workspace!;
+      const organization = req.organization!;
 
       // Find the membership (and its user) only if they are in the current
-      // workspace — role updates below apply to this membership, i.e. this
-      // workspace only.
-      const membership = await membershipRepo.findOne({
+      // organization — role updates below apply to this membership, i.e. this
+      // organization only.
+      const membership = await prisma.organizationMembership.findFirst({
         where: {
-          user: { id: parseInt(id as string) },
-          workspace: { id: workspace.id },
+          userId: parseInt(id as string),
+          organizationId: organization.id,
         },
-        relations: ["user"],
+        include: { user: true },
       });
 
       if (!membership) {
@@ -140,14 +135,16 @@ export class UserController {
       }
       const user = membership.user;
 
-      if (fullName) user.fullName = fullName;
-      if (email) user.email = email;
-      if (phoneNumber) user.phoneNumber = phoneNumber;
-      if (address) user.address = address;
-      if (jobPosition) user.jobPosition = jobPosition;
-      if (joinDate) user.joinDate = new Date(joinDate);
+      const userData: any = {};
+      if (fullName) userData.fullName = fullName;
+      if (email) userData.email = email;
+      if (phoneNumber) userData.phoneNumber = phoneNumber;
+      if (address) userData.address = address;
+      if (jobPosition) userData.jobPosition = jobPosition;
+      if (joinDate) userData.joinDate = new Date(joinDate);
 
       // Enforce role update rules
+      let newRole: string | undefined;
       const currentUserRole = req.user?.role;
       if (role) {
         if (currentUserRole === UserRole.ADMIN) {
@@ -157,37 +154,41 @@ export class UserController {
             role === UserRole.FINANCE ||
             role === UserRole.ADMIN
           ) {
-            membership.role = role as UserRole;
+            newRole = role;
           }
         } else if (currentUserRole === UserRole.SUPER_ADMIN) {
           // Super admin can set any role, but only one super admin is
-          // allowed per workspace.
+          // allowed per organization.
           if (role === UserRole.SUPER_ADMIN && membership.role !== UserRole.SUPER_ADMIN) {
-            const existingSuperAdmins = await countSuperAdminsInWorkspace(
-              workspace.id,
+            const existingSuperAdmins = await countSuperAdminsInOrganization(
+              organization.id,
               user.id,
             );
             if (existingSuperAdmins > 0) {
               return res
                 .status(400)
-                .json({ message: "This workspace already has a super admin" });
+                .json({ message: "This organization already has a super admin" });
             }
           }
-          membership.role = role as UserRole;
+          newRole = role;
         }
         // Regular users can't change roles
       }
 
       if (password) {
-        user.password = await bcrypt.hash(password, 10);
+        userData.password = await bcrypt.hash(password, 10);
       }
 
-      await userRepository.save(user);
-      await membershipRepo.save(membership);
+      await prisma.user.update({ where: { id: user.id }, data: userData });
+      await prisma.organizationMembership.update({
+        where: { id: membership.id },
+        data: newRole !== undefined ? { role: newRole } : {},
+      });
 
       return res.status(200).json({ message: "User updated successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

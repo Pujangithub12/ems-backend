@@ -1,19 +1,12 @@
 import { Response } from "express";
-import { IsNull } from "typeorm";
-import { AppDataSource } from "../config/data-source";
-import { Project } from "../entities/Project";
-import { Workspace } from "../entities/Workspace";
-import { InventoryItem } from "../entities/InventoryItem";
-import { User } from "../entities/User";
-import { Warehouse } from "../entities/Warehouse";
-import { Vendor } from "../entities/Vendor";
-import { CatalogItem } from "../entities/CatalogItem";
-import { InventoryBatch } from "../entities/InventoryBatch";
-import { InventorySerial } from "../entities/InventorySerial";
-import { InventoryTransaction, InventoryTransactionType } from "../entities/InventoryTransaction";
-import { StockTransfer } from "../entities/StockTransfer";
-import { InventoryAttachment } from "../entities/InventoryAttachment";
-import { ProcurementItem } from "../entities/ProcurementItem";
+import { prisma } from "../config/prisma";
+import type {
+  ProjectModel as Project,
+  OrganizationModel as Organization,
+  CatalogItemModel as CatalogItem,
+  VendorModel as Vendor,
+} from "../generated/prisma/models";
+import { InventoryTransactionType } from "../types/domain";
 import { AuthRequest } from "../middlewares/auth";
 import {
   AddInventoryItemDto,
@@ -26,42 +19,65 @@ import { CreateStockTransferDto, UpdateStockTransferDto } from "../dto/stockTran
 import { AddInventoryBatchDto } from "../dto/inventoryBatch.dto";
 import { AddInventorySerialDto } from "../dto/inventorySerial.dto";
 
+/** Relation shape used by the "detail drawer" endpoints (adjust/transfer/batch/serial/attachment)
+ * that operate on an itemId param and must verify organization ownership via project.organization. */
+const OWNED_ITEM_INCLUDE = {
+  project: { include: { organization: true } },
+  warehouse: true,
+  vendor: true,
+  item: true,
+} as const;
+
+/** Same as above, plus updatedBy — used where the caller also (re)assigns updatedBy. */
+const ITEM_WITH_ALL_RELATIONS_INCLUDE = {
+  project: { include: { organization: true } },
+  warehouse: true,
+  vendor: true,
+  item: true,
+  updatedBy: true,
+} as const;
+
+/** Relation shape used by addInventoryItem/receiveFromProcurement's find-existing-row lookup. */
+const RESTOCK_ITEM_INCLUDE = {
+  item: true,
+  warehouse: true,
+  vendor: true,
+  updatedBy: true,
+} as const;
+
 /** Writes an audit-log row for a stock-affecting mutation. Never throws — best-effort. */
 async function logTransaction(
-  item: InventoryItem,
+  item: { id: number },
   type: InventoryTransactionType,
   quantityChange: number,
   resultingQuantity: number,
   reason: string | undefined,
   userId: number | undefined,
-  workspaceId: number,
+  organizationId: number,
 ) {
-  const txRepository = AppDataSource.getRepository(InventoryTransaction);
-  const userRepository = AppDataSource.getRepository(User);
-  const performedBy = userId ? await userRepository.findOneBy({ id: userId }) : null;
-  const tx = txRepository.create({
-    type,
-    quantityChange,
-    resultingQuantity,
-    inventoryItem: item,
-    workspace: { id: workspaceId } as any,
-    ...(reason ? { reason } : {}),
-    ...(performedBy ? { performedBy } : {}),
+  const performedBy = userId ? await prisma.user.findUnique({ where: { id: userId } }) : null;
+  await prisma.inventoryTransaction.create({
+    data: {
+      type,
+      quantityChange,
+      resultingQuantity,
+      inventoryItemId: item.id,
+      organizationId,
+      ...(reason ? { reason } : {}),
+      ...(performedBy ? { performedById: performedBy.id } : {}),
+    },
   });
-  await txRepository.save(tx);
 }
 
 /** Inventory tab: stock items scoped to a project. */
 export class InventoryController {
-  /** GET /workspace/inventory — aggregated across every project in the workspace, for the sidebar Inventory page. */
-  static getWorkspaceInventory = async (req: AuthRequest, res: Response) => {
+  /** GET /organization/inventory — aggregated across every project in the organization, for the sidebar Inventory page. */
+  static getOrganizationInventory = async (req: AuthRequest, res: Response) => {
     try {
-      const itemRepository = AppDataSource.getRepository(InventoryItem);
-
-      const items = await itemRepository.find({
-        where: { project: { workspace: { id: req.workspace!.id } } },
-        relations: ["updatedBy", "project", "warehouse", "vendor", "item"],
-        order: { createdAt: "DESC" },
+      const items = await prisma.inventoryItem.findMany({
+        where: { project: { organizationId: req.organization!.id } },
+        include: { updatedBy: true, project: true, warehouse: true, vendor: true, item: true },
+        orderBy: { createdAt: "desc" },
       });
 
       const result = items.map((item) => ({
@@ -85,42 +101,41 @@ export class InventoryController {
         warrantyExpiryDate: item.warrantyExpiryDate,
         updatedBy: item.updatedBy,
         createdAt: item.createdAt,
-        projectId: item.project.id,
-        projectName: item.project.name,
+        projectId: item.project!.id,
+        projectName: item.project!.name,
       }));
 
       return res.status(200).json({ items: result });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** GET /projects/:projectId/inventory — flat list for the Inventory tab. Open to any workspace member. */
+  /** GET /projects/:projectId/inventory — flat list for the Inventory tab. Open to any organization member. */
   static getInventoryItems = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
     try {
-      const projectRepository = AppDataSource.getRepository(Project);
-      const itemRepository = AppDataSource.getRepository(InventoryItem);
-
-      const project = await projectRepository.findOne({
+      const project = await prisma.project.findFirst({
         where: {
           id: parseInt(projectId as string),
-          workspace: { id: req.workspace!.id },
+          organizationId: req.organization!.id,
         },
       });
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
       }
 
-      const items = await itemRepository.find({
-        where: { project: { id: project.id } },
-        relations: ["updatedBy", "warehouse", "vendor", "item"],
-        order: { createdAt: "DESC" },
+      const items = await prisma.inventoryItem.findMany({
+        where: { projectId: project.id },
+        include: { updatedBy: true, warehouse: true, vendor: true, item: true },
+        orderBy: { createdAt: "desc" },
       });
 
       return res.status(200).json({ items });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -148,17 +163,10 @@ export class InventoryController {
     }: AddInventoryItemDto = req.body;
 
     try {
-      const projectRepository = AppDataSource.getRepository(Project);
-      const userRepository = AppDataSource.getRepository(User);
-      const itemRepository = AppDataSource.getRepository(InventoryItem);
-      const warehouseRepository = AppDataSource.getRepository(Warehouse);
-      const vendorRepository = AppDataSource.getRepository(Vendor);
-      const catalogItemRepository = AppDataSource.getRepository(CatalogItem);
-
-      const project = await projectRepository.findOne({
+      const project = await prisma.project.findFirst({
         where: {
           id: parseInt(projectId as string),
-          workspace: { id: req.workspace!.id },
+          organizationId: req.organization!.id,
         },
       });
       if (!project) {
@@ -171,8 +179,8 @@ export class InventoryController {
       // import) that don't go through the catalog.
       let catalogItem: CatalogItem | null = null;
       if (itemId) {
-        catalogItem = await catalogItemRepository.findOne({
-          where: { id: itemId, workspace: { id: req.workspace!.id } },
+        catalogItem = await prisma.catalogItem.findFirst({
+          where: { id: itemId, organizationId: req.organization!.id },
         });
         if (!catalogItem) {
           return res.status(400).json({ message: "Selected item not found" });
@@ -187,15 +195,15 @@ export class InventoryController {
         return res.status(400).json({ message: "Item name is required" });
       }
 
-      const updatedBy = await userRepository.findOneBy({ id: req.user!.id });
+      const updatedBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
       const warehouse = warehouseId
-        ? await warehouseRepository.findOne({
-            where: { id: warehouseId, workspace: { id: req.workspace!.id } },
+        ? await prisma.warehouse.findFirst({
+            where: { id: warehouseId, organizationId: req.organization!.id },
           })
         : null;
       const vendor = vendorId
-        ? await vendorRepository.findOne({
-            where: { id: vendorId, workspace: { id: req.workspace!.id } },
+        ? await prisma.vendor.findFirst({
+            where: { id: vendorId, organizationId: req.organization!.id },
           })
         : null;
 
@@ -209,83 +217,93 @@ export class InventoryController {
       // table to one row per item; the "Inventory Transactions" section in
       // the item drawer (InventoryTransaction rows, via logTransaction)
       // already provides the per-addition date/quantity history.
-      const existingItem = await itemRepository.findOne({
+      const existingItem = await prisma.inventoryItem.findFirst({
         where: catalogItem
-          ? { project: { id: project.id }, item: { id: catalogItem.id } }
-          : { project: { id: project.id }, itemName: trimmedName, item: IsNull() },
-        relations: ["item", "warehouse", "vendor", "updatedBy"],
+          ? { projectId: project.id, itemId: catalogItem.id }
+          : { projectId: project.id, itemName: trimmedName, itemId: null },
+        include: RESTOCK_ITEM_INCLUDE,
       });
 
       if (existingItem) {
         const previousQuantity = existingItem.quantity;
-        existingItem.quantity = previousQuantity + finalQuantity;
-        if (category) existingItem.category = category;
-        if (unit) existingItem.unit = unit;
-        if (status) existingItem.status = status;
-        if (lastRestockedDate) existingItem.lastRestockedDate = new Date(lastRestockedDate);
-        if (notes) existingItem.notes = notes;
-        if (warehouse) existingItem.warehouse = warehouse;
-        if (reservedQuantity !== undefined) existingItem.reservedQuantity = Math.max(0, Math.round(reservedQuantity));
-        if (incomingQuantity !== undefined) existingItem.incomingQuantity = Math.max(0, Math.round(incomingQuantity));
-        if (averageCost !== undefined) existingItem.averageCost = averageCost;
-        if (supplier) existingItem.supplier = supplier;
-        if (vendor) existingItem.vendor = vendor;
-        if (imageUrl) existingItem.imageUrl = imageUrl;
-        if (warrantyExpiryDate) existingItem.warrantyExpiryDate = new Date(warrantyExpiryDate);
-        if (updatedBy) existingItem.updatedBy = updatedBy;
-        await itemRepository.save(existingItem);
+        const updateData: any = {
+          quantity: previousQuantity + finalQuantity,
+        };
+        if (category) updateData.category = category;
+        if (unit) updateData.unit = unit;
+        if (status) updateData.status = status;
+        if (lastRestockedDate) updateData.lastRestockedDate = new Date(lastRestockedDate);
+        if (notes) updateData.notes = notes;
+        if (warehouse) updateData.warehouseId = warehouse.id;
+        if (reservedQuantity !== undefined) updateData.reservedQuantity = Math.max(0, Math.round(reservedQuantity));
+        if (incomingQuantity !== undefined) updateData.incomingQuantity = Math.max(0, Math.round(incomingQuantity));
+        if (averageCost !== undefined) updateData.averageCost = averageCost;
+        if (supplier) updateData.supplier = supplier;
+        if (vendor) updateData.vendorId = vendor.id;
+        if (imageUrl) updateData.imageUrl = imageUrl;
+        if (warrantyExpiryDate) updateData.warrantyExpiryDate = new Date(warrantyExpiryDate);
+        if (updatedBy) updateData.updatedById = updatedBy.id;
+
+        const updatedItem = await prisma.inventoryItem.update({
+          where: { id: existingItem.id },
+          data: updateData,
+          include: RESTOCK_ITEM_INCLUDE,
+        });
 
         if (finalQuantity > 0) {
           await logTransaction(
-            existingItem,
+            updatedItem,
             "receipt",
             finalQuantity,
-            existingItem.quantity,
+            updatedItem.quantity,
             "Additional stock received",
             req.user!.id,
-            req.workspace!.id,
+            req.organization!.id,
           );
         }
 
-        return res.status(200).json({ message: "Stock added to existing item", item: existingItem });
+        return res.status(200).json({ message: "Stock added to existing item", item: updatedItem });
       }
 
-      const itemData: Partial<InventoryItem> = {
+      const createData: any = {
         itemName: trimmedName,
         quantity: finalQuantity,
-        project,
-        workspace: req.workspace!,
+        projectId: project.id,
+        organizationId: req.organization!.id,
         ...(category ? { category } : {}),
         ...(unit ? { unit } : {}),
         ...(status ? { status } : {}),
         ...(lastRestockedDate ? { lastRestockedDate: new Date(lastRestockedDate) } : {}),
         ...(notes ? { notes } : {}),
         ...(catalogItem
-          ? { item: catalogItem, ...(catalogItem.code !== undefined ? { sku: catalogItem.code } : {}) }
+          ? { itemId: catalogItem.id, ...(catalogItem.code !== undefined ? { sku: catalogItem.code } : {}) }
           : sku
             ? { sku }
             : {}),
-        ...(warehouse ? { warehouse } : {}),
+        ...(warehouse ? { warehouseId: warehouse.id } : {}),
         ...(reservedQuantity !== undefined ? { reservedQuantity: Math.max(0, Math.round(reservedQuantity)) } : {}),
         ...(incomingQuantity !== undefined ? { incomingQuantity: Math.max(0, Math.round(incomingQuantity)) } : {}),
         ...(averageCost !== undefined ? { averageCost } : {}),
         ...(supplier ? { supplier } : {}),
-        ...(vendor ? { vendor } : {}),
+        ...(vendor ? { vendorId: vendor.id } : {}),
         ...(imageUrl ? { imageUrl } : {}),
         ...(warrantyExpiryDate ? { warrantyExpiryDate: new Date(warrantyExpiryDate) } : {}),
-        ...(updatedBy ? { updatedBy } : {}),
+        ...(updatedBy ? { updatedById: updatedBy.id } : {}),
       };
 
-      const item = itemRepository.create(itemData);
-      await itemRepository.save(item);
+      const item = await prisma.inventoryItem.create({
+        data: createData,
+        include: RESTOCK_ITEM_INCLUDE,
+      });
 
       if (finalQuantity > 0) {
-        await logTransaction(item, "receipt", finalQuantity, finalQuantity, "Initial stock", req.user!.id, req.workspace!.id);
+        await logTransaction(item, "receipt", finalQuantity, finalQuantity, "Initial stock", req.user!.id, req.organization!.id);
       }
 
       return res.status(201).json({ message: "Inventory item added", item });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -300,7 +318,7 @@ export class InventoryController {
    */
   static async receiveFromProcurement(params: {
     project: Project;
-    workspace: Workspace;
+    organization: Organization;
     catalogItem: CatalogItem | null;
     itemName: string;
     quantity: number;
@@ -310,50 +328,57 @@ export class InventoryController {
     poNumber?: string | null | undefined;
     userId: number;
   }) {
-    const { project, workspace, catalogItem, itemName, quantity, unit, unitCost, vendor, poNumber, userId } = params;
+    const { project, organization, catalogItem, itemName, quantity, unit, unitCost, vendor, poNumber, userId } = params;
     const finalQuantity = quantity && quantity > 0 ? Math.round(quantity) : 0;
     if (finalQuantity <= 0) return;
 
     try {
-      const itemRepository = AppDataSource.getRepository(InventoryItem);
-      const userRepository = AppDataSource.getRepository(User);
-      const updatedBy = await userRepository.findOneBy({ id: userId });
+      const updatedBy = await prisma.user.findUnique({ where: { id: userId } });
       const reason = poNumber ? `Received from procurement ${poNumber}` : "Received from procurement";
 
-      const existingItem = await itemRepository.findOne({
+      const existingItem = await prisma.inventoryItem.findFirst({
         where: catalogItem
-          ? { project: { id: project.id }, item: { id: catalogItem.id } }
-          : { project: { id: project.id }, itemName, item: IsNull() },
-        relations: ["item", "warehouse", "vendor", "updatedBy"],
+          ? { projectId: project.id, itemId: catalogItem.id }
+          : { projectId: project.id, itemName, itemId: null },
+        include: RESTOCK_ITEM_INCLUDE,
       });
 
       if (existingItem) {
-        existingItem.quantity += finalQuantity;
-        if (unit) existingItem.unit = unit;
-        if (unitCost !== undefined && unitCost !== null) existingItem.averageCost = unitCost;
-        if (vendor) existingItem.vendor = vendor;
-        if (updatedBy) existingItem.updatedBy = updatedBy;
-        await itemRepository.save(existingItem);
-        await logTransaction(existingItem, "receipt", finalQuantity, existingItem.quantity, reason, userId, workspace.id);
-        return existingItem;
+        const updateData: any = {
+          quantity: existingItem.quantity + finalQuantity,
+        };
+        if (unit) updateData.unit = unit;
+        if (unitCost !== undefined && unitCost !== null) updateData.averageCost = unitCost;
+        if (vendor) updateData.vendorId = vendor.id;
+        if (updatedBy) updateData.updatedById = updatedBy.id;
+
+        const updatedItem = await prisma.inventoryItem.update({
+          where: { id: existingItem.id },
+          data: updateData,
+          include: RESTOCK_ITEM_INCLUDE,
+        });
+        await logTransaction(updatedItem, "receipt", finalQuantity, updatedItem.quantity, reason, userId, organization.id);
+        return updatedItem;
       }
 
-      const itemData: Partial<InventoryItem> = {
+      const createData: any = {
         itemName,
         quantity: finalQuantity,
-        project,
-        workspace,
+        projectId: project.id,
+        organizationId: organization.id,
         ...(unit ? { unit } : {}),
         ...(catalogItem
-          ? { item: catalogItem, ...(catalogItem.code !== undefined ? { sku: catalogItem.code } : {}) }
+          ? { itemId: catalogItem.id, ...(catalogItem.code !== undefined ? { sku: catalogItem.code } : {}) }
           : {}),
         ...(unitCost !== undefined && unitCost !== null ? { averageCost: unitCost } : {}),
-        ...(vendor ? { vendor } : {}),
-        ...(updatedBy ? { updatedBy } : {}),
+        ...(vendor ? { vendorId: vendor.id } : {}),
+        ...(updatedBy ? { updatedById: updatedBy.id } : {}),
       };
-      const item = itemRepository.create(itemData);
-      await itemRepository.save(item);
-      await logTransaction(item, "receipt", finalQuantity, finalQuantity, reason, userId, workspace.id);
+      const item = await prisma.inventoryItem.create({
+        data: createData,
+        include: RESTOCK_ITEM_INCLUDE,
+      });
+      await logTransaction(item, "receipt", finalQuantity, finalQuantity, reason, userId, organization.id);
       return item;
     } catch (error) {
       console.error("Failed to receive procurement item into inventory:", error);
@@ -385,73 +410,65 @@ export class InventoryController {
     }: UpdateInventoryItemDto = req.body;
 
     try {
-      const itemRepository = AppDataSource.getRepository(InventoryItem);
-      const userRepository = AppDataSource.getRepository(User);
-      const warehouseRepository = AppDataSource.getRepository(Warehouse);
-      const vendorRepository = AppDataSource.getRepository(Vendor);
-      const catalogItemRepository = AppDataSource.getRepository(CatalogItem);
-      const item = await itemRepository.findOne({
+      const item = await prisma.inventoryItem.findUnique({
         where: { id: parseInt(itemId as string) },
-        relations: ["project", "project.workspace", "warehouse", "vendor", "item"],
+        include: OWNED_ITEM_INCLUDE,
       });
 
-      if (!item || item.project.workspace?.id !== req.workspace!.id) {
+      if (!item || item.project?.organizationId !== req.organization!.id) {
         return res.status(404).json({ message: "Inventory item not found" });
       }
 
       const previousQuantity = item.quantity;
+      const data: any = {};
 
       if (itemName !== undefined) {
         const trimmedName = itemName.trim();
         if (!trimmedName) {
           return res.status(400).json({ message: "Item name is required" });
         }
-        item.itemName = trimmedName;
+        data.itemName = trimmedName;
       }
-      if (category !== undefined) item.category = category;
-      if (quantity !== undefined) item.quantity = Math.max(0, Math.round(quantity));
-      if (unit !== undefined) item.unit = unit;
-      if (status !== undefined) item.status = status;
+      if (category !== undefined) data.category = category;
+      if (quantity !== undefined) data.quantity = Math.max(0, Math.round(quantity));
+      if (unit !== undefined) data.unit = unit;
+      if (status !== undefined) data.status = status;
       if (lastRestockedDate !== undefined) {
-        // null (not undefined) so TypeORM actually issues SET lastRestockedDate = NULL
+        // null (not undefined) so Prisma actually issues SET "lastRestockedDate" = NULL
         // instead of silently excluding the column from the UPDATE.
-        item.lastRestockedDate = lastRestockedDate
-          ? new Date(lastRestockedDate)
-          : (null as unknown as Date);
+        data.lastRestockedDate = lastRestockedDate ? new Date(lastRestockedDate) : null;
       }
-      if (notes !== undefined) item.notes = notes;
-      if (sku !== undefined) item.sku = sku;
+      if (notes !== undefined) data.notes = notes;
+      if (sku !== undefined) data.sku = sku;
       if (warehouseId !== undefined) {
         if (warehouseId === null) {
-          item.warehouse = null as unknown as Warehouse;
+          data.warehouseId = null;
         } else {
-          const warehouse = await warehouseRepository.findOne({
-            where: { id: warehouseId, workspace: { id: req.workspace!.id } },
+          const warehouse = await prisma.warehouse.findFirst({
+            where: { id: warehouseId, organizationId: req.organization!.id },
           });
-          if (warehouse) item.warehouse = warehouse;
+          if (warehouse) data.warehouseId = warehouse.id;
         }
       }
-      if (reservedQuantity !== undefined) item.reservedQuantity = Math.max(0, Math.round(reservedQuantity));
-      if (incomingQuantity !== undefined) item.incomingQuantity = Math.max(0, Math.round(incomingQuantity));
+      if (reservedQuantity !== undefined) data.reservedQuantity = Math.max(0, Math.round(reservedQuantity));
+      if (incomingQuantity !== undefined) data.incomingQuantity = Math.max(0, Math.round(incomingQuantity));
       if (averageCost !== undefined) {
-        item.averageCost = averageCost === null ? (null as unknown as number) : averageCost;
+        data.averageCost = averageCost === null ? null : averageCost;
       }
-      if (supplier !== undefined) item.supplier = supplier;
+      if (supplier !== undefined) data.supplier = supplier;
       if (vendorId !== undefined) {
         if (vendorId === null) {
-          item.vendor = null as unknown as Vendor;
+          data.vendorId = null;
         } else {
-          const vendor = await vendorRepository.findOne({
-            where: { id: vendorId, workspace: { id: req.workspace!.id } },
+          const vendor = await prisma.vendor.findFirst({
+            where: { id: vendorId, organizationId: req.organization!.id },
           });
-          if (vendor) item.vendor = vendor;
+          if (vendor) data.vendorId = vendor.id;
         }
       }
-      if (imageUrl !== undefined) item.imageUrl = imageUrl;
+      if (imageUrl !== undefined) data.imageUrl = imageUrl;
       if (warrantyExpiryDate !== undefined) {
-        item.warrantyExpiryDate = warrantyExpiryDate
-          ? new Date(warrantyExpiryDate)
-          : (null as unknown as Date);
+        data.warrantyExpiryDate = warrantyExpiryDate ? new Date(warrantyExpiryDate) : null;
       }
 
       // Applied last so a catalog reference wins over any conflicting
@@ -459,42 +476,47 @@ export class InventoryController {
       // source of truth once an item is linked to it.
       if (catalogItemId !== undefined) {
         if (catalogItemId === null) {
-          item.item = null;
+          data.itemId = null;
         } else {
-          const catalogItem = await catalogItemRepository.findOne({
-            where: { id: catalogItemId, workspace: { id: req.workspace!.id } },
+          const catalogItem = await prisma.catalogItem.findFirst({
+            where: { id: catalogItemId, organizationId: req.organization!.id },
           });
           if (!catalogItem) {
             return res.status(400).json({ message: "Selected item not found" });
           }
-          item.item = catalogItem;
-          item.itemName = catalogItem.name;
+          data.itemId = catalogItem.id;
+          data.itemName = catalogItem.name;
           if (catalogItem.code !== undefined) {
-            item.sku = catalogItem.code;
+            data.sku = catalogItem.code;
           }
         }
       }
 
-      const updatedBy = await userRepository.findOneBy({ id: req.user!.id });
-      if (updatedBy) item.updatedBy = updatedBy;
+      const updatedBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
+      if (updatedBy) data.updatedById = updatedBy.id;
 
-      await itemRepository.save(item);
+      const updatedItem = await prisma.inventoryItem.update({
+        where: { id: item.id },
+        data,
+        include: ITEM_WITH_ALL_RELATIONS_INCLUDE,
+      });
 
-      if (quantity !== undefined && item.quantity !== previousQuantity) {
+      if (quantity !== undefined && updatedItem.quantity !== previousQuantity) {
         await logTransaction(
-          item,
+          updatedItem,
           "adjustment",
-          item.quantity - previousQuantity,
-          item.quantity,
+          updatedItem.quantity - previousQuantity,
+          updatedItem.quantity,
           "Manual edit",
           req.user!.id,
-          req.workspace!.id,
+          req.organization!.id,
         );
       }
 
-      return res.status(200).json({ message: "Inventory item updated", item });
+      return res.status(200).json({ message: "Inventory item updated", item: updatedItem });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -502,31 +524,30 @@ export class InventoryController {
   static deleteInventoryItem = async (req: AuthRequest, res: Response) => {
     const { itemId } = req.params;
     try {
-      const itemRepository = AppDataSource.getRepository(InventoryItem);
-      const item = await itemRepository.findOne({
+      const item = await prisma.inventoryItem.findUnique({
         where: { id: parseInt(itemId as string) },
-        relations: ["project", "project.workspace"],
+        include: { project: { include: { organization: true } } },
       });
 
-      if (!item || item.project.workspace?.id !== req.workspace!.id) {
+      if (!item || item.project?.organizationId !== req.organization!.id) {
         return res.status(404).json({ message: "Inventory item not found" });
       }
 
-      await itemRepository.remove(item);
+      await prisma.inventoryItem.delete({ where: { id: item.id } });
       return res.status(200).json({ message: "Inventory item deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** Loads an item scoped to the caller's workspace, or null. Shared by all the detail-drawer endpoints below. */
-  private static async loadOwnedItem(itemId: string, workspaceId: number) {
-    const itemRepository = AppDataSource.getRepository(InventoryItem);
-    const item = await itemRepository.findOne({
+  /** Loads an item scoped to the caller's organization, or null. Shared by all the detail-drawer endpoints below. */
+  private static async loadOwnedItem(itemId: string, organizationId: number) {
+    const item = await prisma.inventoryItem.findUnique({
       where: { id: parseInt(itemId) },
-      relations: ["project", "project.workspace", "warehouse", "vendor", "item"],
+      include: OWNED_ITEM_INCLUDE,
     });
-    if (!item || item.project.workspace?.id !== workspaceId) return null;
+    if (!item || item.project?.organizationId !== organizationId) return null;
     return item;
   }
 
@@ -540,27 +561,32 @@ export class InventoryController {
     }
 
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const itemRepository = AppDataSource.getRepository(InventoryItem);
       const previousQuantity = item.quantity;
-      item.quantity = Math.max(0, Math.round(previousQuantity + delta));
-      await itemRepository.save(item);
+      const newQuantity = Math.max(0, Math.round(previousQuantity + delta));
+
+      const updatedItem = await prisma.inventoryItem.update({
+        where: { id: item.id },
+        data: { quantity: newQuantity },
+        include: OWNED_ITEM_INCLUDE,
+      });
 
       await logTransaction(
-        item,
+        updatedItem,
         "adjustment",
-        item.quantity - previousQuantity,
-        item.quantity,
+        updatedItem.quantity - previousQuantity,
+        updatedItem.quantity,
         reason,
         req.user!.id,
-        req.workspace!.id,
+        req.organization!.id,
       );
 
-      return res.status(200).json({ message: "Stock adjusted", item });
+      return res.status(200).json({ message: "Stock adjusted", item: updatedItem });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -574,36 +600,36 @@ export class InventoryController {
     }
 
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const warehouseRepository = AppDataSource.getRepository(Warehouse);
-      const toWarehouse = await warehouseRepository.findOne({
-        where: { id: toWarehouseId, workspace: { id: req.workspace!.id } },
+      const toWarehouse = await prisma.warehouse.findFirst({
+        where: { id: toWarehouseId, organizationId: req.organization!.id },
       });
       if (!toWarehouse) return res.status(404).json({ message: "Destination warehouse not found" });
 
       const fromWarehouse = fromWarehouseId
-        ? await warehouseRepository.findOne({ where: { id: fromWarehouseId, workspace: { id: req.workspace!.id } } })
+        ? await prisma.warehouse.findFirst({ where: { id: fromWarehouseId, organizationId: req.organization!.id } })
         : null;
 
-      const userRepository = AppDataSource.getRepository(User);
-      const requestedBy = await userRepository.findOneBy({ id: req.user!.id });
+      const requestedBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
 
-      const transferRepository = AppDataSource.getRepository(StockTransfer);
-      const transfer = transferRepository.create({
-        inventoryItem: item,
-        toWarehouse,
-        quantity: Math.round(quantity),
-        ...(fromWarehouse ? { fromWarehouse } : {}),
-        ...(notes ? { notes } : {}),
-        ...(requestedBy ? { requestedBy } : {}),
+      const transfer = await prisma.stockTransfer.create({
+        data: {
+          inventoryItemId: item.id,
+          toWarehouseId: toWarehouse.id,
+          quantity: Math.round(quantity),
+          ...(fromWarehouse ? { fromWarehouseId: fromWarehouse.id } : {}),
+          ...(notes ? { notes } : {}),
+          ...(requestedBy ? { requestedById: requestedBy.id } : {}),
+        },
+        include: { inventoryItem: true, toWarehouse: true, fromWarehouse: true, requestedBy: true },
       });
-      await transferRepository.save(transfer);
 
       return res.status(201).json({ message: "Transfer created", transfer });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -613,34 +639,40 @@ export class InventoryController {
     const { status }: UpdateStockTransferDto = req.body;
 
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const transferRepository = AppDataSource.getRepository(StockTransfer);
-      const transfer = await transferRepository.findOne({
-        where: { id: parseInt(transferId as string), inventoryItem: { id: item.id } },
-        relations: ["fromWarehouse", "toWarehouse"],
+      const transfer = await prisma.stockTransfer.findFirst({
+        where: { id: parseInt(transferId as string), inventoryItemId: item.id },
+        include: { fromWarehouse: true, toWarehouse: true },
       });
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
 
       const wasCompleted = transfer.status === "completed";
-      transfer.status = status;
+      const transferData: any = { status };
       if (status === "completed" && !wasCompleted) {
-        transfer.completedAt = new Date();
+        transferData.completedAt = new Date();
         // Single-primary-warehouse model: completing a transfer relocates the
         // item's primary location; total on-hand quantity is unaffected, so
         // both audit rows below net to zero but keep the move visible in history.
-        const itemRepository = AppDataSource.getRepository(InventoryItem);
-        item.warehouse = transfer.toWarehouse;
-        await itemRepository.save(item);
-        await logTransaction(item, "transfer_out", -transfer.quantity, item.quantity, `Transfer #${transfer.id} out`, req.user!.id, req.workspace!.id);
-        await logTransaction(item, "transfer_in", transfer.quantity, item.quantity, `Transfer #${transfer.id} in`, req.user!.id, req.workspace!.id);
+        const updatedItem = await prisma.inventoryItem.update({
+          where: { id: item.id },
+          data: { warehouseId: transfer.toWarehouseId },
+          include: OWNED_ITEM_INCLUDE,
+        });
+        await logTransaction(updatedItem, "transfer_out", -transfer.quantity, updatedItem.quantity, `Transfer #${transfer.id} out`, req.user!.id, req.organization!.id);
+        await logTransaction(updatedItem, "transfer_in", transfer.quantity, updatedItem.quantity, `Transfer #${transfer.id} in`, req.user!.id, req.organization!.id);
       }
-      await transferRepository.save(transfer);
+      const updatedTransfer = await prisma.stockTransfer.update({
+        where: { id: transfer.id },
+        data: transferData,
+        include: { fromWarehouse: true, toWarehouse: true },
+      });
 
-      return res.status(200).json({ message: "Transfer updated", transfer });
+      return res.status(200).json({ message: "Transfer updated", transfer: updatedTransfer });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -654,22 +686,23 @@ export class InventoryController {
     }
 
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const batchRepository = AppDataSource.getRepository(InventoryBatch);
-      const batch = batchRepository.create({
-        batchNumber: batchNumber.trim(),
-        quantity: quantity && quantity > 0 ? Math.round(quantity) : 0,
-        inventoryItem: item,
-        ...(manufactureDate ? { manufactureDate: new Date(manufactureDate) } : {}),
-        ...(expiryDate ? { expiryDate: new Date(expiryDate) } : {}),
+      const batch = await prisma.inventoryBatch.create({
+        data: {
+          batchNumber: batchNumber.trim(),
+          quantity: quantity && quantity > 0 ? Math.round(quantity) : 0,
+          inventoryItemId: item.id,
+          ...(manufactureDate ? { manufactureDate: new Date(manufactureDate) } : {}),
+          ...(expiryDate ? { expiryDate: new Date(expiryDate) } : {}),
+        },
       });
-      await batchRepository.save(batch);
 
       return res.status(201).json({ message: "Batch added", batch });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -677,19 +710,19 @@ export class InventoryController {
   static deleteBatch = async (req: AuthRequest, res: Response) => {
     const { itemId, batchId } = req.params;
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const batchRepository = AppDataSource.getRepository(InventoryBatch);
-      const batch = await batchRepository.findOne({
-        where: { id: parseInt(batchId as string), inventoryItem: { id: item.id } },
+      const batch = await prisma.inventoryBatch.findFirst({
+        where: { id: parseInt(batchId as string), inventoryItemId: item.id },
       });
       if (!batch) return res.status(404).json({ message: "Batch not found" });
 
-      await batchRepository.remove(batch);
+      await prisma.inventoryBatch.delete({ where: { id: batch.id } });
       return res.status(200).json({ message: "Batch deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -703,22 +736,23 @@ export class InventoryController {
     }
 
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const serialRepository = AppDataSource.getRepository(InventorySerial);
-      const serial = serialRepository.create({
-        serialNumber: serialNumber.trim(),
-        inventoryItem: item,
-        ...(status ? { status } : {}),
-        ...(warrantyExpiryDate ? { warrantyExpiryDate: new Date(warrantyExpiryDate) } : {}),
-        ...(notes ? { notes } : {}),
+      const serial = await prisma.inventorySerial.create({
+        data: {
+          serialNumber: serialNumber.trim(),
+          inventoryItemId: item.id,
+          ...(status ? { status } : {}),
+          ...(warrantyExpiryDate ? { warrantyExpiryDate: new Date(warrantyExpiryDate) } : {}),
+          ...(notes ? { notes } : {}),
+        },
       });
-      await serialRepository.save(serial);
 
       return res.status(201).json({ message: "Serial added", serial });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -726,19 +760,19 @@ export class InventoryController {
   static deleteSerial = async (req: AuthRequest, res: Response) => {
     const { itemId, serialId } = req.params;
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const serialRepository = AppDataSource.getRepository(InventorySerial);
-      const serial = await serialRepository.findOne({
-        where: { id: parseInt(serialId as string), inventoryItem: { id: item.id } },
+      const serial = await prisma.inventorySerial.findFirst({
+        where: { id: parseInt(serialId as string), inventoryItemId: item.id },
       });
       if (!serial) return res.status(404).json({ message: "Serial not found" });
 
-      await serialRepository.remove(serial);
+      await prisma.inventorySerial.delete({ where: { id: serial.id } });
       return res.status(200).json({ message: "Serial deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -749,24 +783,24 @@ export class InventoryController {
     if (!file) return res.status(400).json({ message: "A file is required" });
 
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const userRepository = AppDataSource.getRepository(User);
-      const uploadedBy = await userRepository.findOneBy({ id: req.user!.id });
+      const uploadedBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
 
-      const attachmentRepository = AppDataSource.getRepository(InventoryAttachment);
-      const attachment = attachmentRepository.create({
-        fileName: file.originalname,
-        filePath: file.path.replace(/\\/g, "/").replace(/^uploads\//, ""),
-        inventoryItem: item,
-        ...(uploadedBy ? { uploadedBy } : {}),
+      const attachment = await prisma.inventoryAttachment.create({
+        data: {
+          fileName: file.originalname,
+          filePath: file.path.replace(/\\/g, "/").replace(/^uploads\//, ""),
+          inventoryItemId: item.id,
+          ...(uploadedBy ? { uploadedById: uploadedBy.id } : {}),
+        },
       });
-      await attachmentRepository.save(attachment);
 
       return res.status(201).json({ message: "Attachment uploaded", attachment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -774,19 +808,19 @@ export class InventoryController {
   static deleteAttachment = async (req: AuthRequest, res: Response) => {
     const { itemId, attachmentId } = req.params;
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
-      const attachmentRepository = AppDataSource.getRepository(InventoryAttachment);
-      const attachment = await attachmentRepository.findOne({
-        where: { id: parseInt(attachmentId as string), inventoryItem: { id: item.id } },
+      const attachment = await prisma.inventoryAttachment.findFirst({
+        where: { id: parseInt(attachmentId as string), inventoryItemId: item.id },
       });
       if (!attachment) return res.status(404).json({ message: "Attachment not found" });
 
-      await attachmentRepository.remove(attachment);
+      await prisma.inventoryAttachment.delete({ where: { id: attachment.id } });
       return res.status(200).json({ message: "Attachment deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -794,50 +828,52 @@ export class InventoryController {
    * GET /projects/inventory/:itemId/detail — everything the drawer needs in one
    * round-trip: batches, serials, recent transactions, transfers, attachments,
    * purchase history (matching ProcurementItem rows) and project allocation
-   * (other InventoryItem rows with the same name across the workspace).
+   * (other InventoryItem rows with the same name across the organization).
    */
   static getInventoryItemDetail = async (req: AuthRequest, res: Response) => {
     const { itemId } = req.params;
     try {
-      const item = await InventoryController.loadOwnedItem(itemId as string, req.workspace!.id);
+      const item = await InventoryController.loadOwnedItem(itemId as string, req.organization!.id);
       if (!item) return res.status(404).json({ message: "Inventory item not found" });
 
       const [batches, serials, transactions, transfers, attachments, purchaseHistory, projectAllocation] =
         await Promise.all([
-          AppDataSource.getRepository(InventoryBatch).find({
-            where: { inventoryItem: { id: item.id } },
-            order: { createdAt: "DESC" },
+          prisma.inventoryBatch.findMany({
+            where: { inventoryItemId: item.id },
+            orderBy: { createdAt: "desc" },
           }),
-          AppDataSource.getRepository(InventorySerial).find({
-            where: { inventoryItem: { id: item.id } },
-            order: { createdAt: "DESC" },
+          prisma.inventorySerial.findMany({
+            where: { inventoryItemId: item.id },
+            orderBy: { createdAt: "desc" },
           }),
-          AppDataSource.getRepository(InventoryTransaction).find({
-            where: { inventoryItem: { id: item.id } },
-            relations: ["performedBy"],
-            order: { createdAt: "DESC" },
+          prisma.inventoryTransaction.findMany({
+            where: { inventoryItemId: item.id },
+            include: { performedBy: true },
+            orderBy: { createdAt: "desc" },
             take: 50,
           }),
-          AppDataSource.getRepository(StockTransfer).find({
-            where: { inventoryItem: { id: item.id } },
-            relations: ["fromWarehouse", "toWarehouse", "requestedBy"],
-            order: { createdAt: "DESC" },
+          prisma.stockTransfer.findMany({
+            where: { inventoryItemId: item.id },
+            include: { fromWarehouse: true, toWarehouse: true, requestedBy: true },
+            orderBy: { createdAt: "desc" },
           }),
-          AppDataSource.getRepository(InventoryAttachment).find({
-            where: { inventoryItem: { id: item.id } },
-            relations: ["uploadedBy"],
-            order: { createdAt: "DESC" },
+          prisma.inventoryAttachment.findMany({
+            where: { inventoryItemId: item.id },
+            include: { uploadedBy: true },
+            orderBy: { createdAt: "desc" },
           }),
-          AppDataSource.getRepository(ProcurementItem).find({
-            where: { itemName: item.itemName, project: { workspace: { id: req.workspace!.id } } },
-            relations: ["project"],
-            order: { createdAt: "DESC" },
+          // Procurement pipeline v2: purchase history is now PurchaseOrderItem rows with the
+          // same item name (analogous to the old ProcurementItem-by-name lookup this replaced).
+          prisma.purchaseOrderItem.findMany({
+            where: { itemName: item.itemName, purchaseOrder: { organizationId: req.organization!.id } },
+            include: { purchaseOrder: { include: { vendor: true, project: true } } },
+            orderBy: { createdAt: "desc" },
             take: 20,
           }),
-          AppDataSource.getRepository(InventoryItem).find({
-            where: { itemName: item.itemName, project: { workspace: { id: req.workspace!.id } } },
-            relations: ["project"],
-            order: { createdAt: "DESC" },
+          prisma.inventoryItem.findMany({
+            where: { itemName: item.itemName, project: { organizationId: req.organization!.id } },
+            include: { project: true },
+            orderBy: { createdAt: "desc" },
           }),
         ]);
 
@@ -852,183 +888,196 @@ export class InventoryController {
         projectAllocation: projectAllocation.filter((row) => row.id !== item.id),
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** GET /workspace/warehouses — list warehouses for pickers/filters. */
-  static getWorkspaceWarehouses = async (req: AuthRequest, res: Response) => {
+  /** GET /organization/warehouses — list warehouses for pickers/filters. */
+  static getOrganizationWarehouses = async (req: AuthRequest, res: Response) => {
     try {
-      const warehouseRepository = AppDataSource.getRepository(Warehouse);
-      const warehouses = await warehouseRepository.find({
-        where: { workspace: { id: req.workspace!.id } },
-        order: { name: "ASC" },
+      const warehouses = await prisma.warehouse.findMany({
+        where: { organizationId: req.organization!.id },
+        orderBy: { name: "asc" },
       });
       return res.status(200).json({ warehouses });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** GET /workspace/inventory/transfers — pending/in-transit transfers across the workspace, for the KPI strip. */
-  static getWorkspacePendingTransfers = async (req: AuthRequest, res: Response) => {
+  /** GET /organization/inventory/transfers — pending/in-transit transfers across the organization, for the KPI strip. */
+  static getOrganizationPendingTransfers = async (req: AuthRequest, res: Response) => {
     try {
-      const transferRepository = AppDataSource.getRepository(StockTransfer);
-      const transfers = await transferRepository
-        .createQueryBuilder("transfer")
-        .leftJoinAndSelect("transfer.inventoryItem", "inventoryItem")
-        .leftJoinAndSelect("inventoryItem.project", "project")
-        .leftJoinAndSelect("transfer.fromWarehouse", "fromWarehouse")
-        .leftJoinAndSelect("transfer.toWarehouse", "toWarehouse")
-        .where("project.workspaceId = :workspaceId", { workspaceId: req.workspace!.id })
-        .andWhere("transfer.status IN (:...statuses)", { statuses: ["pending", "in_transit"] })
-        .orderBy("transfer.createdAt", "DESC")
-        .getMany();
+      const transfers = await prisma.stockTransfer.findMany({
+        where: {
+          inventoryItem: { project: { organizationId: req.organization!.id } },
+          status: { in: ["pending", "in_transit"] },
+        },
+        include: {
+          inventoryItem: { include: { project: true } },
+          fromWarehouse: true,
+          toWarehouse: true,
+        },
+        orderBy: { createdAt: "desc" },
+      });
 
       return res.status(200).json({ transfers });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** GET /workspace/inventory/transactions — recent audit-log entries across the workspace, for the sidebar widget. */
-  static getWorkspaceInventoryTransactions = async (req: AuthRequest, res: Response) => {
+  /** GET /organization/inventory/transactions — recent audit-log entries across the organization, for the sidebar widget. */
+  static getOrganizationInventoryTransactions = async (req: AuthRequest, res: Response) => {
     try {
-      const txRepository = AppDataSource.getRepository(InventoryTransaction);
-      const transactions = await txRepository.find({
-        where: { workspace: { id: req.workspace!.id } },
-        relations: ["performedBy", "inventoryItem"],
-        order: { createdAt: "DESC" },
+      const transactions = await prisma.inventoryTransaction.findMany({
+        where: { organizationId: req.organization!.id },
+        include: { performedBy: true, inventoryItem: true },
+        orderBy: { createdAt: "desc" },
         take: 20,
       });
       return res.status(200).json({ transactions });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** POST /workspace/warehouses — create a warehouse. Admin-gated. */
+  /** POST /organization/warehouses — create a warehouse. Admin-gated. */
   static createWarehouse = async (req: AuthRequest, res: Response) => {
     const { name, code, location, capacity }: AddWarehouseDto = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ message: "Warehouse name is required" });
     }
     try {
-      const warehouseRepository = AppDataSource.getRepository(Warehouse);
-      const warehouse = warehouseRepository.create({
-        name: name.trim(),
-        capacity: capacity && capacity > 0 ? Math.round(capacity) : 0,
-        workspace: req.workspace!,
-        ...(code ? { code } : {}),
-        ...(location ? { location } : {}),
+      const warehouse = await prisma.warehouse.create({
+        data: {
+          name: name.trim(),
+          capacity: capacity && capacity > 0 ? Math.round(capacity) : 0,
+          organizationId: req.organization!.id,
+          ...(code ? { code } : {}),
+          ...(location ? { location } : {}),
+        },
       });
-      await warehouseRepository.save(warehouse);
       return res.status(201).json({ message: "Warehouse created", warehouse });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** GET /workspace/vendors — list vendors for pickers/filters. */
-  static getWorkspaceVendors = async (req: AuthRequest, res: Response) => {
+  /** GET /organization/vendors — list vendors for pickers/filters. */
+  static getOrganizationVendors = async (req: AuthRequest, res: Response) => {
     try {
-      const vendorRepository = AppDataSource.getRepository(Vendor);
-      const vendors = await vendorRepository.find({
-        where: { workspace: { id: req.workspace!.id } },
-        order: { name: "ASC" },
+      const vendors = await prisma.vendor.findMany({
+        where: { organizationId: req.organization!.id },
+        orderBy: { name: "asc" },
       });
       return res.status(200).json({ vendors });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** POST /workspace/vendors — create a vendor. Admin-gated. */
+  /** POST /organization/vendors — create a vendor. Admin-gated. */
   static createVendor = async (req: AuthRequest, res: Response) => {
-    const { name, code, location, contact, contractExpiryDate }: AddVendorDto = req.body;
+    const { name, code, location, contact, contractExpiryDate, contactPerson, address, email }: AddVendorDto = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ message: "Vendor name is required" });
     }
     try {
-      const vendorRepository = AppDataSource.getRepository(Vendor);
-      const vendor = vendorRepository.create({
-        name: name.trim(),
-        workspace: req.workspace!,
-        ...(code ? { code } : {}),
-        ...(location ? { location } : {}),
-        ...(contact ? { contact } : {}),
-        ...(contractExpiryDate ? { contractExpiryDate: new Date(contractExpiryDate) } : {}),
+      const vendor = await prisma.vendor.create({
+        data: {
+          name: name.trim(),
+          organizationId: req.organization!.id,
+          ...(code ? { code } : {}),
+          ...(location ? { location } : {}),
+          ...(contact ? { contact } : {}),
+          ...(contractExpiryDate ? { contractExpiryDate: new Date(contractExpiryDate) } : {}),
+          ...(contactPerson ? { contactPerson } : {}),
+          ...(address ? { address } : {}),
+          ...(email ? { email } : {}),
+        },
       });
-      await vendorRepository.save(vendor);
       return res.status(201).json({ message: "Vendor created", vendor });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** PUT /workspace/vendors/:vendorId — update a vendor. Admin-gated. */
+  /** PUT /organization/vendors/:vendorId — update a vendor. Admin-gated. */
   static updateVendor = async (req: AuthRequest, res: Response) => {
     const { vendorId } = req.params;
-    const { name, code, location, contact, contractExpiryDate }: UpdateVendorDto = req.body;
+    const { name, code, location, contact, contractExpiryDate, contactPerson, address, email }: UpdateVendorDto = req.body;
     try {
-      const vendorRepository = AppDataSource.getRepository(Vendor);
-      const vendor = await vendorRepository.findOne({
-        where: { id: parseInt(vendorId as string), workspace: { id: req.workspace!.id } },
+      const vendor = await prisma.vendor.findFirst({
+        where: { id: parseInt(vendorId as string), organizationId: req.organization!.id },
       });
       if (!vendor) return res.status(404).json({ message: "Vendor not found" });
 
+      const data: any = {};
       if (name !== undefined) {
         const trimmedName = name.trim();
         if (!trimmedName) return res.status(400).json({ message: "Vendor name is required" });
-        vendor.name = trimmedName;
+        data.name = trimmedName;
       }
-      if (code !== undefined) vendor.code = code;
-      if (location !== undefined) vendor.location = location;
-      if (contact !== undefined) vendor.contact = contact;
+      if (code !== undefined) data.code = code;
+      if (location !== undefined) data.location = location;
+      if (contact !== undefined) data.contact = contact;
       if (contractExpiryDate !== undefined) {
-        vendor.contractExpiryDate = contractExpiryDate
-          ? new Date(contractExpiryDate)
-          : (null as unknown as Date);
+        data.contractExpiryDate = contractExpiryDate ? new Date(contractExpiryDate) : null;
       }
+      if (contactPerson !== undefined) data.contactPerson = contactPerson;
+      if (address !== undefined) data.address = address;
+      if (email !== undefined) data.email = email;
 
-      await vendorRepository.save(vendor);
-      return res.status(200).json({ message: "Vendor updated", vendor });
+      const updatedVendor = await prisma.vendor.update({
+        where: { id: vendor.id },
+        data,
+      });
+      return res.status(200).json({ message: "Vendor updated", vendor: updatedVendor });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** DELETE /workspace/vendors/:vendorId — admin-gated. Inventory items referencing this vendor fall back to their legacy free-text supplier field (onDelete: SET NULL on the relation). */
+  /** DELETE /organization/vendors/:vendorId — admin-gated. Inventory items referencing this vendor fall back to their legacy free-text supplier field (onDelete: SET NULL on the relation). */
   static deleteVendor = async (req: AuthRequest, res: Response) => {
     const { vendorId } = req.params;
     try {
-      const vendorRepository = AppDataSource.getRepository(Vendor);
-      const vendor = await vendorRepository.findOne({
-        where: { id: parseInt(vendorId as string), workspace: { id: req.workspace!.id } },
+      const vendor = await prisma.vendor.findFirst({
+        where: { id: parseInt(vendorId as string), organizationId: req.organization!.id },
       });
       if (!vendor) return res.status(404).json({ message: "Vendor not found" });
 
-      await vendorRepository.remove(vendor);
+      await prisma.vendor.delete({ where: { id: vendor.id } });
       return res.status(200).json({ message: "Vendor deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** DELETE /workspace/warehouses/:warehouseId — admin-gated. Inventory items stored at this warehouse are unassigned (onDelete: SET NULL on the relation), not deleted. */
+  /** DELETE /organization/warehouses/:warehouseId — admin-gated. Inventory items stored at this warehouse are unassigned (onDelete: SET NULL on the relation), not deleted. */
   static deleteWarehouse = async (req: AuthRequest, res: Response) => {
     const { warehouseId } = req.params;
     try {
-      const warehouseRepository = AppDataSource.getRepository(Warehouse);
-      const warehouse = await warehouseRepository.findOne({
-        where: { id: parseInt(warehouseId as string), workspace: { id: req.workspace!.id } },
+      const warehouse = await prisma.warehouse.findFirst({
+        where: { id: parseInt(warehouseId as string), organizationId: req.organization!.id },
       });
       if (!warehouse) return res.status(404).json({ message: "Warehouse not found" });
 
-      await warehouseRepository.remove(warehouse);
+      await prisma.warehouse.delete({ where: { id: warehouse.id } });
       return res.status(200).json({ message: "Warehouse deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

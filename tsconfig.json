@@ -9,8 +9,6 @@
     // See also https://aka.ms/tsconfig/module
     "module": "CommonJS",
     "target": "esnext",
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
     // For nodejs:
     "lib": ["esnext"],
     "types": ["node"],

@@ -1,12 +1,6 @@
 import { Request, Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { Task } from "../entities/Task";
-import { TaskPriority, TaskStatus, UserRole } from "../entities/TaskEnums";
-import { User } from "../entities/User";
-import { WorkspaceMembership } from "../entities/WorkspaceMembership";
-import { Project } from "../entities/Project";
-import { SubTask } from "../entities/SubTask";
-import { In } from "typeorm";
+import { prisma } from "../config/prisma";
+import { TaskPriority, TaskStatus, UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import { sendEmail } from "../utils/emailService";
 import {
@@ -22,6 +16,8 @@ import {
   UpdateTaskStatusDto,
 } from "../dto/task.dto";
 import { getDescendantUserIds } from "../utils/hierarchyAuthority";
+import { toSimpleArray, fromSimpleArray } from "../utils/simpleArray";
+import { notifyUsers } from "../services/notificationService";
 
 // Falls back by NODE_ENV (not just a single hardcoded default) so a missing
 // FRONTEND_URL env var still points production task-assignment emails at the
@@ -32,12 +28,66 @@ const FRONTEND_URL =
     ? "https://www.jdnenergy.com.np"
     : "http://localhost:5173");
 
-const sanitizeCreatedBy = (task: Task) => {
+const sanitizeCreatedBy = (task: any) => {
   if (task.createdBy) {
     const { id, fullName, email } = task.createdBy;
-    task.createdBy = { id, fullName, email } as User;
+    task.createdBy = { id, fullName, email };
   }
 };
+
+/** Flattens Prisma's TaskAssignee join rows / raw `files` text column back
+ * into the plain shape the frontend has always received. */
+const shapeTask = (task: any) => ({
+  ...task,
+  files: toSimpleArray(task.files),
+  assignedUsers: Array.isArray(task.assignedUsers)
+    ? task.assignedUsers.map((a: any) => a.user)
+    : task.assignedUsers,
+});
+
+// childTasks: Gantt-nested children (Task.parentTaskId, set via the Schedule
+// tab's "add child task") — surfaced as a lightweight summary so a task's
+// subtasks can be shown nested under it instead of also listed as their own
+// top-level tasks (see TaskController.getAllTasks, which filters them out of
+// the top-level list using parentTaskId).
+const TASK_LIST_INCLUDE = {
+  assignedUsers: { include: { user: true } },
+  project: true,
+  comments: true,
+  createdBy: true,
+  childTasks: { select: { id: true, title: true, status: true, progress: true } },
+} as const;
+
+const TASK_DETAIL_INCLUDE = {
+  assignedUsers: { include: { user: true } },
+  project: true,
+  comments: { include: { author: true } },
+  createdBy: true,
+  childTasks: { select: { id: true, title: true, status: true, progress: true } },
+} as const;
+
+async function attachSubTaskTrees(tasks: { id: number }[]): Promise<Map<number, any[]>> {
+  const taskIds = tasks.map((t) => t.id);
+  if (taskIds.length === 0) return new Map();
+
+  const allSubTasks = await prisma.subTask.findMany({
+    where: { taskId: { in: taskIds } },
+    include: { parent: true },
+  });
+
+  const subTasksByTask = new Map<number, any[]>();
+  allSubTasks.forEach((st) => {
+    const taskId = st.taskId!;
+    if (!subTasksByTask.has(taskId)) subTasksByTask.set(taskId, []);
+    subTasksByTask.get(taskId)!.push({ ...st, history: st.history ? JSON.parse(st.history) : [] });
+  });
+
+  const treesByTask = new Map<number, any[]>();
+  subTasksByTask.forEach((subTasks, taskId) => {
+    treesByTask.set(taskId, buildSubTaskTree(subTasks));
+  });
+  return treesByTask;
+}
 
 export class TaskController {
   static createTask = async (req: AuthRequest, res: Response) => {
@@ -63,13 +113,8 @@ export class TaskController {
     }
 
     try {
-      const userRepository = AppDataSource.getRepository(User);
-      const taskRepository = AppDataSource.getRepository(Task);
-      const projectRepository = AppDataSource.getRepository(Project);
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
-
-      let assignedUsers: User[] = [];
-      let project: Project | null = null;
+      let assignedUsers: { id: number; fullName: string; email: string }[] = [];
+      let project = null as Awaited<ReturnType<typeof prisma.project.findUnique>> | null;
 
       let parsedUserIds: number[] = [];
       if (userIds) {
@@ -85,27 +130,27 @@ export class TaskController {
 
       const actorId = req.user!.id;
       const actorRole = req.user!.role;
-      const workspaceId = req.workspace!.id;
+      const organizationId = req.organization!.id;
       const isSuperAdmin = actorRole === UserRole.SUPER_ADMIN;
 
       if (assignAll === "true" || assignAll === true) {
         if (isSuperAdmin) {
           assignedUsers = (
-            await AppDataSource.getRepository(WorkspaceMembership).find({
-              where: { workspace: { id: workspaceId } },
-              relations: ["user"],
+            await prisma.organizationMembership.findMany({
+              where: { organizationId },
+              include: { user: true },
             })
           ).map((m) => m.user);
         } else {
           // Non-root actors can only ever assign within their own reporting
-          // line — "all" means "all of my descendants", not the workspace.
-          const descendantIds = await getDescendantUserIds(workspaceId, actorId);
+          // line — "all" means "all of my descendants", not the organization.
+          const descendantIds = await getDescendantUserIds(organizationId, actorId);
           const ids = Array.from(new Set([actorId, ...descendantIds]));
-          assignedUsers = await userRepository.findBy({ id: In(ids) });
+          assignedUsers = await prisma.user.findMany({ where: { id: { in: ids } } });
         }
       } else if (parsedUserIds.length > 0) {
         if (!isSuperAdmin) {
-          const descendantIds = new Set(await getDescendantUserIds(workspaceId, actorId));
+          const descendantIds = new Set(await getDescendantUserIds(organizationId, actorId));
           const invalidIds = parsedUserIds.filter(
             (id) => id !== actorId && !descendantIds.has(id),
           );
@@ -116,12 +161,12 @@ export class TaskController {
             });
           }
         }
-        assignedUsers = await userRepository.findBy({ id: In(parsedUserIds) });
+        assignedUsers = await prisma.user.findMany({ where: { id: { in: parsedUserIds } } });
       }
 
       if (projectId) {
-        project = await projectRepository.findOneBy({
-          id: parseInt(projectId as string),
+        project = await prisma.project.findUnique({
+          where: { id: parseInt(projectId as string) },
         });
         if (!project)
           return res.status(404).json({ message: "Project not found" });
@@ -129,26 +174,48 @@ export class TaskController {
 
       const filePaths = files ? files.map((file) => file.path) : [];
 
-      const user = await userRepository.findOneBy({ id: req.user!.id });
+      const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
 
-      const taskPayload: Partial<Task> = {
-        title,
-        ...(description !== undefined ? { description } : {}),
-        priority: priority as TaskPriority,
-        status: TaskStatus.PENDING,
-        dueDate: new Date(dueDate),
-        assignedUsers,
+      const newTaskRow = await prisma.task.create({
+        data: {
+          title,
+          ...(description !== undefined ? { description } : {}),
+          priority: priority as TaskPriority,
+          status: TaskStatus.PENDING,
+          dueDate: new Date(dueDate),
+          files: fromSimpleArray(filePaths),
+          progress: progress ? parseInt(progress as string) : 0,
+          projectName: (projectName || null) as string,
+          createdById: user!.id,
+          organizationId,
+          ...(project ? { projectId: project.id } : {}),
+          assignedUsers: {
+            create: assignedUsers.map((u) => ({ userId: u.id })),
+          },
+        },
+      });
+
+      const newTask: any = {
+        ...newTaskRow,
         files: filePaths,
-        progress: progress ? parseInt(progress as string) : 0,
-        projectName: (projectName || null) as string,
-        createdBy: user!,
-        workspace: req.workspace!,
+        assignedUsers,
+        project,
+        createdBy: user,
       };
 
-      if (project) taskPayload.project = project;
-
-      const newTask = taskRepository.create(taskPayload);
-      await taskRepository.save(newTask);
+      if (assignedUsers.length > 0) {
+        const assignedByName = user?.fullName || "Someone";
+        notifyUsers(
+          assignedUsers.map((u) => u.id).filter((id) => id !== actorId),
+          {
+            organizationId,
+            type: "task_assigned",
+            title: "New task assigned",
+            message: `${assignedByName} assigned you to "${title}"`,
+            link: `/${organizationId}/tasks`,
+          },
+        ).catch((err) => console.error("Failed to send task-assigned notification:", err));
+      }
 
       // Send email notifications to assigned users
       console.log(
@@ -170,7 +237,7 @@ export class TaskController {
         );
         const assignedBy = user?.fullName || "EMS Administrator";
         const emailSubject = `New Task Assigned: ${title}`;
-        const dashboardUrl = `${FRONTEND_URL}/${req.workspace!.id}/dashboard`;
+        const dashboardUrl = `${FRONTEND_URL}/${req.organization!.id}/dashboard`;
         const priorityColors = {
           LOW: "#10b981",
           MEDIUM: "#f59e0b",
@@ -344,7 +411,7 @@ EMS Management
         const parsedSubTasks =
           typeof subTasks === "string" ? JSON.parse(subTasks) : subTasks;
         if (Array.isArray(parsedSubTasks)) {
-          await saveSubTasks(parsedSubTasks, newTask, subTaskRepository);
+          await saveSubTasks(parsedSubTasks, newTask.id);
         }
       }
 
@@ -354,7 +421,7 @@ EMS Management
       if (newTask.subTasks.length > 0) {
         const avg = computeAverageLeafProgress(newTask.subTasks);
         newTask.progress = avg;
-        await taskRepository.update(newTask.id, { progress: avg });
+        await prisma.task.update({ where: { id: newTask.id }, data: { progress: avg } });
       }
 
       sanitizeCreatedBy(newTask);
@@ -364,84 +431,59 @@ EMS Management
         task: newTask,
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static getAllTasks = async (req: AuthRequest, res: Response) => {
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
-      const workspace = req.workspace!;
+      const organization = req.organization!;
       let tasks;
 
       if (req.user?.role === UserRole.SUPER_ADMIN) {
-        // Super admin sees every task in the workspace.
-        tasks = await taskRepository.find({
-          relations: ["assignedUsers", "project", "comments", "createdBy"],
-          where: { workspace: { id: workspace.id } },
-          order: { createdAt: "DESC" },
+        // Super admin sees every task in the organization.
+        tasks = await prisma.task.findMany({
+          where: { organizationId: organization.id },
+          include: TASK_LIST_INCLUDE,
+          orderBy: { createdAt: "desc" },
         });
       } else {
         // Everyone else (including regular admins) only sees a task if they
-        // assigned it (created it) or were assigned to it. Resolve matching
-        // task ids via a query-builder join first, then re-fetch with full
-        // relations — filtering directly on the joined "assignedUsers" alias
-        // would silently truncate that relation to just the caller's own row.
-        const visibleRows = await taskRepository
-          .createQueryBuilder("task")
-          .leftJoin("task.assignedUsers", "user")
-          .leftJoin("task.createdBy", "createdByUser")
-          .where("task.workspace.id = :workspaceId", {
-            workspaceId: workspace.id,
-          })
-          .andWhere("(user.id = :userId OR createdByUser.id = :userId)", {
-            userId: req.user?.id,
-          })
-          .select("task.id", "id")
-          .distinct(true)
-          .getRawMany();
-
-        const taskIds = visibleRows.map((row) => row.id);
-        tasks = taskIds.length
-          ? await taskRepository.find({
-              relations: ["assignedUsers", "project", "comments", "createdBy"],
-              where: { id: In(taskIds) },
-              order: { createdAt: "DESC" },
-            })
-          : [];
-      }
-
-      tasks.forEach((t) => sanitizeCreatedBy(t));
-
-      if (tasks.length > 0) {
-        const taskIds = tasks.map((t) => t.id);
-
-        const allSubTasks = await subTaskRepository
-          .createQueryBuilder("subTask")
-          .leftJoinAndSelect("subTask.parent", "parent")
-          .leftJoinAndSelect("subTask.task", "task")
-          .addSelect("subTask.progress")
-          .addSelect("subTask.history")
-          .where("task.id IN (:...taskIds)", { taskIds })
-          .getMany();
-
-        const subTasksByTask = new Map<number, any[]>();
-        allSubTasks.forEach((st) => {
-          const taskId = typeof st.task === "object" ? st.task.id : st.task;
-          if (!subTasksByTask.has(taskId)) subTasksByTask.set(taskId, []);
-          subTasksByTask.get(taskId)!.push(st);
-        });
-
-        tasks.forEach((task) => {
-          task.subTasks = buildSubTaskTree(subTasksByTask.get(task.id) || []);
-          task.progress = computeAverageLeafProgress(task.subTasks);
+        // assigned it (created it) or were assigned to it.
+        tasks = await prisma.task.findMany({
+          where: {
+            organizationId: organization.id,
+            OR: [
+              { assignedUsers: { some: { userId: req.user!.id } } },
+              { createdById: req.user!.id },
+            ],
+          },
+          include: TASK_LIST_INCLUDE,
+          orderBy: { createdAt: "desc" },
         });
       }
+      // Gantt-nested children (Task.parentTaskId, set via the Schedule tab's
+      // "add child task") are kept in `tasks` (so they're still individually
+      // findable by id when a parent's "Sub-Tasks" list is clicked — see
+      // MyTasks/AssignedTasks/CompletedTasks) but filtered out of the
+      // top-level list the frontend renders as its own card, since they're
+      // shown nested under their parent (childTasks) instead. Frontend does
+      // this filtering, not here, so `tasks` stays the full lookup set.
 
-      return res.status(200).json(tasks);
+      const treesByTask = await attachSubTaskTrees(tasks);
+      const shaped = tasks.map((task) => {
+        const shapedTask = shapeTask(task);
+        sanitizeCreatedBy(shapedTask);
+        shapedTask.subTasks = treesByTask.get(task.id) || [];
+        shapedTask.progress = computeAverageLeafProgress(shapedTask.subTasks);
+        return shapedTask;
+      });
+
+      return res.status(200).json(shaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -454,16 +496,15 @@ EMS Management
     }
 
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(id as string) },
-        relations: ["assignedUsers"],
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
       const userId = req.user?.id;
-      const isAssigned = task.assignedUsers.some((user) => user.id === userId);
+      const isAssigned = task.assignedUsers.some((a) => a.userId === userId);
 
       if (
         !isAssigned &&
@@ -475,30 +516,26 @@ EMS Management
           .json({ message: "Forbidden: You are not assigned to this task." });
       }
 
-      task.progress = parseInt(progress as string);
-      await taskRepository.save(task);
+      const updated = await prisma.task.update({
+        where: { id: task.id },
+        data: { progress: parseInt(progress as string) },
+      });
 
       return res
         .status(200)
-        .json({ message: "Task progress updated successfully", task });
+        .json({ message: "Task progress updated successfully", task: updated });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static getTaskById = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(id as string) },
-        relations: [
-          "assignedUsers",
-          "project",
-          "comments",
-          "comments.author",
-          "createdBy",
-        ],
+        include: TASK_DETAIL_INCLUDE,
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
@@ -506,21 +543,23 @@ EMS Management
       if (req.user?.role !== UserRole.SUPER_ADMIN) {
         // Only the assigner (creator) and the assignees may view a task.
         const assignedToUser = task.assignedUsers.some(
-          (user) => user.id === req.user?.id,
+          (a) => a.userId === req.user?.id,
         );
-        const isCreator = task.createdBy?.id === req.user?.id;
+        const isCreator = task.createdById === req.user?.id;
         if (!assignedToUser && !isCreator)
           return res.status(403).json({ message: "Forbidden" });
       }
 
       const allSubTasks = await fetchSubTasksForTask(task.id);
-      task.subTasks = buildSubTaskTree(allSubTasks);
-      task.progress = computeAverageLeafProgress(task.subTasks);
-      sanitizeCreatedBy(task);
+      const shapedTask: any = shapeTask(task);
+      shapedTask.subTasks = buildSubTaskTree(allSubTasks);
+      shapedTask.progress = computeAverageLeafProgress(shapedTask.subTasks);
+      sanitizeCreatedBy(shapedTask);
 
-      return res.status(200).json(task);
+      return res.status(200).json(shapedTask);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -543,34 +582,32 @@ EMS Management
     const files = req.files as Express.Multer.File[];
 
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const userRepository = AppDataSource.getRepository(User);
-      const projectRepository = AppDataSource.getRepository(Project);
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
-
-      const task = await taskRepository.findOne({
-        where: { id: parseInt(id as string) },
-        relations: ["assignedUsers", "project"],
+      const taskId = parseInt(id as string);
+      const task = await prisma.task.findUnique({
+        where: { id: taskId },
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
+      const previousAssigneeIds = new Set(task.assignedUsers.map((a) => a.userId));
 
-      if (title) task.title = title;
-      if (description !== undefined) task.description = description;
-      if (priority) task.priority = priority as TaskPriority;
+      const data: any = {};
+      if (title) data.title = title;
+      if (description !== undefined) data.description = description;
+      if (priority) data.priority = priority as TaskPriority;
       if (status && Object.values(TaskStatus).includes(status as TaskStatus))
-        task.status = status as TaskStatus;
-      if (dueDate) task.dueDate = new Date(dueDate);
-      if (progress !== undefined) task.progress = parseInt(progress as string);
-      if (projectName !== undefined) task.projectName = projectName;
+        data.status = status as TaskStatus;
+      if (dueDate) data.dueDate = new Date(dueDate);
+      if (progress !== undefined) data.progress = parseInt(progress as string);
+      if (projectName !== undefined) data.projectName = projectName;
 
       if (projectId) {
-        const project = await projectRepository.findOneBy({
-          id: parseInt(projectId as string),
+        const project = await prisma.project.findUnique({
+          where: { id: parseInt(projectId as string) },
         });
         if (!project)
           return res.status(404).json({ message: "Project not found" });
-        task.project = project;
+        data.projectId = project.id;
       }
 
       let parsedUserIds: number[] = [];
@@ -587,27 +624,25 @@ EMS Management
 
       const actorId = req.user!.id;
       const actorRole = req.user!.role;
-      const workspaceId = req.workspace!.id;
+      const organizationId = req.organization!.id;
       const isSuperAdmin = actorRole === UserRole.SUPER_ADMIN;
 
-      let newAssignedUsers: User[] = [...task.assignedUsers];
+      let newAssignedUserIds: number[] | null = null;
       if (assignAll === "true" || assignAll === true) {
         if (isSuperAdmin) {
-          newAssignedUsers = (
-            await AppDataSource.getRepository(WorkspaceMembership).find({
-              where: { workspace: { id: workspaceId } },
-              relations: ["user"],
+          newAssignedUserIds = (
+            await prisma.organizationMembership.findMany({
+              where: { organizationId },
+              select: { userId: true },
             })
-          ).map((m) => m.user);
+          ).map((m) => m.userId);
         } else {
-          const descendantIds = await getDescendantUserIds(workspaceId, actorId);
-          const ids = Array.from(new Set([actorId, ...descendantIds]));
-          newAssignedUsers = await userRepository.findBy({ id: In(ids) });
+          const descendantIds = await getDescendantUserIds(organizationId, actorId);
+          newAssignedUserIds = Array.from(new Set([actorId, ...descendantIds]));
         }
-        task.assignedUsers = newAssignedUsers;
       } else if (userIds !== undefined && userIds !== null) {
         if (!isSuperAdmin && parsedUserIds.length > 0) {
-          const descendantIds = new Set(await getDescendantUserIds(workspaceId, actorId));
+          const descendantIds = new Set(await getDescendantUserIds(organizationId, actorId));
           const invalidIds = parsedUserIds.filter(
             (uid) => uid !== actorId && !descendantIds.has(uid),
           );
@@ -619,16 +654,19 @@ EMS Management
           }
         }
         // Explicitly provided (possibly empty) — replace assignees, including clearing to none.
-        newAssignedUsers =
-          parsedUserIds.length > 0
-            ? await userRepository.findBy({ id: In(parsedUserIds) })
-            : [];
-        task.assignedUsers = newAssignedUsers;
+        newAssignedUserIds = parsedUserIds;
+      }
+
+      if (newAssignedUserIds !== null) {
+        data.assignedUsers = {
+          deleteMany: {},
+          create: newAssignedUserIds.map((userId) => ({ userId })),
+        };
       }
 
       if (files && files.length > 0) {
         const newFilePaths = files.map((file) => file.path);
-        task.files = [...(task.files || []), ...newFilePaths];
+        data.files = fromSimpleArray([...toSimpleArray(task.files), ...newFilePaths]);
       }
 
       // Handle subTasks (supports nested) — UPDATE existing ones to preserve history/progress
@@ -638,7 +676,7 @@ EMS Management
         if (Array.isArray(parsedSubTasks)) {
           // 1. Fetch all existing subtasks for this task
           const existingSubTasks = await fetchSubTasksForTask(task.id);
-          const existingSubTasksMap = new Map<string, SubTask>();
+          const existingSubTasksMap = new Map<string, (typeof existingSubTasks)[number]>();
           existingSubTasks.forEach((st) =>
             existingSubTasksMap.set(String(st.id), st),
           );
@@ -646,32 +684,49 @@ EMS Management
           // 2. Helper to update or create subtasks recursively
           const updateOrCreateSubTasks = async (
             subTasksList: any[],
-            parentSubTask?: SubTask,
+            parentSubTaskId?: number,
           ): Promise<void> => {
             for (const subTaskData of subTasksList) {
               if (!subTaskData.title) continue;
 
               const subTaskIdStr = String(subTaskData.id);
-              let subTask: SubTask;
+              let subTaskId: number;
+
+              const rawEstimatedDays = subTaskData.estimatedDays;
+              const estimatedDays =
+                rawEstimatedDays !== undefined && rawEstimatedDays !== null && rawEstimatedDays !== ""
+                  ? Number(rawEstimatedDays)
+                  : undefined;
+              const hasValidEstimatedDays =
+                estimatedDays !== undefined && Number.isFinite(estimatedDays) && estimatedDays >= 0;
 
               if (
                 existingSubTasksMap.has(subTaskIdStr) &&
                 !subTaskIdStr.startsWith("temp-")
               ) {
                 // Update existing subtask (preserve history, progress!)
-                subTask = existingSubTasksMap.get(subTaskIdStr)!;
-                subTask.title = subTaskData.title;
-                if (parentSubTask) subTask.parent = parentSubTask;
-                await subTaskRepository.save(subTask);
+                const existing = existingSubTasksMap.get(subTaskIdStr)!;
+                subTaskId = existing.id;
+                await prisma.subTask.update({
+                  where: { id: subTaskId },
+                  data: {
+                    title: subTaskData.title,
+                    ...(hasValidEstimatedDays ? { estimatedDays } : {}),
+                    ...(parentSubTaskId !== undefined ? { parentId: parentSubTaskId } : {}),
+                  },
+                });
                 existingSubTasksMap.delete(subTaskIdStr); // Mark as processed
               } else {
                 // Create new subtask
-                subTask = subTaskRepository.create({
-                  title: subTaskData.title,
-                  task,
-                  ...(parentSubTask ? { parent: parentSubTask } : {}),
+                const created = await prisma.subTask.create({
+                  data: {
+                    title: subTaskData.title,
+                    taskId: task.id,
+                    ...(hasValidEstimatedDays ? { estimatedDays } : {}),
+                    ...(parentSubTaskId !== undefined ? { parentId: parentSubTaskId } : {}),
+                  },
                 });
-                await subTaskRepository.save(subTask);
+                subTaskId = created.id;
               }
 
               // Process children
@@ -679,7 +734,7 @@ EMS Management
                 Array.isArray(subTaskData.subTasks) &&
                 subTaskData.subTasks.length > 0
               ) {
-                await updateOrCreateSubTasks(subTaskData.subTasks, subTask);
+                await updateOrCreateSubTasks(subTaskData.subTasks, subTaskId);
               }
             }
           };
@@ -687,50 +742,74 @@ EMS Management
           // 3. Process the parsed subtasks
           await updateOrCreateSubTasks(parsedSubTasks);
 
-          // 4. Delete remaining (unprocessed) existing subtasks
-          const subtasksToDelete = Array.from(existingSubTasksMap.values());
-          // Delete leaf nodes first
-          const deleteLeafNodes = async (toDelete: SubTask[]) => {
-            if (toDelete.length === 0) return;
-            const leafNodes = toDelete.filter((st) => {
-              const hasChildren = toDelete.some(
-                (other) => other.parent?.id === st.id,
-              );
-              return !hasChildren;
-            });
-            if (leafNodes.length > 0) {
-              await subTaskRepository.remove(leafNodes);
-              await deleteLeafNodes(
-                toDelete.filter((st) => !leafNodes.includes(st)),
-              );
-            }
-          };
-          await deleteLeafNodes(subtasksToDelete);
+          // 4. Delete remaining (unprocessed) existing subtasks. Any subtask
+          // that was kept already had its parentId reassigned above (to
+          // wherever the payload put it), so it's no longer a DB child of
+          // any node still in this set — a single bulk delete (letting
+          // onDelete: Cascade handle any subtask-of-a-subtask still in this
+          // same set) reaches the identical end state as deleting leaves
+          // first.
+          const idsToDelete = Array.from(existingSubTasksMap.values()).map((st) => st.id);
+          if (idsToDelete.length > 0) {
+            await prisma.subTask.deleteMany({ where: { id: { in: idsToDelete } } });
+          }
         }
       }
 
-      await taskRepository.save(task);
+      await prisma.task.update({ where: { id: task.id }, data });
 
-      // 4. Refetch task WITHOUT subTasks relations (we will build it manually)
-      const updatedTask = await taskRepository.findOne({
+      if (newAssignedUserIds !== null) {
+        const newlyAdded = newAssignedUserIds.filter(
+          (uid) => !previousAssigneeIds.has(uid) && uid !== actorId,
+        );
+        if (newlyAdded.length > 0) {
+          const actor = await prisma.user.findUnique({ where: { id: actorId } });
+          notifyUsers(newlyAdded, {
+            organizationId,
+            type: "task_assigned",
+            title: "New task assigned",
+            message: `${actor?.fullName || "Someone"} assigned you to "${task.title}"`,
+            link: `/${organizationId}/tasks`,
+          }).catch((err) => console.error("Failed to send task-assigned notification:", err));
+        }
+      }
+
+      if (data.status === TaskStatus.COMPLETED && task.status !== TaskStatus.COMPLETED) {
+        const recipientIds = Array.from(
+          new Set(
+            [task.createdById, ...task.assignedUsers.map((a) => a.userId)].filter(
+              (uid): uid is number => uid != null && uid !== actorId,
+            ),
+          ),
+        );
+        if (recipientIds.length > 0) {
+          notifyUsers(recipientIds, {
+            organizationId,
+            type: "task_completed",
+            title: "Task completed",
+            message: `"${task.title}" was marked as completed`,
+            link: `/${organizationId}/tasks`,
+          }).catch((err) => console.error("Failed to send task-completed notification:", err));
+        }
+      }
+
+      // Refetch task WITHOUT subTasks relations (we will build it manually)
+      const updatedTaskRow = await prisma.task.findUnique({
         where: { id: task.id },
-        relations: [
-          "assignedUsers",
-          "project",
-          "comments",
-          "comments.author",
-          "createdBy",
-        ],
+        include: TASK_DETAIL_INCLUDE,
       });
 
-      // 5. Fetch ALL subtasks and build the complete tree
+      // Fetch ALL subtasks and build the complete tree
       const allSubTasks = await fetchSubTasksForTask(task.id);
 
-      if (updatedTask) {
+      let updatedTask: any = null;
+      if (updatedTaskRow) {
+        updatedTask = shapeTask(updatedTaskRow);
         updatedTask.subTasks = buildSubTaskTree(allSubTasks);
         updatedTask.progress = computeAverageLeafProgress(updatedTask.subTasks);
-        await taskRepository.update(task.id, {
-          progress: updatedTask.progress,
+        await prisma.task.update({
+          where: { id: task.id },
+          data: { progress: updatedTask.progress },
         });
         sanitizeCreatedBy(updatedTask);
       }
@@ -739,7 +818,8 @@ EMS Management
         .status(200)
         .json({ message: "Task updated successfully", task: updatedTask });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -755,16 +835,15 @@ EMS Management
     }
 
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(id as string) },
-        relations: ["assignedUsers"],
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
       const userId = req.user?.id;
-      const isAssigned = task.assignedUsers.some((user) => user.id === userId);
+      const isAssigned = task.assignedUsers.some((a) => a.userId === userId);
       if (
         !isAssigned &&
         req.user?.role !== UserRole.ADMIN &&
@@ -772,25 +851,45 @@ EMS Management
       )
         return res.status(403).json({ message: "Forbidden" });
 
-      task.status = normalized as TaskStatus;
-      await taskRepository.save(task);
+      const updated = await prisma.task.update({
+        where: { id: task.id },
+        data: { status: normalized as TaskStatus },
+      });
 
-      return res.status(200).json({ message: "Task status updated", task });
+      if (normalized === TaskStatus.COMPLETED && task.status !== TaskStatus.COMPLETED) {
+        const recipientIds = Array.from(
+          new Set(
+            [task.createdById, ...task.assignedUsers.map((a) => a.userId)].filter(
+              (uid): uid is number => uid != null && uid !== userId,
+            ),
+          ),
+        );
+        if (recipientIds.length > 0 && req.organization) {
+          notifyUsers(recipientIds, {
+            organizationId: req.organization.id,
+            type: "task_completed",
+            title: "Task completed",
+            message: `"${task.title}" was marked as completed`,
+            link: `/${req.organization.id}/tasks`,
+          }).catch((err) => console.error("Failed to send task-completed notification:", err));
+        }
+      }
+
+      return res.status(200).json({ message: "Task status updated", task: updated });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static getTasksByProject = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
       const projectIdInt = parseInt(projectId as string);
-      const projectTasks = await taskRepository.find({
-        where: { project: { id: projectIdInt } },
-        relations: ["assignedUsers", "project", "comments", "createdBy"],
-        order: { createdAt: "DESC" },
+      const projectTasks = await prisma.task.findMany({
+        where: { projectId: projectIdInt },
+        include: TASK_LIST_INCLUDE,
+        orderBy: { createdAt: "desc" },
       });
 
       let tasksToReturn = projectTasks;
@@ -798,57 +897,40 @@ EMS Management
         // Only the assigner (creator) and the assignees may view a task.
         tasksToReturn = projectTasks.filter(
           (task) =>
-            task.assignedUsers.some((user) => user.id === req.user?.id) ||
-            task.createdBy?.id === req.user?.id,
+            task.assignedUsers.some((a) => a.userId === req.user?.id) ||
+            task.createdById === req.user?.id,
         );
       }
 
-      tasksToReturn.forEach((t) => sanitizeCreatedBy(t));
+      const treesByTask = await attachSubTaskTrees(tasksToReturn);
+      const shaped = tasksToReturn.map((task) => {
+        const shapedTask = shapeTask(task);
+        sanitizeCreatedBy(shapedTask);
+        shapedTask.subTasks = treesByTask.get(task.id) || [];
+        return shapedTask;
+      });
 
-      if (tasksToReturn.length > 0) {
-        const taskIds = tasksToReturn.map((t) => t.id);
-
-        const allSubTasks = await subTaskRepository
-          .createQueryBuilder("subTask")
-          .leftJoinAndSelect("subTask.parent", "parent")
-          .leftJoinAndSelect("subTask.task", "task")
-          .addSelect("subTask.progress")
-          .addSelect("subTask.history")
-          .where("task.id IN (:...taskIds)", { taskIds })
-          .getMany();
-
-        const subTasksByTask = new Map<number, any[]>();
-        allSubTasks.forEach((st) => {
-          const taskId = typeof st.task === "object" ? st.task.id : st.task;
-          if (!subTasksByTask.has(taskId)) subTasksByTask.set(taskId, []);
-          subTasksByTask.get(taskId)!.push(st);
-        });
-
-        tasksToReturn.forEach((task) => {
-          task.subTasks = buildSubTaskTree(subTasksByTask.get(task.id) || []);
-        });
-      }
-
-      return res.status(200).json(tasksToReturn);
+      return res.status(200).json(shaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static deleteTask = async (req: Request, res: Response) => {
     const { id } = req.params;
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(id as string) },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      await taskRepository.remove(task);
+      await prisma.task.delete({ where: { id: task.id } });
       return res.status(200).json({ message: "Task deleted successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

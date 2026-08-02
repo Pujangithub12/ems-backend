@@ -1,8 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.saveSubTasks = exports.computeAverageLeafProgress = exports.fetchSubTasksForTask = exports.buildSubTaskTree = void 0;
-const data_source_1 = require("../config/data-source");
-const SubTask_1 = require("../entities/SubTask");
+const prisma_1 = require("../config/prisma");
 /** Builds a nested subtask tree from a flat list (bypasses TypeORM relation depth limits). */
 const buildSubTaskTree = (subTasks) => {
     const map = new Map();
@@ -14,6 +13,7 @@ const buildSubTaskTree = (subTasks) => {
             title: st.title,
             status: st.status,
             progress: st.progress ?? 0,
+            estimatedDays: st.estimatedDays ?? null,
             history: st.history ?? [],
             parent: st.parent,
             createdAt: st.createdAt,
@@ -43,18 +43,30 @@ const buildSubTaskTree = (subTasks) => {
 exports.buildSubTaskTree = buildSubTaskTree;
 /** Fetches all subtasks for a task with all fields required to build the tree. */
 const fetchSubTasksForTask = async (taskId) => {
-    const subTaskRepository = data_source_1.AppDataSource.getRepository(SubTask_1.SubTask);
-    return await subTaskRepository.find({
-        where: { task: { id: taskId } },
-        relations: ["parent"],
-        order: { createdAt: "ASC" },
+    const subTasks = await prisma_1.prisma.subTask.findMany({
+        where: { taskId },
+        include: { parent: true },
+        orderBy: { createdAt: "asc" },
     });
+    // history is stored as raw JSON text (Prisma doesn't (de)serialize it the
+    // way TypeORM's simple-json column type did) — parse it back to an array
+    // here so every caller keeps seeing SubTaskHistoryItem[] as before.
+    return subTasks.map((st) => ({
+        ...st,
+        history: st.history ? JSON.parse(st.history) : [],
+    }));
 };
 exports.fetchSubTasksForTask = fetchSubTasksForTask;
-/** Averages the progress of every leaf node in a subtask tree, rounded to the nearest integer. */
+/** Weighted average of every leaf node's progress in a subtask tree, rounded
+ * to the nearest integer. Each leaf is weighted by its `estimatedDays` (a
+ * 10-day subtask counts 10x more than a 1-day one) so finishing one small
+ * subtask out of two doesn't misleadingly report "50% done" when the other,
+ * much bigger subtask is still untouched. A leaf with no estimatedDays set
+ * (or an invalid one) falls back to a weight of 1 — equal weighting, the
+ * same behavior as before this existed — so it's opt-in per subtask. */
 const computeAverageLeafProgress = (tree) => {
-    let sum = 0;
-    let count = 0;
+    let weightedSum = 0;
+    let totalWeight = 0;
     const visit = (nodes) => {
         for (const n of nodes || []) {
             const children = n.children || [];
@@ -66,29 +78,39 @@ const computeAverageLeafProgress = (tree) => {
                     ? n.progress
                     : parseInt(n.progress ?? "0");
                 const clamped = Math.max(0, Math.min(100, Number.isFinite(v) ? v : 0));
-                sum += clamped;
-                count += 1;
+                const rawWeight = typeof n.estimatedDays === "number" ? n.estimatedDays : Number(n.estimatedDays);
+                const weight = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : 1;
+                weightedSum += clamped * weight;
+                totalWeight += weight;
             }
         }
     };
     visit(tree || []);
-    return count === 0 ? 0 : Math.round(sum / count);
+    return totalWeight === 0 ? 0 : Math.round(weightedSum / totalWeight);
 };
 exports.computeAverageLeafProgress = computeAverageLeafProgress;
 /** Recursively saves a (possibly nested) list of subtasks under an optional parent subtask. */
-const saveSubTasks = async (parsedSubTasks, parentTask, subTaskRepository, parentSubTask) => {
+const saveSubTasks = async (parsedSubTasks, taskId, tx = prisma_1.prisma, parentSubTaskId) => {
     for (const subTaskData of parsedSubTasks) {
         if (!subTaskData.title)
             continue;
-        const subTask = subTaskRepository.create({
-            title: subTaskData.title,
-            task: parentTask,
-            ...(parentSubTask ? { parent: parentSubTask } : {}),
+        const rawEstimatedDays = subTaskData.estimatedDays;
+        const estimatedDays = rawEstimatedDays !== undefined && rawEstimatedDays !== null && rawEstimatedDays !== ""
+            ? Number(rawEstimatedDays)
+            : undefined;
+        const subTask = await tx.subTask.create({
+            data: {
+                title: subTaskData.title,
+                taskId,
+                ...(estimatedDays !== undefined && Number.isFinite(estimatedDays) && estimatedDays >= 0
+                    ? { estimatedDays }
+                    : {}),
+                ...(parentSubTaskId !== undefined ? { parentId: parentSubTaskId } : {}),
+            },
         });
-        await subTaskRepository.save(subTask);
         if (Array.isArray(subTaskData.subTasks) &&
             subTaskData.subTasks.length > 0) {
-            await (0, exports.saveSubTasks)(subTaskData.subTasks, parentTask, subTaskRepository, subTask);
+            await (0, exports.saveSubTasks)(subTaskData.subTasks, taskId, tx, subTask.id);
         }
     }
 };

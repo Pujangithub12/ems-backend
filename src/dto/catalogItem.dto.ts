@@ -1,4 +1,4 @@
-/** Body shape for POST /workspace/items. */
+/** Body shape for POST /organization/items. */
 export interface AddCatalogItemDto {
   name: string;
   code?: string;

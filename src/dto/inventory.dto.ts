@@ -1,4 +1,4 @@
-import { InventoryCategory, InventoryStatus } from "../entities/InventoryItem";
+import { InventoryCategory, InventoryStatus } from "../types/domain";
 
 /** Body shape for POST /projects/:projectId/inventory. */
 export interface AddInventoryItemDto {

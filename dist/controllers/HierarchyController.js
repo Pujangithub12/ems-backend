@@ -1,163 +1,178 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HierarchyController = void 0;
-const data_source_1 = require("../config/data-source");
-const HierarchyNode_1 = require("../entities/HierarchyNode");
-const User_1 = require("../entities/User");
-const TaskEnums_1 = require("../entities/TaskEnums");
-// Helper to build tree from flat DB list
-const buildTreeFromDB = (nodes) => {
-    const nodeMap = new Map();
-    const rootNodes = [];
-    // First pass: create all nodes
-    nodes.forEach((node) => {
-        const frontendNode = {
-            id: `node-${node.id}`,
-            dbId: node.id,
-            label: node.label || node.user?.fullName || "Unknown",
-            children: [],
-        };
-        if (node.userId !== undefined) {
-            frontendNode.userId = node.userId;
-        }
-        nodeMap.set(node.id, frontendNode);
-    });
-    // Second pass: build hierarchy
-    nodes.forEach((node) => {
-        const currentNode = nodeMap.get(node.id);
-        if (node.parentId) {
-            const parentNode = nodeMap.get(node.parentId);
-            if (parentNode) {
-                parentNode.children.push(currentNode);
-            }
-        }
-        else {
-            rootNodes.push(currentNode);
-        }
-    });
-    // Sort children by orderIndex
-    const sortChildren = (nodeList) => {
-        nodeList.sort((a, b) => {
-            const nodeA = nodes.find((n) => n.id === a.dbId);
-            const nodeB = nodes.find((n) => n.id === b.dbId);
-            return (nodeA?.orderIndex || 0) - (nodeB?.orderIndex || 0);
-        });
-        nodeList.forEach((n) => sortChildren(n.children));
-    };
-    sortChildren(rootNodes);
-    return rootNodes.length > 0 ? rootNodes[0] : null;
+const prisma_1 = require("../config/prisma");
+const enums_1 = require("../types/enums");
+const HIERARCHY_INCLUDE = {
+    user: true,
+    secondaryManagers: { include: { node2: true } },
 };
+const toDto = (node, roleByUserId) => ({
+    id: node.id,
+    userId: node.userId,
+    fullName: node.user.fullName,
+    email: node.user.email,
+    jobPosition: node.user.jobPosition,
+    role: roleByUserId.get(node.userId) ?? enums_1.UserRole.USER,
+    joinDate: node.user.joinDate,
+    primaryManagerId: node.parentId ?? null,
+    secondaryManagerIds: (node.secondaryManagers || []).map((sm) => sm.node2.id),
+});
 class HierarchyController {
-    // Get hierarchy tree for current workspace
+    // Every organization member always has exactly one node — this reconciles
+    // the HierarchyNode table against current membership (creating nodes for
+    // new members, dropping nodes for members removed from the organization)
+    // before returning, so callers never see it out of sync.
     static async getHierarchy(req, res) {
         try {
-            const workspaceId = req.workspace?.id;
-            if (!workspaceId) {
-                return res.status(400).json({ message: "Workspace not found" });
+            const organizationId = req.organization?.id;
+            if (!organizationId) {
+                return res.status(400).json({ message: "Organization not found" });
             }
-            const hierarchyRepo = data_source_1.AppDataSource.getRepository(HierarchyNode_1.HierarchyNode);
-            let nodes = await hierarchyRepo.find({
-                where: { workspaceId },
-                relations: ["user"],
-                order: { orderIndex: "ASC" },
+            const memberships = await prisma_1.prisma.organizationMembership.findMany({
+                where: { organizationId },
+                include: { user: true },
             });
-            // If no hierarchy exists, create default one
-            if (nodes.length === 0) {
-                const userRepo = data_source_1.AppDataSource.getRepository(User_1.User);
-                // Find super admin
-                let superAdmin = await userRepo.findOne({
-                    where: { role: TaskEnums_1.UserRole.SUPER_ADMIN },
+            const members = memberships.map((m) => m.user);
+            const memberIds = new Set(members.map((m) => m.id));
+            // Role is scoped to this one organization already, so a plain userId ->
+            // role map is unambiguous here (unlike OrganizationController.getAccessMatrix,
+            // which spans several organizations at once).
+            const roleByUserId = new Map(memberships.map((m) => [m.user.id, m.role]));
+            let nodes = await prisma_1.prisma.hierarchyNode.findMany({
+                where: { organizationId },
+                include: HIERARCHY_INCLUDE,
+            });
+            // Drop nodes for users no longer in this organization.
+            const staleNodes = nodes.filter((n) => n.userId == null || !memberIds.has(n.userId));
+            if (staleNodes.length > 0) {
+                await prisma_1.prisma.hierarchyNode.deleteMany({
+                    where: { id: { in: staleNodes.map((n) => n.id) } },
                 });
-                // If no super admin, use current user
-                if (!superAdmin && req.user) {
-                    superAdmin = await userRepo.findOne({
-                        where: { id: req.user.id },
-                    });
-                }
-                // Create root node
-                const rootNode = hierarchyRepo.create({
-                    label: "Organization",
-                    workspaceId,
-                    orderIndex: 0,
+                nodes = nodes.filter((n) => !staleNodes.includes(n));
+            }
+            // Create nodes for members that don't have one yet.
+            const existingUserIds = new Set(nodes.map((n) => n.userId));
+            const missing = members.filter((m) => !existingUserIds.has(m.id));
+            if (missing.length > 0) {
+                await prisma_1.prisma.hierarchyNode.createMany({
+                    data: missing.map((m) => ({ userId: m.id, organizationId })),
                 });
-                const savedRoot = await hierarchyRepo.save(rootNode);
-                // Create super admin child node if we have a user
-                if (superAdmin) {
-                    const adminNode = hierarchyRepo.create({
-                        userId: superAdmin.id,
-                        user: superAdmin,
-                        parentId: savedRoot.id,
-                        workspaceId,
-                        orderIndex: 0,
-                    });
-                    await hierarchyRepo.save(adminNode);
-                }
-                // Fetch again to get all nodes
-                nodes = await hierarchyRepo.find({
-                    where: { workspaceId },
-                    relations: ["user"],
-                    order: { orderIndex: "ASC" },
+                nodes = await prisma_1.prisma.hierarchyNode.findMany({
+                    where: { organizationId },
+                    include: HIERARCHY_INCLUDE,
                 });
             }
-            const tree = buildTreeFromDB(nodes);
-            return res.status(200).json(tree);
+            // A super admin always sits at the root — self-heal any node that
+            // somehow ended up with a manager (e.g. legacy data).
+            const misplacedSuperAdmins = nodes.filter((n) => n.userId != null &&
+                roleByUserId.get(n.userId) === enums_1.UserRole.SUPER_ADMIN &&
+                n.parentId != null);
+            if (misplacedSuperAdmins.length > 0) {
+                await prisma_1.prisma.hierarchyNode.updateMany({
+                    where: { id: { in: misplacedSuperAdmins.map((n) => n.id) } },
+                    data: { parentId: null },
+                });
+                misplacedSuperAdmins.forEach((n) => (n.parentId = null));
+            }
+            const people = nodes
+                .map((n) => toDto(n, roleByUserId))
+                .sort((a, b) => a.id - b.id);
+            return res.status(200).json({ people });
         }
         catch (error) {
             console.error("Error fetching hierarchy:", error);
             return res.status(500).json({ message: "Failed to fetch hierarchy" });
         }
     }
-    // Save hierarchy tree for current workspace
+    // Updates reporting relationships in place (nodes are stable/1:1 with
+    // organization members, so unlike Schedule/Project full-replace patterns
+    // elsewhere, there's nothing to delete-and-recreate here).
     static async saveHierarchy(req, res) {
         try {
-            const workspaceId = req.workspace?.id;
-            if (!workspaceId) {
-                return res.status(400).json({ message: "Workspace not found" });
+            const organizationId = req.organization?.id;
+            if (!organizationId) {
+                return res.status(400).json({ message: "Organization not found" });
             }
-            const { tree } = req.body;
-            if (!tree) {
-                return res.status(400).json({ message: "Tree is required" });
+            const { people } = req.body;
+            if (!Array.isArray(people)) {
+                return res.status(400).json({ message: "people array is required" });
             }
-            const hierarchyRepo = data_source_1.AppDataSource.getRepository(HierarchyNode_1.HierarchyNode);
-            // Delete all existing nodes for this workspace first
-            await hierarchyRepo.delete({ workspaceId });
-            // Function to recursively save nodes
-            const saveNode = async (node, parentDbId, orderIndex = 0) => {
-                const newNodeData = {
-                    workspaceId,
-                    orderIndex,
-                };
-                if (node.label !== undefined) {
-                    newNodeData.label = node.label;
+            const nodes = await prisma_1.prisma.hierarchyNode.findMany({
+                where: { organizationId },
+                include: { user: true },
+            });
+            const nodeIds = new Set(nodes.map((n) => n.id));
+            const nodeById = new Map(nodes.map((n) => [n.id, n]));
+            const memberships = await prisma_1.prisma.organizationMembership.findMany({
+                where: { organizationId },
+            });
+            const roleByUserId = new Map(memberships.map((m) => [m.userId, m.role]));
+            // Validate every referenced id (self, primary manager, secondary
+            // managers) actually belongs to this organization before touching anything.
+            for (const p of people) {
+                if (!nodeIds.has(p.id)) {
+                    return res.status(400).json({ message: "Unknown person in hierarchy update" });
                 }
-                if (node.userId !== undefined) {
-                    newNodeData.userId = node.userId;
+                if (p.primaryManagerId !== null && !nodeIds.has(p.primaryManagerId)) {
+                    return res.status(400).json({ message: "Unknown primary manager referenced" });
                 }
-                if (parentDbId !== undefined) {
-                    newNodeData.parentId = parentDbId;
-                }
-                const newNode = hierarchyRepo.create(newNodeData);
-                const savedNode = await hierarchyRepo.save(newNode);
-                // Save children
-                const children = node.children || [];
-                for (let i = 0; i < children.length; i++) {
-                    const child = children[i];
-                    if (child) {
-                        await saveNode(child, savedNode.id, i);
+                for (const secId of p.secondaryManagerIds || []) {
+                    if (!nodeIds.has(secId)) {
+                        return res.status(400).json({ message: "Unknown secondary manager referenced" });
                     }
                 }
-                return savedNode;
-            };
-            // Save root first, then children
-            await saveNode(tree);
-            // Return the updated tree
-            const allNodes = await hierarchyRepo.find({
-                where: { workspaceId },
-                relations: ["user"],
-                order: { orderIndex: "ASC" },
+            }
+            // A super admin always sits at the root of the hierarchy.
+            for (const p of people) {
+                const node = nodeById.get(p.id);
+                if (node.userId != null &&
+                    roleByUserId.get(node.userId) === enums_1.UserRole.SUPER_ADMIN &&
+                    p.primaryManagerId !== null) {
+                    return res.status(400).json({
+                        message: "A super admin can't be given a manager — they stay at the root",
+                    });
+                }
+            }
+            // Reject a request that would introduce a primary-manager cycle.
+            const nextParent = new Map();
+            nodes.forEach((n) => nextParent.set(n.id, n.parentId ?? null));
+            people.forEach((p) => nextParent.set(p.id, p.primaryManagerId));
+            for (const id of nextParent.keys()) {
+                let cur = id;
+                for (let steps = 0; steps <= nextParent.size; steps++) {
+                    cur = cur === undefined || cur === null ? null : nextParent.get(cur) ?? null;
+                    if (cur === null)
+                        break;
+                    if (cur === id) {
+                        return res.status(400).json({
+                            message: "That change would create a reporting-line cycle",
+                        });
+                    }
+                }
+            }
+            for (const p of people) {
+                await prisma_1.prisma.hierarchyNode.update({
+                    where: { id: p.id },
+                    data: {
+                        parentId: p.primaryManagerId,
+                        secondaryManagers: {
+                            deleteMany: {},
+                            create: (p.secondaryManagerIds || []).map((id) => ({
+                                hierarchyNodeId_2: id,
+                            })),
+                        },
+                    },
+                });
+            }
+            const updated = await prisma_1.prisma.hierarchyNode.findMany({
+                where: { organizationId },
+                include: HIERARCHY_INCLUDE,
             });
-            const updatedTree = buildTreeFromDB(allNodes);
-            return res.status(200).json(updatedTree);
+            const result = updated
+                .map((n) => toDto(n, roleByUserId))
+                .sort((a, b) => a.id - b.id);
+            return res.status(200).json({ people: result });
         }
         catch (error) {
             console.error("Error saving hierarchy:", error);

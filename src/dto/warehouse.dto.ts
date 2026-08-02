@@ -1,4 +1,4 @@
-/** Body shape for POST /workspace/warehouses. */
+/** Body shape for POST /organization/warehouses. */
 export interface AddWarehouseDto {
   name: string;
   code?: string;

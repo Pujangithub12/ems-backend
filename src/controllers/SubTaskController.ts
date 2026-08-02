@@ -1,10 +1,6 @@
 import { Request, Response } from "express";
-import { AppDataSource } from "../config/data-source";
-import { Task } from "../entities/Task";
-import { TaskStatus, UserRole } from "../entities/TaskEnums";
-import { User } from "../entities/User";
-import { SubTask } from "../entities/SubTask";
-import { SubTaskComment } from "../entities/SubTaskComment";
+import { prisma } from "../config/prisma";
+import { TaskStatus, UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import {
   buildSubTaskTree,
@@ -16,25 +12,31 @@ import { AddSubTaskDto, UpdateSubTaskDto } from "../dto/subtask.dto";
 export class SubTaskController {
   static addSubTask = async (req: AuthRequest, res: Response) => {
     const { taskId } = req.params;
-    const { title, parentSubTaskId }: AddSubTaskDto = req.body;
+    const { title, parentSubTaskId, estimatedDays }: AddSubTaskDto = req.body;
 
     if (!title)
       return res.status(400).json({ message: "Subtask title is required" });
 
-    try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
+    let parsedEstimatedDays: number | undefined;
+    if (estimatedDays !== undefined && estimatedDays !== null && estimatedDays !== "") {
+      const n = Number(estimatedDays);
+      if (Number.isNaN(n) || n < 0) {
+        return res.status(400).json({ message: "Estimated days must be a non-negative number" });
+      }
+      parsedEstimatedDays = n;
+    }
 
-      const task = await taskRepository.findOne({
+    try {
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers", "createdBy"],
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
 
       const userId = req.user?.id;
-      const isAssigned = task.assignedUsers.some((user) => user.id === userId);
-      const isCreator = task.createdBy?.id === userId;
+      const isAssigned = task.assignedUsers.some((a) => a.userId === userId);
+      const isCreator = task.createdById === userId;
 
       if (
         !isAssigned &&
@@ -46,24 +48,29 @@ export class SubTaskController {
           .json({ message: "Forbidden: You are not assigned to this task." });
       }
 
-      const subTaskPayload: Partial<SubTask> = { title, task };
-
+      let parentId: number | undefined;
       if (parentSubTaskId) {
-        const parentSubTask = await subTaskRepository.findOneBy({
-          id: parseInt(parentSubTaskId as string),
+        const parentSubTask = await prisma.subTask.findUnique({
+          where: { id: parseInt(parentSubTaskId as string) },
         });
         if (!parentSubTask)
           return res.status(404).json({ message: "Parent subtask not found" });
-        subTaskPayload.parent = parentSubTask;
+        parentId = parentSubTask.id;
       }
 
-      const subTask = subTaskRepository.create(subTaskPayload);
-      await subTaskRepository.save(subTask);
+      const subTask = await prisma.subTask.create({
+        data: {
+          title,
+          taskId: task.id,
+          ...(parsedEstimatedDays !== undefined ? { estimatedDays: parsedEstimatedDays } : {}),
+          ...(parentId !== undefined ? { parentId } : {}),
+        },
+      });
 
       const allSubTasks = await fetchSubTasksForTask(task.id);
       const tree = buildSubTaskTree(allSubTasks);
       const avg = computeAverageLeafProgress(tree);
-      await taskRepository.update(task.id, { progress: avg });
+      await prisma.task.update({ where: { id: task.id }, data: { progress: avg } });
 
       return res.status(201).json({
         message: "Subtask added",
@@ -73,13 +80,14 @@ export class SubTaskController {
       });
     } catch (error) {
       console.error("Add SubTask Error:", error);
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static updateSubTask = async (req: AuthRequest, res: Response) => {
     const { taskId, subtaskId } = req.params;
-    const { title: updateText, name, status, progress }: UpdateSubTaskDto = req.body;
+    const { title: updateText, name, status, progress, estimatedDays }: UpdateSubTaskDto = req.body;
 
     console.log("=== updateSubTask called ===", {
       taskId,
@@ -89,24 +97,21 @@ export class SubTaskController {
     });
 
     try {
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
-      const userRepository = AppDataSource.getRepository(User);
-      const subTaskCommentRepository =
-        AppDataSource.getRepository(SubTaskComment);
-      const subTask = await subTaskRepository.findOne({
+      const subTask = await prisma.subTask.findUnique({
         where: { id: parseInt(subtaskId as string) },
-        relations: ["task"],
       });
 
-      if (!subTask || subTask.task.id !== parseInt(taskId as string)) {
+      if (!subTask || subTask.taskId !== parseInt(taskId as string)) {
         return res.status(404).json({ message: "Subtask not found" });
       }
 
-      const user = await userRepository.findOneBy({ id: req.user!.id });
+      const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
       if (!user) return res.status(404).json({ message: "User not found" });
 
       // Capture old progress for history
       const oldProgress = subTask.progress ?? 0;
+
+      const data: any = {};
 
       // `name` renames the subtask itself; `title` above is a different
       // thing — the free-text note for this particular progress update,
@@ -116,17 +121,24 @@ export class SubTaskController {
         if (!trimmedName) {
           return res.status(400).json({ message: "Sub-task name cannot be empty" });
         }
-        subTask.title = trimmedName;
+        data.title = trimmedName;
       }
       if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
-        subTask.status = status as TaskStatus;
+        data.status = status as TaskStatus;
       }
       if (progress !== undefined) {
-        subTask.progress = parseInt(progress as string);
+        data.progress = parseInt(progress as string);
+      }
+      if (estimatedDays !== undefined && estimatedDays !== null && estimatedDays !== "") {
+        const n = Number(estimatedDays);
+        if (Number.isNaN(n) || n < 0) {
+          return res.status(400).json({ message: "Estimated days must be a non-negative number" });
+        }
+        data.estimatedDays = n;
       }
 
       // Add current state to history with the update text
-      const history = subTask.history || [];
+      const history = subTask.history ? JSON.parse(subTask.history) : [];
       history.unshift({
         id: Date.now().toString(),
         date: new Date().toISOString(),
@@ -137,19 +149,20 @@ export class SubTaskController {
       });
 
       // Keep only the last 10 updates to prevent database bloat
-      subTask.history = history.slice(0, 10);
+      data.history = JSON.stringify(history.slice(0, 10));
 
       // Save the subtask
-      await subTaskRepository.save(subTask);
+      const updated = await prisma.subTask.update({ where: { id: subTask.id }, data });
 
       // Create a SubTaskComment for this update so admin can give feedback
       if (updateText) {
-        const newComment = subTaskCommentRepository.create({
-          commentText: updateText,
-          author: user,
-          subTask: subTask,
+        await prisma.subTaskComment.create({
+          data: {
+            commentText: updateText,
+            authorId: user.id,
+            subTaskId: subTask.id,
+          },
         });
-        await subTaskCommentRepository.save(newComment);
       }
 
       const allSubTasks = await fetchSubTasksForTask(
@@ -157,45 +170,44 @@ export class SubTaskController {
       );
       const tree = buildSubTaskTree(allSubTasks);
       const avg = computeAverageLeafProgress(tree);
-      const taskRepository = AppDataSource.getRepository(Task);
-      await taskRepository.update(parseInt(taskId as string), {
-        progress: avg,
+      await prisma.task.update({
+        where: { id: parseInt(taskId as string) },
+        data: { progress: avg },
       });
 
       return res.status(200).json({
         message: "Subtask updated",
-        subTask,
+        subTask: { ...updated, history: JSON.parse(updated.history || "[]") },
         subTasks: tree,
         taskProgress: avg,
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static deleteSubTask = async (req: Request, res: Response) => {
     const { taskId, subtaskId } = req.params;
     try {
-      const subTaskRepository = AppDataSource.getRepository(SubTask);
-      const subTask = await subTaskRepository.findOne({
+      const subTask = await prisma.subTask.findUnique({
         where: { id: parseInt(subtaskId as string) },
-        relations: ["task"],
       });
 
-      if (!subTask || subTask.task.id !== parseInt(taskId as string)) {
+      if (!subTask || subTask.taskId !== parseInt(taskId as string)) {
         return res.status(404).json({ message: "Subtask not found" });
       }
 
-      await subTaskRepository.remove(subTask);
+      await prisma.subTask.delete({ where: { id: subTask.id } });
 
       const allSubTasks = await fetchSubTasksForTask(
         parseInt(taskId as string),
       );
       const tree = buildSubTaskTree(allSubTasks);
       const avg = computeAverageLeafProgress(tree);
-      const taskRepository = AppDataSource.getRepository(Task);
-      await taskRepository.update(parseInt(taskId as string), {
-        progress: avg,
+      await prisma.task.update({
+        where: { id: parseInt(taskId as string) },
+        data: { progress: avg },
       });
 
       return res.status(200).json({
@@ -204,17 +216,17 @@ export class SubTaskController {
         taskProgress: avg,
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
   static getSubTasks = async (req: AuthRequest, res: Response) => {
     const { taskId } = req.params;
     try {
-      const taskRepository = AppDataSource.getRepository(Task);
-      const task = await taskRepository.findOne({
+      const task = await prisma.task.findUnique({
         where: { id: parseInt(taskId as string) },
-        relations: ["assignedUsers", "createdBy"],
+        include: { assignedUsers: true },
       });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
@@ -222,9 +234,9 @@ export class SubTaskController {
       if (req.user?.role !== UserRole.SUPER_ADMIN) {
         // Only the assigner (creator) and the assignees may view a task's subtasks.
         const isAssigned = task.assignedUsers.some(
-          (user) => user.id === req.user?.id,
+          (a) => a.userId === req.user?.id,
         );
-        const isCreator = task.createdBy?.id === req.user?.id;
+        const isCreator = task.createdById === req.user?.id;
         if (!isAssigned && !isCreator)
           return res.status(403).json({ message: "Forbidden" });
       }
@@ -245,7 +257,8 @@ export class SubTaskController {
       const tree = buildSubTaskTree(allSubTasks);
       return res.status(200).json(tree);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }
