@@ -21,6 +21,26 @@ const ACCEPTED_STATUSES = ["accepted", "partially_accepted"];
  * Inventory stock (via InventoryController.receiveFromProcurement), so the previous-status guard
  * in updateStatus must never let that happen more than once per GRN. */
 export class GoodsReceiptController {
+  /** GET /workspace/goods-receipts — aggregated across every PO in the organization, for the mobile GRN inbox. */
+  static getOrganizationGoodsReceipts = async (req: AuthRequest, res: Response) => {
+    try {
+      const goodsReceipts = await prisma.goodsReceipt.findMany({
+        where: { purchaseOrder: { organizationId: req.organization!.id } },
+        include: {
+          items: true,
+          warehouse: true,
+          receivedBy: true,
+          purchaseOrder: { select: { id: true, poNumber: true, project: { select: { id: true, name: true } } } },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      return res.status(200).json({ goodsReceipts });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   /** POST /purchase-orders/:id/goods-receipts — record a receipt of goods against a PO's line items. Admin-gated (see routes.ts). */
   static addGoodsReceipt = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
@@ -79,7 +99,8 @@ export class GoodsReceiptController {
 
       return res.status(201).json({ message: "Goods receipt recorded", goodsReceipt });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -156,7 +177,8 @@ export class GoodsReceiptController {
 
       return res.status(200).json({ message: "Goods receipt status updated", goodsReceipt });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -180,7 +202,8 @@ export class GoodsReceiptController {
 
       return res.status(201).json({ message: "Photo uploaded", photo });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -199,7 +222,8 @@ export class GoodsReceiptController {
       await prisma.goodsReceiptPhoto.delete({ where: { id: photo.id } });
       return res.status(200).json({ message: "Photo deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

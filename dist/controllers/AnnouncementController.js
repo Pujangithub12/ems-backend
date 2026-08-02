@@ -4,6 +4,7 @@ exports.AnnouncementController = void 0;
 const prisma_1 = require("../config/prisma");
 const emailService_1 = require("../utils/emailService");
 const simpleArray_1 = require("../utils/simpleArray");
+const notificationService_1 = require("../services/notificationService");
 class AnnouncementController {
     static createAnnouncement = async (req, res) => {
         const { subject, message, targetType, targetEmails } = req.body;
@@ -44,13 +45,21 @@ class AnnouncementController {
             (0, emailService_1.sendEmail)(recipientEmails, subject, message, undefined, "announcement").catch((err) => {
                 console.error("Failed to send announcement emails:", err);
             });
+            (0, notificationService_1.notifyOrganization)(organization.id, {
+                organizationId: organization.id,
+                type: "announcement",
+                title: subject,
+                message,
+                link: `/${organization.id}/announcements`,
+            }, req.user?.id).catch((err) => console.error("Failed to send announcement notification:", err));
             return res.status(201).json({
                 message: "Announcement created and emails are being sent",
                 announcement: { ...newAnnouncement, targetEmails: (0, simpleArray_1.toSimpleArray)(newAnnouncement.targetEmails) },
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getHistory = async (req, res) => {
@@ -70,7 +79,8 @@ class AnnouncementController {
                 .json(history.map((h) => ({ ...h, targetEmails: (0, simpleArray_1.toSimpleArray)(h.targetEmails) })));
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteAnnouncement = async (req, res) => {
@@ -96,7 +106,8 @@ class AnnouncementController {
                 .json({ message: "Announcement history deleted successfully" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

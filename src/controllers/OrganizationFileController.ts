@@ -93,7 +93,8 @@ export class OrganizationFileController {
         .status(200)
         .json({ files: [...rootFiles, ...virtualProjectRoots, ...mirroredFiles] });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -155,7 +156,8 @@ export class OrganizationFileController {
       await grantCreatorAccess(folder, req.user!.id, req.user!.role, req.organization!.id);
       return res.status(201).json({ message: "Folder created", file: folder });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -212,7 +214,8 @@ export class OrganizationFileController {
       return res.status(201).json({ message: "File uploaded", file });
     } catch (error) {
       fs.unlink(uploadedFile.path, () => {});
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

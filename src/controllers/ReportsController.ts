@@ -466,7 +466,8 @@ export class ReportsController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -484,7 +485,8 @@ export class ReportsController {
       });
       return res.status(200).json({ activity });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -507,7 +509,8 @@ export class ReportsController {
       });
       return res.status(201).json({ message: "Activity logged", activity });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -523,7 +526,8 @@ export class ReportsController {
       });
       return res.status(200).json({ comments });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -545,7 +549,8 @@ export class ReportsController {
       });
       return res.status(201).json({ message: "Comment added", comment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

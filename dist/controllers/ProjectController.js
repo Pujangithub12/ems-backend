@@ -20,7 +20,17 @@ const PROJECT_INCLUDE = {
             },
         },
     },
-    projectTasks: { include: { assignedUsers: { include: { user: true } } } },
+    projectTasks: {
+        include: {
+            assignedUsers: { include: { user: true } },
+            // Gantt-nested children (Task.parentTaskId, set via the Schedule tab's
+            // "add child task") — surfaced here so the Kanban drawer can show them
+            // too. Each child is also its own top-level row in projectTasks
+            // already (this include is unfiltered by projectHeadingId), so this
+            // is just enough to render a summary list, not the full child record.
+            childTasks: { select: { id: true, title: true, status: true, progress: true } },
+        },
+    },
 };
 /** Flattens a Prisma TaskAssignee join-row list back into the plain User[]
  * shape the frontend has always received for a task's assignedUsers. */
@@ -106,7 +116,8 @@ class ProjectController {
             return res.status(201).json({ message: "Project created", project });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getAllProjects = async (req, res) => {
@@ -139,7 +150,8 @@ class ProjectController {
         }
         catch (error) {
             console.error("[ProjectController.getAllProjects] Error:", error);
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getProjectById = async (req, res) => {
@@ -186,7 +198,8 @@ class ProjectController {
         }
         catch (error) {
             console.error("[ProjectController.getProjectById] Error:", error);
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static addProjectHeading = async (req, res) => {
@@ -232,7 +245,8 @@ class ProjectController {
             return res.status(201).json({ message: "Heading added", heading });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static addProjectTask = async (req, res) => {
@@ -306,7 +320,8 @@ class ProjectController {
             return res.status(201).json({ message: "Task added", task });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateProjectTask = async (req, res) => {
@@ -336,7 +351,8 @@ class ProjectController {
             return res.status(200).json({ message: "Task updated", task });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteProjectTask = async (req, res) => {
@@ -352,7 +368,8 @@ class ProjectController {
             return res.status(200).json({ message: "Task deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateProject = async (req, res) => {
@@ -419,7 +436,8 @@ class ProjectController {
             return res.status(200).json({ message: "Project updated", project });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteProject = async (req, res) => {
@@ -445,7 +463,8 @@ class ProjectController {
             return res.status(200).json({ message: "Project deleted successfully" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

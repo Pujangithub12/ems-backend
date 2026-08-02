@@ -13,7 +13,8 @@ class CatalogItemController {
             return res.status(200).json({ items });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /organization/items — add a new item (name + code) to the shared catalog. */
@@ -43,7 +44,8 @@ class CatalogItemController {
             return res.status(201).json({ message: "Item created", item });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

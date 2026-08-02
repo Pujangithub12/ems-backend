@@ -15,19 +15,19 @@ export interface ScheduleTaskInput {
   predecessorId: string | null;
   /** Percent complete (0-100), manually entered. Null when not tracked. */
   progress: number | null;
-  /** "pending" | "in_progress" | "on_hold" | "completed". */
+  /** "to_do" | "in_progress" | "on_hold" | "completed". */
   status: string;
 }
 
-const VALID_STATUSES = new Set(["pending", "in_progress", "on_hold", "completed"]);
+const VALID_STATUSES = new Set(["to_do", "in_progress", "on_hold", "completed"]);
 
 /** Case/spacing-tolerant normalization ("On Hold", "on-hold" -> "on_hold"),
- * falling back to "pending" for anything unrecognized rather than rejecting
+ * falling back to "to_do" for anything unrecognized rather than rejecting
  * the whole save — same forgiving treatment as Progress being clamped. */
 function normalizeStatus(raw: unknown): string {
-  if (raw === undefined || raw === null || raw === "") return "pending";
+  if (raw === undefined || raw === null || raw === "") return "to_do";
   const key = String(raw).trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return VALID_STATUSES.has(key) ? key : "pending";
+  return VALID_STATUSES.has(key) ? key : "to_do";
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -118,12 +118,12 @@ export function validateScheduleTasks(input: unknown): ScheduleTaskInput[] {
 
     const status = normalizeStatus(raw.status);
 
-    // Progress is derived from status for Pending/Completed — enforced here
+    // Progress is derived from status for To Do/Completed — enforced here
     // too (not just client-side in ProjectScheduleTab's handleStatusChange)
     // so a direct API call or stale client can't desync the two. In Progress
     // and On Hold both keep whatever value was sent: In Progress because
     // it's user-editable, On Hold because it's meant to stay frozen.
-    if (status === "pending") progress = 0;
+    if (status === "to_do") progress = 0;
     else if (status === "completed") progress = 100;
 
     return { id: finalId, taskName, duration, startDate, parentId, predecessorId, progress, status };

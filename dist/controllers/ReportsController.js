@@ -107,6 +107,13 @@ class ReportsController {
      * GET /organization/reports/summary — every dataset the Reports dashboard needs,
      * computed in one round-trip from data that already exists. Query params:
      * projectId?, warehouseId?, vendorId?, category?, range? (30d|month|3m|12m|year).
+     *
+     * Procurement-side figures are sourced from the PurchaseOrder pipeline (v2) rather
+     * than the legacy ProcurementItem table — a PO's "cost" is the sum of its line
+     * items' quantity*unitPrice. The old `category` (hardware/software/service)
+     * dimension doesn't exist on PurchaseOrder/PurchaseOrderItem (the new PR/PO spec
+     * never had a category field), so the `category` filter and `spendByCategory`
+     * chart now apply to Inventory data only; `spendByCategory` is returned empty.
      */
     static getSummary = async (req, res) => {
         try {
@@ -122,33 +129,30 @@ class ReportsController {
                 inventoryWhere.vendorId = parseInt(vendorId);
             if (category)
                 inventoryWhere.category = category;
-            const procurementWhere = { project: { organizationId: wsId } };
+            const purchaseOrderWhere = { organizationId: wsId };
             if (projectId)
-                procurementWhere.projectId = parseInt(projectId);
+                purchaseOrderWhere.projectId = parseInt(projectId);
             if (vendorId)
-                procurementWhere.vendorId = parseInt(vendorId);
-            if (category)
-                procurementWhere.category = category;
+                purchaseOrderWhere.vendorId = parseInt(vendorId);
             const inventoryItems = await prisma_1.prisma.inventoryItem.findMany({
                 where: inventoryWhere,
                 include: { project: true, warehouse: true, vendor: true },
             });
-            const procurementItems = await prisma_1.prisma.procurementItem.findMany({
-                where: procurementWhere,
-                include: { project: true, vendor: true, requestedBy: true },
+            const purchaseOrders = await prisma_1.prisma.purchaseOrder.findMany({
+                where: purchaseOrderWhere,
+                include: { project: true, vendor: true, items: true },
             });
             const itemIds = inventoryItems.map((i) => i.id);
-            const procurementIds = procurementItems.map((p) => p.id);
+            const purchaseOrderIds = purchaseOrders.map((p) => p.id);
             const transactions = itemIds.length
                 ? await prisma_1.prisma.inventoryTransaction.findMany({
                     where: { inventoryItemId: { in: itemIds } },
                     include: { inventoryItem: true },
                 })
                 : [];
-            const statusHistory = procurementIds.length
-                ? await prisma_1.prisma.procurementStatusHistory.findMany({
-                    where: { procurementItemId: { in: procurementIds } },
-                    include: { procurementItem: { include: { vendor: true } } },
+            const statusHistory = purchaseOrderIds.length
+                ? await prisma_1.prisma.purchaseOrderStatusHistory.findMany({
+                    where: { purchaseOrderId: { in: purchaseOrderIds } },
                     orderBy: { createdAt: "asc" },
                 })
                 : [];
@@ -165,18 +169,18 @@ class ReportsController {
             const valueSeries = dailySeries(transactionsInRange, (t) => t.createdAt, (t) => t.quantityChange * num(t.inventoryItem?.averageCost), start, end);
             const monthStart = new Date(end.getFullYear(), end.getMonth(), 1);
             const prevMonthStart = new Date(end.getFullYear(), end.getMonth() - 1, 1);
-            const poCost = (p) => p.quantity * num(p.unitCost ?? p.estimatedCost);
-            const monthlyProcurementCost = procurementItems
+            const poCost = (po) => po.items.reduce((s, item) => s + item.quantity * num(item.unitPrice), 0);
+            const monthlyProcurementCost = purchaseOrders
                 .filter((p) => p.createdAt >= monthStart)
                 .reduce((s, p) => s + poCost(p), 0);
-            const prevMonthProcurementCost = procurementItems
+            const prevMonthProcurementCost = purchaseOrders
                 .filter((p) => p.createdAt >= prevMonthStart && p.createdAt < monthStart)
                 .reduce((s, p) => s + poCost(p), 0);
-            const costSeries = dailySeries(procurementItems.filter((p) => inRange(p.createdAt)), (p) => p.createdAt, poCost, start, end);
+            const costSeries = dailySeries(purchaseOrders.filter((p) => inRange(p.createdAt)), (p) => p.createdAt, poCost, start, end);
             const lowStockItems = inventoryItems.filter((i) => i.status === "low_stock");
             const outOfStockItems = inventoryItems.filter((i) => i.status === "out_of_stock");
-            const activePOs = procurementItems.filter((p) => p.status !== "delivered");
-            const activeVendorIds = new Set(procurementItems.filter((p) => p.vendor).map((p) => p.vendor.id));
+            const activePOs = purchaseOrders.filter((p) => p.status !== "completed" && p.status !== "cancelled");
+            const activeVendorIds = new Set(purchaseOrders.filter((p) => p.vendorId).map((p) => p.vendorId));
             const issuedInRange = transactionsInRange.filter((t) => t.type === "issue");
             const totalIssuedQty = issuedInRange.reduce((s, t) => s + Math.abs(t.quantityChange), 0);
             const avgOnHand = inventoryItems.length
@@ -220,8 +224,8 @@ class ReportsController {
                 },
                 activeVendors: {
                     value: activeVendorIds.size,
-                    trendPct: trendPct(dailySeries(procurementItems.filter((p) => p.vendor && inRange(p.createdAt)), (p) => p.createdAt, () => 1, start, end)),
-                    sparkline: dailySeries(procurementItems.filter((p) => p.vendor && inRange(p.createdAt)), (p) => p.createdAt, () => 1, start, end),
+                    trendPct: trendPct(dailySeries(purchaseOrders.filter((p) => p.vendorId && inRange(p.createdAt)), (p) => p.createdAt, () => 1, start, end)),
+                    sparkline: dailySeries(purchaseOrders.filter((p) => p.vendorId && inRange(p.createdAt)), (p) => p.createdAt, () => 1, start, end),
                 },
                 inventoryTurnover: {
                     value: inventoryTurnover,
@@ -231,25 +235,24 @@ class ReportsController {
             };
             // ---- Charts ----
             const procurementCostTrend = {};
-            procurementItems
+            purchaseOrders
                 .filter((p) => inRange(p.createdAt))
                 .forEach((p) => {
                 const key = monthKey(p.createdAt);
                 procurementCostTrend[key] = (procurementCostTrend[key] || 0) + poCost(p);
             });
             const categories = ["hardware", "software", "service"];
-            const spendByCategory = categories.map((c) => ({
-                category: c,
-                value: procurementItems.filter((p) => p.category === c).reduce((s, p) => s + poCost(p), 0),
-            }));
+            // Procurement no longer has a category dimension (see class-level doc comment above) —
+            // kept as an empty array so the response shape/frontend chart doesn't break.
+            const spendByCategory = [];
             const inventoryValueByCategory = categories.map((c) => ({
                 category: c,
                 value: inventoryItems.filter((i) => i.category === c).reduce((s, i) => s + i.quantity * num(i.averageCost), 0),
             }));
-            const poStatuses = ["pending", "approved", "ordered", "delivered"];
+            const poStatuses = ["created", "sent", "accepted", "cancelled", "completed"];
             const poStatusBreakdown = poStatuses.map((s) => ({
                 status: s,
-                count: procurementItems.filter((p) => p.status === s).length,
+                count: purchaseOrders.filter((p) => p.status === s).length,
             }));
             const warehouseUtilization = warehouses.map((w) => ({
                 id: w.id,
@@ -273,11 +276,11 @@ class ReportsController {
                     stockMovementTrend[key].transferred += abs;
             });
             const yearStart = new Date(end.getFullYear(), 0, 1);
-            const topPurchasedItems = [...procurementItems]
+            const topPurchasedItems = [...purchaseOrders]
                 .filter((p) => p.createdAt >= yearStart)
                 .sort((a, b) => poCost(b) - poCost(a))
                 .slice(0, 10)
-                .map((p) => ({ id: p.id, itemName: p.itemName, value: poCost(p) }));
+                .map((p) => ({ id: p.id, itemName: p.items.map((i) => i.itemName).join(", ") || p.poNumber || `PO #${p.id}`, value: poCost(p) }));
             const consumptionByProject = new Map();
             inventoryItems.forEach((i) => {
                 const name = i.project?.name || "Unassigned";
@@ -324,16 +327,16 @@ class ReportsController {
                     suggestedAction: suggestedAction(status),
                 };
             });
-            // Vendor performance: avg days between a PO's "ordered" and "delivered" status-history rows.
+            // Vendor performance: avg days between a PO's "sent" and "completed" status-history rows.
             const vendorPerformance = vendors.map((v) => {
-                const vendorPOs = procurementItems.filter((p) => p.vendor?.id === v.id);
+                const vendorPOs = purchaseOrders.filter((p) => p.vendorId === v.id);
                 const deliveryDays = [];
                 vendorPOs.forEach((p) => {
-                    const rows = statusHistory.filter((h) => h.procurementItem?.id === p.id);
-                    const ordered = rows.find((h) => h.toStatus === "ordered");
-                    const delivered = rows.find((h) => h.toStatus === "delivered" && (!ordered || h.createdAt > ordered.createdAt));
-                    if (ordered && delivered) {
-                        deliveryDays.push((delivered.createdAt.getTime() - ordered.createdAt.getTime()) / (24 * 60 * 60 * 1000));
+                    const rows = statusHistory.filter((h) => h.purchaseOrderId === p.id);
+                    const sent = rows.find((h) => h.toStatus === "sent");
+                    const completed = rows.find((h) => h.toStatus === "completed" && (!sent || h.createdAt > sent.createdAt));
+                    if (sent && completed) {
+                        deliveryDays.push((completed.createdAt.getTime() - sent.createdAt.getTime()) / (24 * 60 * 60 * 1000));
                     }
                 });
                 return {
@@ -347,20 +350,25 @@ class ReportsController {
             });
             // ---- Alerts ----
             const now = new Date();
-            const delayedPOs = procurementItems
-                .filter((p) => p.status !== "delivered" && p.neededByDate && new Date(p.neededByDate) < now)
-                .map((p) => ({ id: p.id, itemName: p.itemName, neededByDate: formatDate(p.neededByDate), vendorName: p.vendor?.name || p.vendorName || null }));
+            const delayedPOs = purchaseOrders
+                .filter((p) => p.status !== "completed" && p.deliveryDate && new Date(p.deliveryDate) < now)
+                .map((p) => ({
+                id: p.id,
+                itemName: p.items.map((i) => i.itemName).join(", ") || p.poNumber || `PO #${p.id}`,
+                neededByDate: formatDate(p.deliveryDate),
+                vendorName: p.vendor?.name || null,
+            }));
             const vendorDelays = [];
-            procurementItems.forEach((p) => {
-                if (!p.neededByDate)
+            purchaseOrders.forEach((p) => {
+                if (!p.deliveryDate)
                     return;
-                const delivered = statusHistory.find((h) => h.procurementItem?.id === p.id && h.toStatus === "delivered");
-                if (delivered && delivered.createdAt > new Date(p.neededByDate)) {
+                const completed = statusHistory.find((h) => h.purchaseOrderId === p.id && h.toStatus === "completed");
+                if (completed && completed.createdAt > new Date(p.deliveryDate)) {
                     vendorDelays.push({
-                        itemName: p.itemName,
-                        vendorName: p.vendor?.name || p.vendorName || "Unknown vendor",
-                        neededByDate: formatDate(p.neededByDate),
-                        deliveredAt: delivered.createdAt,
+                        itemName: p.items.map((i) => i.itemName).join(", ") || p.poNumber || `PO #${p.id}`,
+                        vendorName: p.vendor?.name || "Unknown vendor",
+                        neededByDate: formatDate(p.deliveryDate),
+                        deliveredAt: completed.createdAt,
                     });
                 }
             });
@@ -371,10 +379,10 @@ class ReportsController {
             // ---- Insights ----
             const inventoryValueTrendPct = kpis.totalInventoryValue.trendPct;
             const procurementCostTrendPct = kpis.monthlyProcurementCost.trendPct;
-            const monthPOs = procurementItems.filter((p) => p.createdAt >= monthStart);
+            const monthPOs = purchaseOrders.filter((p) => p.createdAt >= monthStart);
             const spendByVendorThisMonth = new Map();
             monthPOs.forEach((p) => {
-                const name = p.vendor?.name || p.vendorName || "Unknown";
+                const name = p.vendor?.name || "Unknown";
                 spendByVendorThisMonth.set(name, (spendByVendorThisMonth.get(name) || 0) + poCost(p));
             });
             const topVendorThisMonth = Array.from(spendByVendorThisMonth.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
@@ -409,7 +417,8 @@ class ReportsController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /organization/reports/activity?action=viewed|exported — footer's Recent Exports / Recently Viewed. */
@@ -427,7 +436,8 @@ class ReportsController {
             return res.status(200).json({ activity });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /organization/reports/activity — log a view/export action. */
@@ -450,7 +460,8 @@ class ReportsController {
             return res.status(201).json({ message: "Activity logged", activity });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /organization/reports/comments?key=... — comments for one chart/section. */
@@ -467,7 +478,8 @@ class ReportsController {
             return res.status(200).json({ comments });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /organization/reports/comments — add a comment to a chart/section. */
@@ -489,7 +501,8 @@ class ReportsController {
             return res.status(201).json({ message: "Comment added", comment });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

@@ -4,6 +4,7 @@ exports.SiteVisitRequestController = void 0;
 const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
 const hierarchyAuthority_1 = require("../utils/hierarchyAuthority");
+const notificationService_1 = require("../services/notificationService");
 // `user` was an eager relation on SiteVisitRequest under TypeORM, so it was
 // always populated (and included the password hash) regardless of the
 // `relations` option passed to the query. Prisma has no eager-loading
@@ -44,12 +45,22 @@ class SiteVisitRequestController {
             });
             const siteVisitRequest = { ...newRequest, user };
             sanitizeUser(siteVisitRequest);
+            (0, notificationService_1.getUserIdsByRole)(organization.id, [enums_1.UserRole.ADMIN, enums_1.UserRole.SUPER_ADMIN])
+                .then((approverIds) => (0, notificationService_1.notifyUsers)(approverIds.filter((id) => id !== user.id), {
+                organizationId: organization.id,
+                type: "approval_requested",
+                title: "New site visit request",
+                message: `${user.fullName} submitted a site visit request: "${title}"`,
+                link: `/${organization.id}/leaverequests`,
+            }))
+                .catch((err) => console.error("Failed to send site-visit-request notification:", err));
             return res
                 .status(201)
                 .json({ message: "Site visit request created", siteVisitRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getAllSiteVisitRequests = async (req, res) => {
@@ -85,7 +96,8 @@ class SiteVisitRequestController {
             return res.status(200).json(mineShaped);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateStatus = async (req, res) => {
@@ -117,12 +129,22 @@ class SiteVisitRequestController {
             });
             const siteVisitRequest = { ...updated, user: sv.user };
             sanitizeUser(siteVisitRequest);
+            if (sv.userId) {
+                (0, notificationService_1.notifyUsers)([sv.userId], {
+                    organizationId: organization.id,
+                    type: "approval_decided",
+                    title: `Site visit request ${status}`,
+                    message: `Your site visit request "${sv.title}" was ${status}`,
+                    link: `/${organization.id}/leaverequests`,
+                }).catch((err) => console.error("Failed to send site-visit-decision notification:", err));
+            }
             return res
                 .status(200)
                 .json({ message: `Site visit request ${status}`, siteVisitRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getSiteVisitRequestById = async (req, res) => {
@@ -148,7 +170,8 @@ class SiteVisitRequestController {
             return res.status(200).json(shaped);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateSiteVisitRequest = async (req, res) => {
@@ -188,7 +211,8 @@ class SiteVisitRequestController {
                 .json({ message: "Site visit request updated", siteVisitRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteSiteVisitRequest = async (req, res) => {
@@ -207,7 +231,8 @@ class SiteVisitRequestController {
             return res.status(200).json({ message: "Site visit request deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

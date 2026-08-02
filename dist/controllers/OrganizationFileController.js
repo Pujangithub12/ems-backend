@@ -88,7 +88,8 @@ class OrganizationFileController {
                 .json({ files: [...rootFiles, ...virtualProjectRoots, ...mirroredFiles] });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /organization/folders — create a folder (no physical file). */
@@ -144,7 +145,8 @@ class OrganizationFileController {
             return res.status(201).json({ message: "Folder created", file: folder });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /organization/files — upload a file (multipart, field "file") into an optional folder. */
@@ -197,7 +199,8 @@ class OrganizationFileController {
         }
         catch (error) {
             fs_1.default.unlink(uploadedFile.path, () => { });
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

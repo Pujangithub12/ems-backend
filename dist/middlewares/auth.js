@@ -5,12 +5,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.anyPermissionMiddleware = exports.permissionMiddleware = exports.roleMiddleware = exports.authMiddleware = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const dotenv_1 = __importDefault(require("dotenv"));
 const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
 const permissionService_1 = require("../utils/permissionService");
-dotenv_1.default.config();
-const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
+const jwt_1 = require("../config/jwt");
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const authMiddleware = async (req, res, next) => {
     const authHeader = req.headers.authorization;
@@ -26,7 +24,7 @@ const authMiddleware = async (req, res, next) => {
         // (see OrganizationMembership), so it can't be baked into a token that
         // outlives any single organization context. `req.user.role` is filled in
         // below once `req.organization` is resolved.
-        const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+        const decoded = jsonwebtoken_1.default.verify(token, jwt_1.JWT_SECRET);
         req.user = {
             id: decoded.id,
             role: "",
@@ -37,6 +35,18 @@ const authMiddleware = async (req, res, next) => {
         });
         if (!user) {
             return res.status(404).json({ message: "User not found" });
+        }
+        // Tokens signed before tokenVersion existed carry no `v` claim — treat
+        // that as version 0 (the column's own default) rather than rejecting
+        // every pre-existing session the moment this ships. A token is only
+        // ever actually rejected here once its holder's password has since
+        // changed (see AuthController.changePassword/forgotPasswordReset,
+        // which bump user.tokenVersion) — that's what lets a leaked/stolen
+        // token be revoked before its 3h expiry instead of staying valid.
+        if ((decoded.v ?? 0) !== user.tokenVersion) {
+            res.clearCookie("token");
+            res.clearCookie("workspaceId");
+            return res.status(401).json({ message: "Session expired. Please log in again." });
         }
         const userOrganizations = user.memberships.map((m) => m.organization);
         let memberships = user.memberships;
@@ -173,7 +183,6 @@ const authMiddleware = async (req, res, next) => {
 exports.authMiddleware = authMiddleware;
 const roleMiddleware = (roles) => {
     return (req, res, next) => {
-        console.log("roleMiddleware:", req.user?.role, roles);
         if (!req.user || !roles.includes(req.user.role)) {
             return res.status(403).json({ message: "Forbidden: Access denied" });
         }

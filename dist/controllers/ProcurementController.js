@@ -43,7 +43,8 @@ class ProcurementController {
             return res.status(200).json({ items: result });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /projects/:projectId/procurement — flat list for the Procurement tab. Open to any organization member. */
@@ -67,7 +68,8 @@ class ProcurementController {
             return res.status(200).json({ items });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /projects/:projectId/procurement — add a purchase request. Admin-gated (see routes.ts). */
@@ -155,7 +157,8 @@ class ProcurementController {
             return res.status(201).json({ message: "Procurement item added", item });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** PUT /projects/procurement/:itemId — update fields and/or status. Admin-gated. */
@@ -296,7 +299,8 @@ class ProcurementController {
             return res.status(200).json({ message: "Procurement item updated", item });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /projects/procurement/:itemId — admin-gated. */
@@ -314,7 +318,8 @@ class ProcurementController {
             return res.status(200).json({ message: "Procurement item deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static async loadOwnedItem(itemId, organizationId) {
@@ -348,7 +353,8 @@ class ProcurementController {
             return res.status(201).json({ message: "Attachment uploaded", attachment });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /projects/procurement/:itemId/attachments/:attachmentId — admin-gated. */
@@ -367,7 +373,8 @@ class ProcurementController {
             return res.status(200).json({ message: "Attachment deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /**
@@ -406,7 +413,8 @@ class ProcurementController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

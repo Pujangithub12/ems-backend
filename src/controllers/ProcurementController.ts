@@ -47,7 +47,8 @@ export class ProcurementController {
 
       return res.status(200).json({ items: result });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -73,7 +74,8 @@ export class ProcurementController {
 
       return res.status(200).json({ items });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -185,7 +187,8 @@ export class ProcurementController {
 
       return res.status(201).json({ message: "Procurement item added", item });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -341,7 +344,8 @@ export class ProcurementController {
 
       return res.status(200).json({ message: "Procurement item updated", item });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -361,7 +365,8 @@ export class ProcurementController {
       await prisma.procurementItem.delete({ where: { id: item.id } });
       return res.status(200).json({ message: "Procurement item deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -397,7 +402,8 @@ export class ProcurementController {
 
       return res.status(201).json({ message: "Attachment uploaded", attachment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -416,7 +422,8 @@ export class ProcurementController {
       await prisma.procurementAttachment.delete({ where: { id: attachment.id } });
       return res.status(200).json({ message: "Attachment deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -456,7 +463,8 @@ export class ProcurementController {
         projectAllocation: projectAllocation.filter((row) => row.id !== item.id),
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

@@ -80,7 +80,8 @@ export class SubTaskController {
       });
     } catch (error) {
       console.error("Add SubTask Error:", error);
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -181,7 +182,8 @@ export class SubTaskController {
         taskProgress: avg,
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -214,7 +216,8 @@ export class SubTaskController {
         taskProgress: avg,
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -254,7 +257,8 @@ export class SubTaskController {
       const tree = buildSubTaskTree(allSubTasks);
       return res.status(200).json(tree);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

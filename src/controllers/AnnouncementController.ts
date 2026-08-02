@@ -4,6 +4,7 @@ import { sendEmail } from "../utils/emailService";
 import { AuthRequest } from "../middlewares/auth";
 import { CreateAnnouncementDto } from "../dto/announcement.dto";
 import { toSimpleArray, fromSimpleArray } from "../utils/simpleArray";
+import { notifyOrganization } from "../services/notificationService";
 
 export class AnnouncementController {
   static createAnnouncement = async (req: AuthRequest, res: Response) => {
@@ -52,12 +53,25 @@ export class AnnouncementController {
         console.error("Failed to send announcement emails:", err);
       });
 
+      notifyOrganization(
+        organization.id,
+        {
+          organizationId: organization.id,
+          type: "announcement",
+          title: subject,
+          message,
+          link: `/${organization.id}/announcements`,
+        },
+        req.user?.id,
+      ).catch((err) => console.error("Failed to send announcement notification:", err));
+
       return res.status(201).json({
         message: "Announcement created and emails are being sent",
         announcement: { ...newAnnouncement, targetEmails: toSimpleArray(newAnnouncement.targetEmails) },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -80,7 +94,8 @@ export class AnnouncementController {
         .status(200)
         .json(history.map((h) => ({ ...h, targetEmails: toSimpleArray(h.targetEmails) })));
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -109,7 +124,8 @@ export class AnnouncementController {
         .status(200)
         .json({ message: "Announcement history deleted successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

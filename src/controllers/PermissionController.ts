@@ -13,7 +13,8 @@ export class PermissionController {
       const permissions = await getPermissionMatrix();
       return res.status(200).json({ permissions });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -52,7 +53,8 @@ export class PermissionController {
       const permissions = await getPermissionMatrix();
       return res.status(200).json({ permissions });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

@@ -13,7 +13,8 @@ export class CalendarEventController {
       });
       return res.status(200).json(events);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -37,7 +38,8 @@ export class CalendarEventController {
 
       return res.status(201).json(newEvent);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -64,7 +66,8 @@ export class CalendarEventController {
       await prisma.calendarEvent.delete({ where: { id: event.id } });
       return res.status(200).json({ message: "Event deleted successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

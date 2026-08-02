@@ -7,14 +7,12 @@ exports.InviteController = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const dotenv_1 = __importDefault(require("dotenv"));
 const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
 const emailService_1 = require("../utils/emailService");
 const UserController_1 = require("./UserController");
 const passwordPolicy_1 = require("../utils/passwordPolicy");
-dotenv_1.default.config();
-const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
+const jwt_1 = require("../config/jwt");
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // Find-or-create this user's hierarchy node in the organization — mirrors the
@@ -203,7 +201,8 @@ class InviteController {
             return res.status(200).json({ message: "Invitation sent" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     // Public — the invitee isn't logged in yet. Just enough to render the
@@ -235,7 +234,8 @@ class InviteController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     // Public — creates the real User + adds them to the invite's organization,
@@ -328,7 +328,7 @@ class InviteController {
             await prisma_1.prisma.organizationInvite.delete({ where: { id: invite.id } });
             // Role is per-organization now (see OrganizationMembership), so it can't be
             // baked into a token that outlives any single organization context.
-            const jwtToken = jsonwebtoken_1.default.sign({ id: user.id }, JWT_SECRET, {
+            const jwtToken = jsonwebtoken_1.default.sign({ id: user.id }, jwt_1.JWT_SECRET, {
                 expiresIn: "3h",
             });
             const isProduction = process.env.NODE_ENV === "production";
@@ -366,7 +366,8 @@ class InviteController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

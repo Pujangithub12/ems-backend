@@ -77,7 +77,8 @@ class InventoryController {
             return res.status(200).json({ items: result });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /projects/:projectId/inventory — flat list for the Inventory tab. Open to any organization member. */
@@ -101,7 +102,8 @@ class InventoryController {
             return res.status(200).json({ items });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /projects/:projectId/inventory — add a stock item. Admin-gated (see routes.ts). */
@@ -243,7 +245,8 @@ class InventoryController {
             return res.status(201).json({ message: "Inventory item added", item });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /**
@@ -425,7 +428,8 @@ class InventoryController {
             return res.status(200).json({ message: "Inventory item updated", item: updatedItem });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /projects/inventory/:itemId — admin-gated. */
@@ -443,7 +447,8 @@ class InventoryController {
             return res.status(200).json({ message: "Inventory item deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** Loads an item scoped to the caller's organization, or null. Shared by all the detail-drawer endpoints below. */
@@ -478,7 +483,8 @@ class InventoryController {
             return res.status(200).json({ message: "Stock adjusted", item: updatedItem });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /projects/inventory/:itemId/transfers — request a warehouse-to-warehouse transfer. Admin-gated. */
@@ -515,7 +521,8 @@ class InventoryController {
             return res.status(201).json({ message: "Transfer created", transfer });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** PUT /projects/inventory/:itemId/transfers/:transferId — advance a transfer's status. Admin-gated. */
@@ -555,7 +562,8 @@ class InventoryController {
             return res.status(200).json({ message: "Transfer updated", transfer: updatedTransfer });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /projects/inventory/:itemId/batches — add a batch/lot. Admin-gated. */
@@ -581,7 +589,8 @@ class InventoryController {
             return res.status(201).json({ message: "Batch added", batch });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /projects/inventory/:itemId/batches/:batchId — admin-gated. */
@@ -600,7 +609,8 @@ class InventoryController {
             return res.status(200).json({ message: "Batch deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /projects/inventory/:itemId/serials — add a serial number. Admin-gated. */
@@ -626,7 +636,8 @@ class InventoryController {
             return res.status(201).json({ message: "Serial added", serial });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /projects/inventory/:itemId/serials/:serialId — admin-gated. */
@@ -645,7 +656,8 @@ class InventoryController {
             return res.status(200).json({ message: "Serial deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /projects/inventory/:itemId/attachments — upload a document. Admin-gated. Expects multer single("file"). */
@@ -670,7 +682,8 @@ class InventoryController {
             return res.status(201).json({ message: "Attachment uploaded", attachment });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /projects/inventory/:itemId/attachments/:attachmentId — admin-gated. */
@@ -689,7 +702,8 @@ class InventoryController {
             return res.status(200).json({ message: "Attachment deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /**
@@ -729,9 +743,11 @@ class InventoryController {
                     include: { uploadedBy: true },
                     orderBy: { createdAt: "desc" },
                 }),
-                prisma_1.prisma.procurementItem.findMany({
-                    where: { itemName: item.itemName, project: { organizationId: req.organization.id } },
-                    include: { project: true },
+                // Procurement pipeline v2: purchase history is now PurchaseOrderItem rows with the
+                // same item name (analogous to the old ProcurementItem-by-name lookup this replaced).
+                prisma_1.prisma.purchaseOrderItem.findMany({
+                    where: { itemName: item.itemName, purchaseOrder: { organizationId: req.organization.id } },
+                    include: { purchaseOrder: { include: { vendor: true, project: true } } },
                     orderBy: { createdAt: "desc" },
                     take: 20,
                 }),
@@ -753,7 +769,8 @@ class InventoryController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /organization/warehouses — list warehouses for pickers/filters. */
@@ -766,7 +783,8 @@ class InventoryController {
             return res.status(200).json({ warehouses });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /organization/inventory/transfers — pending/in-transit transfers across the organization, for the KPI strip. */
@@ -787,7 +805,8 @@ class InventoryController {
             return res.status(200).json({ transfers });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /organization/inventory/transactions — recent audit-log entries across the organization, for the sidebar widget. */
@@ -802,7 +821,8 @@ class InventoryController {
             return res.status(200).json({ transactions });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /organization/warehouses — create a warehouse. Admin-gated. */
@@ -824,7 +844,8 @@ class InventoryController {
             return res.status(201).json({ message: "Warehouse created", warehouse });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /organization/vendors — list vendors for pickers/filters. */
@@ -837,12 +858,13 @@ class InventoryController {
             return res.status(200).json({ vendors });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /organization/vendors — create a vendor. Admin-gated. */
     static createVendor = async (req, res) => {
-        const { name, code, location, contact, contractExpiryDate } = req.body;
+        const { name, code, location, contact, contractExpiryDate, contactPerson, address, email } = req.body;
         if (!name || !name.trim()) {
             return res.status(400).json({ message: "Vendor name is required" });
         }
@@ -855,18 +877,22 @@ class InventoryController {
                     ...(location ? { location } : {}),
                     ...(contact ? { contact } : {}),
                     ...(contractExpiryDate ? { contractExpiryDate: new Date(contractExpiryDate) } : {}),
+                    ...(contactPerson ? { contactPerson } : {}),
+                    ...(address ? { address } : {}),
+                    ...(email ? { email } : {}),
                 },
             });
             return res.status(201).json({ message: "Vendor created", vendor });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** PUT /organization/vendors/:vendorId — update a vendor. Admin-gated. */
     static updateVendor = async (req, res) => {
         const { vendorId } = req.params;
-        const { name, code, location, contact, contractExpiryDate } = req.body;
+        const { name, code, location, contact, contractExpiryDate, contactPerson, address, email } = req.body;
         try {
             const vendor = await prisma_1.prisma.vendor.findFirst({
                 where: { id: parseInt(vendorId), organizationId: req.organization.id },
@@ -889,6 +915,12 @@ class InventoryController {
             if (contractExpiryDate !== undefined) {
                 data.contractExpiryDate = contractExpiryDate ? new Date(contractExpiryDate) : null;
             }
+            if (contactPerson !== undefined)
+                data.contactPerson = contactPerson;
+            if (address !== undefined)
+                data.address = address;
+            if (email !== undefined)
+                data.email = email;
             const updatedVendor = await prisma_1.prisma.vendor.update({
                 where: { id: vendor.id },
                 data,
@@ -896,7 +928,8 @@ class InventoryController {
             return res.status(200).json({ message: "Vendor updated", vendor: updatedVendor });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /organization/vendors/:vendorId — admin-gated. Inventory items referencing this vendor fall back to their legacy free-text supplier field (onDelete: SET NULL on the relation). */
@@ -912,7 +945,8 @@ class InventoryController {
             return res.status(200).json({ message: "Vendor deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /organization/warehouses/:warehouseId — admin-gated. Inventory items stored at this warehouse are unassigned (onDelete: SET NULL on the relation), not deleted. */
@@ -928,7 +962,8 @@ class InventoryController {
             return res.status(200).json({ message: "Warehouse deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

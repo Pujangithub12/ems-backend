@@ -41,7 +41,8 @@ export class PurchaseOrderController {
       });
       return res.status(200).json({ purchaseOrders });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -61,7 +62,8 @@ export class PurchaseOrderController {
       });
       return res.status(200).json({ purchaseOrders });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -87,7 +89,8 @@ export class PurchaseOrderController {
 
       return res.status(200).json({ purchaseOrder });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -95,6 +98,7 @@ export class PurchaseOrderController {
   static updatePurchaseOrder = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const {
+      poNumber,
       deliveryAddress,
       paymentTerms,
       deliveryDate,
@@ -116,6 +120,19 @@ export class PurchaseOrderController {
       const previousStatus = existing.status;
       const data: any = {};
 
+      if (poNumber !== undefined) {
+        const trimmed = poNumber.trim();
+        if (!trimmed) {
+          return res.status(400).json({ message: "PO number cannot be empty" });
+        }
+        const duplicate = await prisma.purchaseOrder.findFirst({
+          where: { poNumber: trimmed, organizationId: req.organization!.id, NOT: { id: existing.id } },
+        });
+        if (duplicate) {
+          return res.status(400).json({ message: `PO number "${trimmed}" is already in use by another purchase order` });
+        }
+        data.poNumber = trimmed;
+      }
       if (deliveryAddress !== undefined) data.deliveryAddress = deliveryAddress;
       if (paymentTerms !== undefined) data.paymentTerms = paymentTerms;
       if (deliveryDate !== undefined) data.deliveryDate = deliveryDate ? new Date(deliveryDate) : null;
@@ -159,7 +176,8 @@ export class PurchaseOrderController {
 
       return res.status(200).json({ message: "Purchase order updated", purchaseOrder });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -205,7 +223,8 @@ export class PurchaseOrderController {
       doc.pipe(res);
       doc.end();
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -219,7 +238,8 @@ export class PurchaseOrderController {
       const costSheet = await computeCostSheet(existing.id);
       return res.status(200).json({ costSheet });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -246,7 +266,8 @@ export class PurchaseOrderController {
 
       return res.status(201).json({ message: "Attachment uploaded", attachment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -265,7 +286,8 @@ export class PurchaseOrderController {
       await prisma.purchaseOrderAttachment.delete({ where: { id: attachment.id } });
       return res.status(200).json({ message: "Attachment deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

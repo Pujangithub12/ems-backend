@@ -17,6 +17,7 @@ import {
 } from "../dto/task.dto";
 import { getDescendantUserIds } from "../utils/hierarchyAuthority";
 import { toSimpleArray, fromSimpleArray } from "../utils/simpleArray";
+import { notifyUsers } from "../services/notificationService";
 
 // Falls back by NODE_ENV (not just a single hardcoded default) so a missing
 // FRONTEND_URL env var still points production task-assignment emails at the
@@ -44,11 +45,17 @@ const shapeTask = (task: any) => ({
     : task.assignedUsers,
 });
 
+// childTasks: Gantt-nested children (Task.parentTaskId, set via the Schedule
+// tab's "add child task") — surfaced as a lightweight summary so a task's
+// subtasks can be shown nested under it instead of also listed as their own
+// top-level tasks (see TaskController.getAllTasks, which filters them out of
+// the top-level list using parentTaskId).
 const TASK_LIST_INCLUDE = {
   assignedUsers: { include: { user: true } },
   project: true,
   comments: true,
   createdBy: true,
+  childTasks: { select: { id: true, title: true, status: true, progress: true } },
 } as const;
 
 const TASK_DETAIL_INCLUDE = {
@@ -56,6 +63,7 @@ const TASK_DETAIL_INCLUDE = {
   project: true,
   comments: { include: { author: true } },
   createdBy: true,
+  childTasks: { select: { id: true, title: true, status: true, progress: true } },
 } as const;
 
 async function attachSubTaskTrees(tasks: { id: number }[]): Promise<Map<number, any[]>> {
@@ -194,6 +202,20 @@ export class TaskController {
         project,
         createdBy: user,
       };
+
+      if (assignedUsers.length > 0) {
+        const assignedByName = user?.fullName || "Someone";
+        notifyUsers(
+          assignedUsers.map((u) => u.id).filter((id) => id !== actorId),
+          {
+            organizationId,
+            type: "task_assigned",
+            title: "New task assigned",
+            message: `${assignedByName} assigned you to "${title}"`,
+            link: `/${organizationId}/tasks`,
+          },
+        ).catch((err) => console.error("Failed to send task-assigned notification:", err));
+      }
 
       // Send email notifications to assigned users
       console.log(
@@ -409,7 +431,8 @@ EMS Management
         task: newTask,
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -440,6 +463,13 @@ EMS Management
           orderBy: { createdAt: "desc" },
         });
       }
+      // Gantt-nested children (Task.parentTaskId, set via the Schedule tab's
+      // "add child task") are kept in `tasks` (so they're still individually
+      // findable by id when a parent's "Sub-Tasks" list is clicked — see
+      // MyTasks/AssignedTasks/CompletedTasks) but filtered out of the
+      // top-level list the frontend renders as its own card, since they're
+      // shown nested under their parent (childTasks) instead. Frontend does
+      // this filtering, not here, so `tasks` stays the full lookup set.
 
       const treesByTask = await attachSubTaskTrees(tasks);
       const shaped = tasks.map((task) => {
@@ -452,7 +482,8 @@ EMS Management
 
       return res.status(200).json(shaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -494,7 +525,8 @@ EMS Management
         .status(200)
         .json({ message: "Task progress updated successfully", task: updated });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -526,7 +558,8 @@ EMS Management
 
       return res.status(200).json(shapedTask);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -550,9 +583,13 @@ EMS Management
 
     try {
       const taskId = parseInt(id as string);
-      const task = await prisma.task.findUnique({ where: { id: taskId } });
+      const task = await prisma.task.findUnique({
+        where: { id: taskId },
+        include: { assignedUsers: true },
+      });
 
       if (!task) return res.status(404).json({ message: "Task not found" });
+      const previousAssigneeIds = new Set(task.assignedUsers.map((a) => a.userId));
 
       const data: any = {};
       if (title) data.title = title;
@@ -721,6 +758,41 @@ EMS Management
 
       await prisma.task.update({ where: { id: task.id }, data });
 
+      if (newAssignedUserIds !== null) {
+        const newlyAdded = newAssignedUserIds.filter(
+          (uid) => !previousAssigneeIds.has(uid) && uid !== actorId,
+        );
+        if (newlyAdded.length > 0) {
+          const actor = await prisma.user.findUnique({ where: { id: actorId } });
+          notifyUsers(newlyAdded, {
+            organizationId,
+            type: "task_assigned",
+            title: "New task assigned",
+            message: `${actor?.fullName || "Someone"} assigned you to "${task.title}"`,
+            link: `/${organizationId}/tasks`,
+          }).catch((err) => console.error("Failed to send task-assigned notification:", err));
+        }
+      }
+
+      if (data.status === TaskStatus.COMPLETED && task.status !== TaskStatus.COMPLETED) {
+        const recipientIds = Array.from(
+          new Set(
+            [task.createdById, ...task.assignedUsers.map((a) => a.userId)].filter(
+              (uid): uid is number => uid != null && uid !== actorId,
+            ),
+          ),
+        );
+        if (recipientIds.length > 0) {
+          notifyUsers(recipientIds, {
+            organizationId,
+            type: "task_completed",
+            title: "Task completed",
+            message: `"${task.title}" was marked as completed`,
+            link: `/${organizationId}/tasks`,
+          }).catch((err) => console.error("Failed to send task-completed notification:", err));
+        }
+      }
+
       // Refetch task WITHOUT subTasks relations (we will build it manually)
       const updatedTaskRow = await prisma.task.findUnique({
         where: { id: task.id },
@@ -746,7 +818,8 @@ EMS Management
         .status(200)
         .json({ message: "Task updated successfully", task: updatedTask });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -783,9 +856,29 @@ EMS Management
         data: { status: normalized as TaskStatus },
       });
 
+      if (normalized === TaskStatus.COMPLETED && task.status !== TaskStatus.COMPLETED) {
+        const recipientIds = Array.from(
+          new Set(
+            [task.createdById, ...task.assignedUsers.map((a) => a.userId)].filter(
+              (uid): uid is number => uid != null && uid !== userId,
+            ),
+          ),
+        );
+        if (recipientIds.length > 0 && req.organization) {
+          notifyUsers(recipientIds, {
+            organizationId: req.organization.id,
+            type: "task_completed",
+            title: "Task completed",
+            message: `"${task.title}" was marked as completed`,
+            link: `/${req.organization.id}/tasks`,
+          }).catch((err) => console.error("Failed to send task-completed notification:", err));
+        }
+      }
+
       return res.status(200).json({ message: "Task status updated", task: updated });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -819,7 +912,8 @@ EMS Management
 
       return res.status(200).json(shaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -835,7 +929,8 @@ EMS Management
       await prisma.task.delete({ where: { id: task.id } });
       return res.status(200).json({ message: "Task deleted successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

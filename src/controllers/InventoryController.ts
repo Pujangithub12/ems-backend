@@ -107,7 +107,8 @@ export class InventoryController {
 
       return res.status(200).json({ items: result });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -133,7 +134,8 @@ export class InventoryController {
 
       return res.status(200).json({ items });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -300,7 +302,8 @@ export class InventoryController {
 
       return res.status(201).json({ message: "Inventory item added", item });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -512,7 +515,8 @@ export class InventoryController {
 
       return res.status(200).json({ message: "Inventory item updated", item: updatedItem });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -532,7 +536,8 @@ export class InventoryController {
       await prisma.inventoryItem.delete({ where: { id: item.id } });
       return res.status(200).json({ message: "Inventory item deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -580,7 +585,8 @@ export class InventoryController {
 
       return res.status(200).json({ message: "Stock adjusted", item: updatedItem });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -622,7 +628,8 @@ export class InventoryController {
 
       return res.status(201).json({ message: "Transfer created", transfer });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -664,7 +671,8 @@ export class InventoryController {
 
       return res.status(200).json({ message: "Transfer updated", transfer: updatedTransfer });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -693,7 +701,8 @@ export class InventoryController {
 
       return res.status(201).json({ message: "Batch added", batch });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -712,7 +721,8 @@ export class InventoryController {
       await prisma.inventoryBatch.delete({ where: { id: batch.id } });
       return res.status(200).json({ message: "Batch deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -741,7 +751,8 @@ export class InventoryController {
 
       return res.status(201).json({ message: "Serial added", serial });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -760,7 +771,8 @@ export class InventoryController {
       await prisma.inventorySerial.delete({ where: { id: serial.id } });
       return res.status(200).json({ message: "Serial deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -787,7 +799,8 @@ export class InventoryController {
 
       return res.status(201).json({ message: "Attachment uploaded", attachment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -806,7 +819,8 @@ export class InventoryController {
       await prisma.inventoryAttachment.delete({ where: { id: attachment.id } });
       return res.status(200).json({ message: "Attachment deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -874,7 +888,8 @@ export class InventoryController {
         projectAllocation: projectAllocation.filter((row) => row.id !== item.id),
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -887,7 +902,8 @@ export class InventoryController {
       });
       return res.status(200).json({ warehouses });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -909,7 +925,8 @@ export class InventoryController {
 
       return res.status(200).json({ transfers });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -924,7 +941,8 @@ export class InventoryController {
       });
       return res.status(200).json({ transactions });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -946,7 +964,8 @@ export class InventoryController {
       });
       return res.status(201).json({ message: "Warehouse created", warehouse });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -959,7 +978,8 @@ export class InventoryController {
       });
       return res.status(200).json({ vendors });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -985,7 +1005,8 @@ export class InventoryController {
       });
       return res.status(201).json({ message: "Vendor created", vendor });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -1021,7 +1042,8 @@ export class InventoryController {
       });
       return res.status(200).json({ message: "Vendor updated", vendor: updatedVendor });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -1037,7 +1059,8 @@ export class InventoryController {
       await prisma.vendor.delete({ where: { id: vendor.id } });
       return res.status(200).json({ message: "Vendor deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -1053,7 +1076,8 @@ export class InventoryController {
       await prisma.warehouse.delete({ where: { id: warehouse.id } });
       return res.status(200).json({ message: "Warehouse deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

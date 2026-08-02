@@ -4,6 +4,7 @@ exports.ExpenseRequestController = void 0;
 const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
 const hierarchyAuthority_1 = require("../utils/hierarchyAuthority");
+const notificationService_1 = require("../services/notificationService");
 // `user` was an eager relation on ExpenseRequest under TypeORM, so it was
 // always populated (and included the password hash) regardless of the
 // `relations` option passed to the query. Prisma has no eager-loading
@@ -45,12 +46,26 @@ class ExpenseRequestController {
             });
             const expenseRequest = { ...newRequest, user };
             sanitizeUser(expenseRequest);
+            (0, notificationService_1.getUserIdsByRole)(organization.id, [
+                enums_1.UserRole.ADMIN,
+                enums_1.UserRole.SUPER_ADMIN,
+                enums_1.UserRole.FINANCE,
+            ])
+                .then((approverIds) => (0, notificationService_1.notifyUsers)(approverIds.filter((id) => id !== user.id), {
+                organizationId: organization.id,
+                type: "approval_requested",
+                title: "New expense request",
+                message: `${user.fullName} submitted an expense request: "${title}"`,
+                link: `/${organization.id}/leaverequests`,
+            }))
+                .catch((err) => console.error("Failed to send expense-request notification:", err));
             return res
                 .status(201)
                 .json({ message: "Expense request created", expenseRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getAllExpenseRequests = async (req, res) => {
@@ -87,7 +102,8 @@ class ExpenseRequestController {
             return res.status(200).json(mineShaped);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateStatus = async (req, res) => {
@@ -124,12 +140,22 @@ class ExpenseRequestController {
             });
             const expenseRequest = { ...updated, user: er.user };
             sanitizeUser(expenseRequest);
+            if (er.userId) {
+                (0, notificationService_1.notifyUsers)([er.userId], {
+                    organizationId: organization.id,
+                    type: "approval_decided",
+                    title: `Expense request ${status}`,
+                    message: `Your expense request "${er.title}" was ${status}`,
+                    link: `/${organization.id}/leaverequests`,
+                }).catch((err) => console.error("Failed to send expense-decision notification:", err));
+            }
             return res
                 .status(200)
                 .json({ message: `Expense request ${status}`, expenseRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getExpenseRequestById = async (req, res) => {
@@ -156,7 +182,8 @@ class ExpenseRequestController {
             return res.status(200).json(shaped);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateExpenseRequest = async (req, res) => {
@@ -198,7 +225,8 @@ class ExpenseRequestController {
                 .json({ message: "Expense request updated", expenseRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteExpenseRequest = async (req, res) => {
@@ -217,7 +245,8 @@ class ExpenseRequestController {
             return res.status(200).json({ message: "Expense request deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

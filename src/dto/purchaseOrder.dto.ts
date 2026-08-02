@@ -8,6 +8,8 @@ export interface UpdatePurchaseOrderItemDto {
 
 /** Body shape for PUT /purchase-orders/:id — POs are only ever created via POST /purchase-requests/:id/generate-po, never directly. */
 export interface UpdatePurchaseOrderDto {
+  /** Auto-assigned at generation time (see PurchaseRequestController.generatePurchaseOrder) but user-editable afterward — see the uniqueness check in PurchaseOrderController.updatePurchaseOrder. */
+  poNumber?: string;
   deliveryAddress?: string;
   paymentTerms?: string;
   deliveryDate?: string | null;

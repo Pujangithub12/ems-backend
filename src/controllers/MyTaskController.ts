@@ -38,7 +38,8 @@ export class MyTaskController {
         .status(201)
         .json({ message: "Personal task added", task: myTask });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -58,7 +59,8 @@ export class MyTaskController {
 
       return res.status(200).json(tasks);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -102,7 +104,8 @@ export class MyTaskController {
       });
       return res.status(200).json({ message: "Task updated", task: updated });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -129,7 +132,8 @@ export class MyTaskController {
       await prisma.myTask.delete({ where: { id: myTask.id } });
       return res.status(200).json({ message: "Task deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

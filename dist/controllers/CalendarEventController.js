@@ -13,7 +13,8 @@ class CalendarEventController {
             return res.status(200).json(events);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static createEvent = async (req, res) => {
@@ -34,7 +35,8 @@ class CalendarEventController {
             return res.status(201).json(newEvent);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteEvent = async (req, res) => {
@@ -57,7 +59,8 @@ class CalendarEventController {
             return res.status(200).json({ message: "Event deleted successfully" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

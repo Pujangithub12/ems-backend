@@ -1,10 +1,7 @@
 import { Response } from "express";
-import fs from "fs";
-import path from "path";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { roleHasPermission } from "../utils/permissionService";
-import { purchaseOrderPdfBuffer } from "../utils/purchaseOrderPdf";
 import {
   AddPurchaseRequestDto,
   UpdatePurchaseRequestDto,
@@ -78,7 +75,8 @@ export class PurchaseRequestController {
       });
       return res.status(200).json({ requests });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -98,7 +96,8 @@ export class PurchaseRequestController {
       });
       return res.status(200).json({ requests });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -153,7 +152,8 @@ export class PurchaseRequestController {
 
       return res.status(201).json({ message: "Purchase request created", purchaseRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -203,7 +203,8 @@ export class PurchaseRequestController {
       });
       return res.status(200).json({ message: "Purchase request updated", purchaseRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -220,7 +221,8 @@ export class PurchaseRequestController {
       await prisma.purchaseRequest.delete({ where: { id: existing.id } });
       return res.status(200).json({ message: "Purchase request deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -270,7 +272,8 @@ export class PurchaseRequestController {
       });
       return res.status(200).json({ message: "Status updated", purchaseRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -304,7 +307,8 @@ export class PurchaseRequestController {
 
       return res.status(201).json({ message: "Vendor quote added", quote });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -341,7 +345,8 @@ export class PurchaseRequestController {
 
       return res.status(200).json({ message: "Vendor quote updated", quote: updated });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -360,7 +365,8 @@ export class PurchaseRequestController {
       await prisma.vendorQuote.delete({ where: { id: quote.id } });
       return res.status(200).json({ message: "Vendor quote deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -390,7 +396,8 @@ export class PurchaseRequestController {
       });
       return res.status(200).json({ message: "Vendor selected", purchaseRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -468,52 +475,16 @@ export class PurchaseRequestController {
         include: { vendor: true, project: true, items: true, purchaseRequest: true },
       });
 
-      // Best-effort: render the standard PO PDF and store it as an attachment (audit-trail
-      // snapshot at generation time — GET /purchase-orders/:id/pdf regenerates live from
-      // current data for later re-downloads). A rendering failure here shouldn't roll back
-      // the purchase order itself, so failures are logged and swallowed.
-      try {
-        const pdfBuffer = await purchaseOrderPdfBuffer({
-          poNumber: purchaseOrder!.poNumber,
-          createdAt: purchaseOrder!.createdAt,
-          deliveryAddress: purchaseOrder!.deliveryAddress,
-          paymentTerms: purchaseOrder!.paymentTerms,
-          deliveryDate: purchaseOrder!.deliveryDate,
-          incoterms: purchaseOrder!.incoterms,
-          taxPercent: purchaseOrder!.taxPercent,
-          terms: purchaseOrder!.terms,
-          shippingTerms: purchaseOrder!.shippingTerms,
-          deliveryPeriod: purchaseOrder!.deliveryPeriod,
-          finalDestination: purchaseOrder!.finalDestination,
-          organizationName: req.organization!.name,
-          organizationAddress: req.organization!.address,
-          organizationContact: req.organization!.contact,
-          organizationEmail: req.organization!.email,
-          organizationWebsite: req.organization!.website,
-          vendor: purchaseOrder!.vendor,
-          items: purchaseOrder!.items,
-        });
-
-        const fileName = `${poNumber}.pdf`;
-        const dir = path.join("uploads", "purchase-orders", String(createdPo.id));
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, fileName), pdfBuffer);
-
-        await prisma.purchaseOrderAttachment.create({
-          data: {
-            fileName,
-            filePath: `purchase-orders/${createdPo.id}/${fileName}`,
-            purchaseOrderId: createdPo.id,
-            ...(changedBy ? { uploadedById: changedBy.id } : {}),
-          },
-        });
-      } catch (pdfError) {
-        console.error("Failed to generate/store Purchase Order PDF:", pdfError);
-      }
-
+      // No PDF is generated here anymore — at this point most of what the PDF
+      // needs (delivery address, payment terms, incoterms, shipping terms,
+      // etc.) hasn't been filled in yet on the new PO, so an eagerly-rendered
+      // snapshot would just be mostly blank. GET /purchase-orders/:id/pdf
+      // renders it on demand, live from whatever's actually been filled in by
+      // then — that's the only way a PO PDF gets created now.
       return res.status(201).json({ message: "Purchase order generated", purchaseOrder });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -542,7 +513,8 @@ export class PurchaseRequestController {
 
       return res.status(201).json({ message: "Attachment uploaded", attachment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -561,7 +533,8 @@ export class PurchaseRequestController {
       await prisma.purchaseRequestAttachment.delete({ where: { id: attachment.id } });
       return res.status(200).json({ message: "Attachment deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -587,7 +560,8 @@ export class PurchaseRequestController {
 
       return res.status(200).json({ purchaseRequest: existing, statusHistory, attachments });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

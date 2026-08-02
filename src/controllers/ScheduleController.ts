@@ -1,19 +1,20 @@
-import { Request, Response } from "express";
+import { Response } from "express";
+import { AuthRequest } from "../middlewares/auth";
 import { ScheduleService } from "../services/schedule.service";
 import { validateScheduleTasks, validateScheduleLinks, ValidationError } from "../dto/schedule.dto";
 
-// schedule endpoints (get/save) — full-replace persistence
+// schedule endpoints (get/save) — schedule tab and task tab share the Task table (see schedule.service.ts)
 export class ScheduleController {
   constructor(private scheduleService: ScheduleService) {}
 
-  getSchedule = async (req: Request, res: Response): Promise<void> => {
+  getSchedule = async (req: AuthRequest, res: Response): Promise<void> => {
     const projectId = req.params.projectId as string | undefined;
     if (!projectId) {
       res.status(400).json({ message: "projectId is required." });
       return;
     }
     try {
-      const { tasks, links } = await this.scheduleService.getSchedule(projectId);
+      const { tasks, links } = await this.scheduleService.getSchedule(projectId, req.organization!.id);
       res.json({ tasks, links });
     } catch (err) {
       if (err instanceof ValidationError) {
@@ -25,7 +26,7 @@ export class ScheduleController {
     }
   };
 
-  saveSchedule = async (req: Request, res: Response): Promise<void> => {
+  saveSchedule = async (req: AuthRequest, res: Response): Promise<void> => {
     const projectId = req.params.projectId as string | undefined;
     if (!projectId) {
       res.status(400).json({ message: "projectId is required." });
@@ -35,7 +36,13 @@ export class ScheduleController {
       const tasks = validateScheduleTasks(req.body?.tasks);
       const taskIds = new Set(tasks.map((task) => task.id));
       const links = validateScheduleLinks(req.body?.links, taskIds);
-      const saved = await this.scheduleService.saveSchedule(projectId, tasks, links);
+      const saved = await this.scheduleService.saveSchedule(
+        projectId,
+        req.organization!.id,
+        req.user?.id ?? null,
+        tasks,
+        links,
+      );
       res.json({ tasks: saved.tasks, links: saved.links });
     } catch (err) {
       if (err instanceof ValidationError) {

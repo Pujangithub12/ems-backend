@@ -65,7 +65,8 @@ class SubTaskController {
         }
         catch (error) {
             console.error("Add SubTask Error:", error);
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateSubTask = async (req, res) => {
@@ -152,7 +153,8 @@ class SubTaskController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteSubTask = async (req, res) => {
@@ -179,7 +181,8 @@ class SubTaskController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getSubTasks = async (req, res) => {
@@ -208,7 +211,8 @@ class SubTaskController {
             return res.status(200).json(tree);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

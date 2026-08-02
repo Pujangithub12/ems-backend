@@ -39,7 +39,8 @@ class ProjectFileController {
             return res.status(200).json({ files: visible });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /projects/:projectId/folders — create a folder (no physical file). */
@@ -107,7 +108,8 @@ class ProjectFileController {
             return res.status(201).json({ message: "Folder created", file: folder });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** POST /projects/:projectId/files — upload a file (multipart, field "file") into an optional folder. */
@@ -173,7 +175,8 @@ class ProjectFileController {
         }
         catch (error) {
             fs_1.default.unlink(uploadedFile.path, () => { });
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /projects/files/:fileId/download — streams the file back with its original name. */
@@ -197,7 +200,8 @@ class ProjectFileController {
             return res.download(absolutePath, file.name);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** PUT /projects/files/:fileId — rename a file or folder. */
@@ -244,7 +248,8 @@ class ProjectFileController {
             return res.status(200).json({ message: "Renamed", file: updated });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** DELETE /projects/files/:fileId — deletes a file, or a folder and everything inside it. */
@@ -289,7 +294,8 @@ class ProjectFileController {
             return res.status(200).json({ message: "Deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** GET /projects/files/:fileId/access — explicit grants set directly on this node (not inherited ones). Admin/super_admin only (see routes.ts). */
@@ -317,7 +323,8 @@ class ProjectFileController {
             return res.status(200).json({ grants: result });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     /** PUT /projects/files/:fileId/access — full-replace the explicit grants on this node. Admin/super_admin only. */
@@ -360,7 +367,8 @@ class ProjectFileController {
             return res.status(200).json({ message: "Access updated", grants: saved });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

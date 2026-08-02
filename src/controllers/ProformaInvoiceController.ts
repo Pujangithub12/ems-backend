@@ -13,6 +13,11 @@ const DETAIL_INCLUDE = {
   items: { include: { item: true } },
 } as const;
 
+const LIST_INCLUDE = {
+  purchaseOrder: { include: { vendor: true, project: true } },
+  items: true,
+} as const;
+
 /** Resolves item-name/catalog-item pairs for a proforma invoice's line items — prefers the catalog reference when given, same pattern as PurchaseRequestController.resolveItemInputs. Tolerates an empty/undefined list. */
 async function resolveItemInputs(rawItems: ProformaInvoiceItemInput[] | undefined, organizationId: number) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
@@ -57,6 +62,21 @@ export class ProformaInvoiceController {
     return proformaInvoice;
   }
 
+  /** GET /workspace/proforma-invoices — every proforma invoice across every purchase order in the organization, for the sidebar Proforma Invoices page. */
+  static getAllProformaInvoices = async (req: AuthRequest, res: Response) => {
+    try {
+      const proformaInvoices = await prisma.proformaInvoice.findMany({
+        where: { purchaseOrder: { organizationId: req.organization!.id } },
+        include: LIST_INCLUDE,
+        orderBy: { createdAt: "desc" },
+      });
+      return res.status(200).json({ proformaInvoices });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   /** POST /purchase-orders/:id/proforma-invoices — creates a proforma invoice for a purchase order with its line items. Admin-gated (see routes.ts). */
   static addProformaInvoice = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
@@ -99,7 +119,8 @@ export class ProformaInvoiceController {
 
       return res.status(201).json({ message: "Proforma invoice created", proformaInvoice });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -142,7 +163,8 @@ export class ProformaInvoiceController {
       });
       return res.status(200).json({ message: "Proforma invoice updated", proformaInvoice });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -156,7 +178,8 @@ export class ProformaInvoiceController {
       await prisma.proformaInvoice.delete({ where: { id: existing.id } });
       return res.status(200).json({ message: "Proforma invoice deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -177,7 +200,8 @@ export class ProformaInvoiceController {
       });
       return res.status(200).json({ message: "Status updated", proformaInvoice });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -201,7 +225,8 @@ export class ProformaInvoiceController {
 
       return res.status(200).json({ message: "Attachment uploaded", proformaInvoice });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

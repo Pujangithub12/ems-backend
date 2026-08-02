@@ -51,7 +51,7 @@ export class AuthController {
       // Role is per-organization now (see OrganizationMembership), so it can't be
       // baked into a token that outlives any single organization context —
       // authMiddleware resolves req.user.role fresh on every request instead.
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, {
+      const token = jwt.sign({ id: user.id, v: user.tokenVersion }, JWT_SECRET, {
         expiresIn: "3h",
       });
 
@@ -78,7 +78,8 @@ export class AuthController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -149,7 +150,8 @@ export class AuthController {
 
       return res.status(200).json({ message: "Verification code sent" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -234,7 +236,7 @@ export class AuthController {
       await prisma.pendingSignup.delete({ where: { id: pending.id } });
 
       // Role is per-organization now — see the matching comment in login().
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, {
+      const token = jwt.sign({ id: user.id, v: user.tokenVersion }, JWT_SECRET, {
         expiresIn: "3h",
       });
       const isProduction = process.env.NODE_ENV === "production";
@@ -272,7 +274,8 @@ export class AuthController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -332,7 +335,8 @@ export class AuthController {
 
       return res.status(200).json(genericResponse);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -392,14 +396,22 @@ export class AuthController {
         return res.status(404).json({ message: "Account no longer exists" });
       }
 
-      await prisma.user.update({
+      // tokenVersion bumps in the same update as the password — any token
+      // issued before this reset (e.g. by whoever's session led to the
+      // "forgot password" request in the first place) stops passing
+      // authMiddleware's version check immediately, not just after its
+      // natural 3h expiry.
+      const updatedUser = await prisma.user.update({
         where: { id: user.id },
-        data: { password: await bcrypt.hash(newPassword, 10) },
+        data: {
+          password: await bcrypt.hash(newPassword, 10),
+          tokenVersion: { increment: 1 },
+        },
       });
       await prisma.passwordResetOtp.delete({ where: { id: otpRecord.id } });
 
       // Role is per-organization now — see the matching comment in login().
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, {
+      const token = jwt.sign({ id: updatedUser.id, v: updatedUser.tokenVersion }, JWT_SECRET, {
         expiresIn: "3h",
       });
       const isProduction = process.env.NODE_ENV === "production";
@@ -425,7 +437,8 @@ export class AuthController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -464,7 +477,8 @@ export class AuthController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -500,7 +514,8 @@ export class AuthController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -532,14 +547,36 @@ export class AuthController {
         return res.status(401).json({ message: "Current password is incorrect" });
       }
 
-      await prisma.user.update({
+      // Bumping tokenVersion here invalidates every other token issued for
+      // this account (see authMiddleware's version check) — the whole point
+      // of changing your password after suspecting a leak. That would also
+      // invalidate the very cookie this request is authenticated with, so a
+      // fresh token/cookie carrying the new version is reissued below to
+      // keep the current session alive; every other session/leaked token is
+      // the one that actually gets logged out.
+      const updatedUser = await prisma.user.update({
         where: { id: user.id },
-        data: { password: await bcrypt.hash(newPassword, 10) },
+        data: {
+          password: await bcrypt.hash(newPassword, 10),
+          tokenVersion: { increment: 1 },
+        },
+      });
+
+      const token = jwt.sign({ id: updatedUser.id, v: updatedUser.tokenVersion }, JWT_SECRET, {
+        expiresIn: "3h",
+      });
+      const isProduction = process.env.NODE_ENV === "production";
+      res.cookie("token", token, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? "none" : "lax",
+        maxAge: THREE_HOURS_MS,
       });
 
       return res.status(200).json({ message: "Password updated successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

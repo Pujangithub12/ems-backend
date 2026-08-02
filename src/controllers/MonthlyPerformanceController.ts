@@ -28,7 +28,8 @@ export class MonthlyPerformanceController {
 
       return res.status(200).json({ rows, year });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -93,7 +94,8 @@ export class MonthlyPerformanceController {
 
       return res.status(200).json({ message: "Monthly performance saved", row });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

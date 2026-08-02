@@ -4,6 +4,7 @@ exports.LeaveRequestController = void 0;
 const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
 const hierarchyAuthority_1 = require("../utils/hierarchyAuthority");
+const notificationService_1 = require("../services/notificationService");
 // `user` was an eager relation on LeaveRequest under TypeORM, so it was
 // always populated (and included the password hash) regardless of the
 // `relations` option passed to the query. Prisma has no eager-loading
@@ -44,12 +45,22 @@ class LeaveRequestController {
             });
             const leaveRequest = { ...newRequest, user };
             sanitizeUser(leaveRequest);
+            (0, notificationService_1.getUserIdsByRole)(organization.id, [enums_1.UserRole.ADMIN, enums_1.UserRole.SUPER_ADMIN])
+                .then((approverIds) => (0, notificationService_1.notifyUsers)(approverIds.filter((id) => id !== user.id), {
+                organizationId: organization.id,
+                type: "approval_requested",
+                title: "New leave request",
+                message: `${user.fullName} submitted a leave request: "${title}"`,
+                link: `/${organization.id}/leaverequests`,
+            }))
+                .catch((err) => console.error("Failed to send leave-request notification:", err));
             return res
                 .status(201)
                 .json({ message: "Leave request created", leaveRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getAllLeaveRequests = async (req, res) => {
@@ -93,7 +104,8 @@ class LeaveRequestController {
             return res.status(200).json(mineShaped);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateStatus = async (req, res) => {
@@ -129,12 +141,22 @@ class LeaveRequestController {
             });
             const leaveRequest = { ...updated, user: lr.user };
             sanitizeUser(leaveRequest);
+            if (lr.userId) {
+                (0, notificationService_1.notifyUsers)([lr.userId], {
+                    organizationId: organization.id,
+                    type: "approval_decided",
+                    title: `Leave request ${status}`,
+                    message: `Your leave request "${lr.title}" was ${status}`,
+                    link: `/${organization.id}/leaverequests`,
+                }).catch((err) => console.error("Failed to send leave-decision notification:", err));
+            }
             return res
                 .status(200)
                 .json({ message: `Leave request ${status}`, leaveRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getLeaveRequestById = async (req, res) => {
@@ -160,7 +182,8 @@ class LeaveRequestController {
             return res.status(200).json(shaped);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateLeaveRequest = async (req, res) => {
@@ -200,7 +223,8 @@ class LeaveRequestController {
                 .json({ message: "Leave request updated", leaveRequest });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static deleteLeaveRequest = async (req, res) => {
@@ -223,7 +247,8 @@ class LeaveRequestController {
             return res.status(200).json({ message: "Leave request deleted" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

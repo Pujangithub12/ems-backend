@@ -24,6 +24,18 @@ const fileFilter: NonNullable<multer.Options["fileFilter"]> = (_req, file, cb) =
   cb(null, true);
 };
 
+/** Every per-resource upload destination below joins a route/organization id
+ * straight into a filesystem path (`uploads/<segment>/<id>/`). Without this
+ * check, an id containing ".." (or anything non-numeric) would let
+ * `path.join` resolve outside the intended `uploads/<segment>/` directory —
+ * a path-traversal write. Every id used in a destination callback must be
+ * validated through this first. */
+const parsePositiveIntParam = (value: unknown): number | null => {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
 // Ensure upload directory exists
 const uploadDir = "uploads/tasks";
 if (!fs.existsSync(uploadDir)) {
@@ -59,7 +71,11 @@ const sanitizeFilename = (originalname: string): string => {
 
 const projectFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const projectId = req.params.projectId;
+    const projectId = parsePositiveIntParam(req.params.projectId);
+    if (projectId == null) {
+      cb(new Error("Invalid project id."), "");
+      return;
+    }
     const dir = path.join("uploads", "projects", String(projectId));
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -85,7 +101,11 @@ export const uploadProjectFile = multer({
 // which always runs before this in the route chain.
 const organizationFileStorage = multer.diskStorage({
   destination: (req: any, file, cb) => {
-    const organizationId = req.organization?.id;
+    const organizationId = parsePositiveIntParam(req.organization?.id);
+    if (organizationId == null) {
+      cb(new Error("Invalid organization id."), "");
+      return;
+    }
     const dir = path.join("uploads", "workspaces", String(organizationId));
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -110,7 +130,11 @@ export const uploadOrganizationFile = multer({
 // uploads/inventory/<itemId>/
 const inventoryFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const itemId = req.params.itemId;
+    const itemId = parsePositiveIntParam(req.params.itemId);
+    if (itemId == null) {
+      cb(new Error("Invalid item id."), "");
+      return;
+    }
     const dir = path.join("uploads", "inventory", String(itemId));
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -135,7 +159,11 @@ export const uploadInventoryFile = multer({
 // uploads/procurement/<itemId>/
 const procurementFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const itemId = req.params.itemId;
+    const itemId = parsePositiveIntParam(req.params.itemId);
+    if (itemId == null) {
+      cb(new Error("Invalid item id."), "");
+      return;
+    }
     const dir = path.join("uploads", "procurement", String(itemId));
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -161,7 +189,11 @@ export const uploadProcurementFile = multer({
 const makeOwnedResourceUpload = (segment: string) => {
   const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-      const itemId = req.params.itemId;
+      const itemId = parsePositiveIntParam(req.params.itemId);
+      if (itemId == null) {
+        cb(new Error("Invalid item id."), "");
+        return;
+      }
       const dir = path.join("uploads", segment, String(itemId));
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });

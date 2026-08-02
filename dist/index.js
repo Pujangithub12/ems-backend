@@ -4,8 +4,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
+const http_1 = require("http");
 const cors_1 = __importDefault(require("cors"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
+const helmet_1 = __importDefault(require("helmet"));
+const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const node_cron_1 = __importDefault(require("node-cron"));
@@ -15,6 +18,9 @@ const enums_1 = require("./types/enums");
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const backfill_organization_1 = require("./utils/backfill-organization");
 const permissionService_1 = require("./utils/permissionService");
+const auth_1 = require("./middlewares/auth");
+const uploadAccess_1 = require("./middlewares/uploadAccess");
+const socket_1 = require("./realtime/socket");
 dotenv_1.default.config();
 console.log("RESEND_API_KEY present?", !!process.env.RESEND_API_KEY);
 console.log("RESEND_FROM_EMAIL:", process.env.RESEND_FROM_EMAIL);
@@ -26,6 +32,20 @@ process.on("unhandledRejection", (reason, promise) => {
 });
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
+const httpServer = (0, http_1.createServer)(app);
+(0, socket_1.initSocket)(httpServer);
+app.use((0, helmet_1.default)({
+    // This app is a pure JSON/file API consumed by a separately-hosted SPA —
+    // CSP is a browser-rendered-document concept that doesn't apply to that
+    // shape and risks unexpected breakage, so it's left off; the resource
+    // policy below is what actually matters here (see comment below).
+    contentSecurityPolicy: false,
+    // Default helmet policy is "same-origin", which would block the frontend
+    // (a different origin) from loading /uploads images/files via <img>/<a> —
+    // this app's whole design relies on cross-origin cookie-authenticated
+    // asset loading, so that's explicitly preserved.
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
 app.use((0, cors_1.default)({
     origin: [
         "https://www.jdnenergy.com.np",
@@ -33,6 +53,10 @@ app.use((0, cors_1.default)({
         "https://emsjandaenergy.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        // Expo's web dev server (`npx expo start --web`, mobile/) — only
+        // matters for browser testing; native builds aren't subject to CORS.
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
     ],
     credentials: true,
 }));
@@ -43,9 +67,24 @@ app.use((req, res, next) => {
     console.log(`[REQUEST] ${req.method} ${req.url}`);
     next();
 });
-// Serve static files from uploads directory
-app.use("/uploads", express_1.default.static(path_1.default.join(__dirname, "../uploads")));
+// Serve static files from uploads directory — gated behind auth + an
+// organization-ownership check (see uploadAccess.ts) so attachments from one
+// organization can't be read via URL by a user of another, or by anyone
+// unauthenticated at all.
+app.use("/uploads", auth_1.authMiddleware, uploadAccess_1.verifyUploadAccess, express_1.default.static(path_1.default.join(__dirname, "../uploads")));
 app.use("/api", routes_1.default);
+// Turns a rejected upload (blocked file type, size-limit) into a clean 400
+// instead of falling through to Express's default 500/HTML error page.
+const uploadErrorHandler = (err, _req, res, next) => {
+    if (err instanceof multer_1.default.MulterError) {
+        return res.status(400).json({ message: err.message });
+    }
+    if (err instanceof Error && /not allowed|^invalid /i.test(err.message)) {
+        return res.status(400).json({ message: err.message });
+    }
+    next(err);
+};
+app.use(uploadErrorHandler);
 // Role lives on OrganizationMembership now, not User — both seed functions
 // find-or-create the same default "EMS Workspace" that backfillOrganization
 // (called right after these) also ensures exists, then upsert their
@@ -204,7 +243,7 @@ prisma_1.prisma
         deleteOldAnnouncements();
         deleteOldApprovedRequests();
     });
-    app.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
         console.log(`Server is running on http://localhost:${PORT}`);
     });
 })

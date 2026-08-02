@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ValidationError = void 0;
 exports.validateScheduleTasks = validateScheduleTasks;
+exports.validateScheduleLinks = validateScheduleLinks;
 class ValidationError extends Error {
     constructor(message) {
         super(message);
@@ -9,15 +10,15 @@ class ValidationError extends Error {
     }
 }
 exports.ValidationError = ValidationError;
-const VALID_STATUSES = new Set(["pending", "in_progress", "on_hold", "completed"]);
+const VALID_STATUSES = new Set(["to_do", "in_progress", "on_hold", "completed"]);
 /** Case/spacing-tolerant normalization ("On Hold", "on-hold" -> "on_hold"),
- * falling back to "pending" for anything unrecognized rather than rejecting
+ * falling back to "to_do" for anything unrecognized rather than rejecting
  * the whole save — same forgiving treatment as Progress being clamped. */
 function normalizeStatus(raw) {
     if (raw === undefined || raw === null || raw === "")
-        return "pending";
+        return "to_do";
     const key = String(raw).trim().toLowerCase().replace(/[\s-]+/g, "_");
-    return VALID_STATUSES.has(key) ? key : "pending";
+    return VALID_STATUSES.has(key) ? key : "to_do";
 }
 function isPlainObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -81,12 +82,12 @@ function validateScheduleTasks(input) {
             progress = Math.max(0, Math.min(100, n));
         }
         const status = normalizeStatus(raw.status);
-        // Progress is derived from status for Pending/Completed — enforced here
+        // Progress is derived from status for To Do/Completed — enforced here
         // too (not just client-side in ProjectScheduleTab's handleStatusChange)
         // so a direct API call or stale client can't desync the two. In Progress
         // and On Hold both keep whatever value was sent: In Progress because
         // it's user-editable, On Hold because it's meant to stay frozen.
-        if (status === "pending")
+        if (status === "to_do")
             progress = 0;
         else if (status === "completed")
             progress = 100;
@@ -106,5 +107,114 @@ function validateScheduleTasks(input) {
         }
     });
     return tasks;
+}
+const VALID_LINK_TYPES = new Set(["FS", "SS", "FF", "SF"]);
+/**
+ * Validates and normalizes the raw `links` array sent alongside `tasks` to
+ * PUT /projects/:projectId/schedule. `taskIds` must be the set of ids
+ * already validated by validateScheduleTasks for the same save, so
+ * referential checks are against the *same* task list being saved.
+ * Throws ValidationError with a human-readable message on any problem,
+ * including a real (non-tree) cycle-detection pass over the whole link
+ * graph — dependency type has no bearing on whether a cycle exists, since
+ * cycle detection only cares about edge direction (predecessor -> successor).
+ */
+function validateScheduleLinks(input, taskIds) {
+    if (input === undefined || input === null)
+        return [];
+    if (!Array.isArray(input)) {
+        throw new ValidationError("`links` must be an array.");
+    }
+    const links = input.map((raw, index) => {
+        if (!isPlainObject(raw)) {
+            throw new ValidationError(`Dependency link at index ${index} must be an object.`);
+        }
+        const predecessorId = raw.predecessorId !== undefined && raw.predecessorId !== null
+            ? String(raw.predecessorId).trim()
+            : "";
+        const successorId = raw.successorId !== undefined && raw.successorId !== null
+            ? String(raw.successorId).trim()
+            : "";
+        if (!predecessorId || !successorId) {
+            throw new ValidationError(`Dependency link at index ${index} is missing a predecessor or successor task id.`);
+        }
+        const typeRaw = typeof raw.type === "string" ? raw.type.trim().toUpperCase() : "";
+        if (!VALID_LINK_TYPES.has(typeRaw)) {
+            throw new ValidationError(`Dependency link between "${predecessorId}" and "${successorId}" has an invalid type "${String(raw.type)}" (expected FS, SS, FF, or SF).`);
+        }
+        const type = typeRaw;
+        let lag = 0;
+        if (raw.lag !== undefined && raw.lag !== null && raw.lag !== "") {
+            const n = Number(raw.lag);
+            if (!Number.isFinite(n)) {
+                throw new ValidationError(`Dependency link between "${predecessorId}" and "${successorId}" has a non-numeric lag.`);
+            }
+            lag = n;
+        }
+        return { predecessorId, successorId, type, lag };
+    });
+    // Referential checks — both ends must resolve to a task in this same save.
+    links.forEach((link) => {
+        if (!taskIds.has(link.predecessorId)) {
+            throw new ValidationError(`Dependency link references missing predecessor task "${link.predecessorId}".`);
+        }
+        if (!taskIds.has(link.successorId)) {
+            throw new ValidationError(`Dependency link references missing successor task "${link.successorId}".`);
+        }
+    });
+    // Self-link check — done before the duplicate-pair/cycle checks so it can't corrupt them.
+    links.forEach((link) => {
+        if (link.predecessorId === link.successorId) {
+            throw new ValidationError(`Task "${link.predecessorId}" cannot depend on itself.`);
+        }
+    });
+    // Duplicate-pair check — MS Project itself only allows one link per ordered task pair.
+    const seenPairs = new Set();
+    links.forEach((link) => {
+        const key = `${link.predecessorId}->${link.successorId}`;
+        if (seenPairs.has(key)) {
+            throw new ValidationError(`Duplicate dependency between "${link.predecessorId}" and "${link.successorId}" — only one link is allowed per task pair.`);
+        }
+        seenPairs.add(key);
+    });
+    // Cycle detection: real DFS over a general directed graph (a task can have
+    // multiple predecessors AND multiple successors), not the single-parent
+    // chain walk used for HierarchyNode.parentId — that shortcut only works
+    // for trees. Recursion-stack coloring reconstructs the actual cycle path
+    // for a readable error message.
+    const adjacency = new Map();
+    links.forEach((link) => {
+        const successors = adjacency.get(link.predecessorId) ?? [];
+        successors.push(link.successorId);
+        adjacency.set(link.predecessorId, successors);
+    });
+    const WHITE = 0;
+    const GRAY = 1;
+    const BLACK = 2;
+    const color = new Map();
+    const stack = [];
+    const visit = (node) => {
+        color.set(node, GRAY);
+        stack.push(node);
+        for (const next of adjacency.get(node) ?? []) {
+            const nextColor = color.get(next) ?? WHITE;
+            if (nextColor === WHITE) {
+                visit(next);
+            }
+            else if (nextColor === GRAY) {
+                const cycleStart = stack.indexOf(next);
+                const cycle = stack.slice(cycleStart).concat(next);
+                throw new ValidationError(`Circular dependency detected: ${cycle.join(" → ")}.`);
+            }
+        }
+        stack.pop();
+        color.set(node, BLACK);
+    };
+    for (const taskId of taskIds) {
+        if ((color.get(taskId) ?? WHITE) === WHITE) {
+            visit(taskId);
+        }
+    }
+    return links;
 }
 //# sourceMappingURL=schedule.dto.js.map

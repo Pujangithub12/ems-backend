@@ -38,7 +38,7 @@ export const authMiddleware = async (
     // (see OrganizationMembership), so it can't be baked into a token that
     // outlives any single organization context. `req.user.role` is filled in
     // below once `req.organization` is resolved.
-    const decoded = jwt.verify(token, JWT_SECRET) as { id: number };
+    const decoded = jwt.verify(token, JWT_SECRET) as { id: number; v?: number };
     req.user = {
       id: decoded.id,
       role: "",
@@ -50,6 +50,19 @@ export const authMiddleware = async (
     });
     if (!user) {
       return res.status(404).json({ message: "User not found" });
+    }
+
+    // Tokens signed before tokenVersion existed carry no `v` claim — treat
+    // that as version 0 (the column's own default) rather than rejecting
+    // every pre-existing session the moment this ships. A token is only
+    // ever actually rejected here once its holder's password has since
+    // changed (see AuthController.changePassword/forgotPasswordReset,
+    // which bump user.tokenVersion) — that's what lets a leaked/stolen
+    // token be revoked before its 3h expiry instead of staying valid.
+    if ((decoded.v ?? 0) !== user.tokenVersion) {
+      res.clearCookie("token");
+      res.clearCookie("workspaceId");
+      return res.status(401).json({ message: "Session expired. Please log in again." });
     }
     const userOrganizations = user.memberships.map((m) => m.organization);
     let memberships = user.memberships;
@@ -200,7 +213,6 @@ export const authMiddleware = async (
 
 export const roleMiddleware = (roles: string[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
-    console.log("roleMiddleware:", req.user?.role, roles);
     if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({ message: "Forbidden: Access denied" });
     }

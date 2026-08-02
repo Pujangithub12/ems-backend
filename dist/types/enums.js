@@ -14,7 +14,9 @@ var TaskPriority;
 })(TaskPriority || (exports.TaskPriority = TaskPriority = {}));
 var TaskStatus;
 (function (TaskStatus) {
-    TaskStatus["PENDING"] = "pending";
+    // Stored/displayed as "to_do" — the member name PENDING is unchanged
+    // (all call sites reference it symbolically) to keep this rename small.
+    TaskStatus["PENDING"] = "to_do";
     TaskStatus["IN_PROGRESS"] = "in_progress";
     TaskStatus["COMPLETED"] = "completed";
     TaskStatus["ON_HOLD"] = "on_hold";

@@ -27,7 +27,17 @@ const PROJECT_INCLUDE = {
       },
     },
   },
-  projectTasks: { include: { assignedUsers: { include: { user: true } } } },
+  projectTasks: {
+    include: {
+      assignedUsers: { include: { user: true } },
+      // Gantt-nested children (Task.parentTaskId, set via the Schedule tab's
+      // "add child task") — surfaced here so the Kanban drawer can show them
+      // too. Each child is also its own top-level row in projectTasks
+      // already (this include is unfiltered by projectHeadingId), so this
+      // is just enough to render a summary list, not the full child record.
+      childTasks: { select: { id: true, title: true, status: true, progress: true } },
+    },
+  },
 } as const;
 
 /** Flattens a Prisma TaskAssignee join-row list back into the plain User[]
@@ -137,7 +147,8 @@ export class ProjectController {
 
       return res.status(201).json({ message: "Project created", project });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -176,7 +187,8 @@ export class ProjectController {
       return res.status(200).json(shaped);
     } catch (error) {
       console.error("[ProjectController.getAllProjects] Error:", error);
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -235,7 +247,8 @@ export class ProjectController {
       return res.status(200).json(project);
     } catch (error) {
       console.error("[ProjectController.getProjectById] Error:", error);
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -289,7 +302,8 @@ export class ProjectController {
 
       return res.status(201).json({ message: "Heading added", heading });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -386,7 +400,8 @@ export class ProjectController {
 
       return res.status(201).json({ message: "Task added", task });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -415,7 +430,8 @@ export class ProjectController {
       const task = await prisma.task.update({ where: { id: existing.id }, data });
       return res.status(200).json({ message: "Task updated", task });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -434,7 +450,8 @@ export class ProjectController {
       await prisma.task.delete({ where: { id: task.id } });
       return res.status(200).json({ message: "Task deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -517,7 +534,8 @@ export class ProjectController {
 
       return res.status(200).json({ message: "Project updated", project });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -547,7 +565,8 @@ export class ProjectController {
       await prisma.project.delete({ where: { id: project.id } });
       return res.status(200).json({ message: "Project deleted successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

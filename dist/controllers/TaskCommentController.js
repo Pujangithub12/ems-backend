@@ -44,7 +44,8 @@ class TaskCommentController {
             return res.status(201).json({ message: "Comment added", comment });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getTaskComments = async (req, res) => {
@@ -72,7 +73,8 @@ class TaskCommentController {
             return res.status(200).json(comments);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static addFeedback = async (req, res) => {
@@ -99,7 +101,8 @@ class TaskCommentController {
                 .json({ message: "Feedback added", comment: responseComment });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static addSubTaskComment = async (req, res) => {
@@ -140,7 +143,8 @@ class TaskCommentController {
             return res.status(201).json({ message: "Comment added", comment });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static getSubTaskComments = async (req, res) => {
@@ -178,7 +182,8 @@ class TaskCommentController {
             return res.status(200).json(comments);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static addSubTaskFeedback = async (req, res) => {
@@ -216,7 +221,8 @@ class TaskCommentController {
                 .json({ message: "Feedback added", comment: responseComment });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }

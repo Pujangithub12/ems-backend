@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ScheduleController = void 0;
 const schedule_dto_1 = require("../dto/schedule.dto");
-// schedule endpoints (get/save) — full-replace persistence
+// schedule endpoints (get/save) — schedule tab and task tab share the Task table (see schedule.service.ts)
 class ScheduleController {
     scheduleService;
     constructor(scheduleService) {
@@ -15,8 +15,8 @@ class ScheduleController {
             return;
         }
         try {
-            const tasks = await this.scheduleService.getSchedule(projectId);
-            res.json({ tasks });
+            const { tasks, links } = await this.scheduleService.getSchedule(projectId, req.organization.id);
+            res.json({ tasks, links });
         }
         catch (err) {
             if (err instanceof schedule_dto_1.ValidationError) {
@@ -35,8 +35,10 @@ class ScheduleController {
         }
         try {
             const tasks = (0, schedule_dto_1.validateScheduleTasks)(req.body?.tasks);
-            const saved = await this.scheduleService.saveSchedule(projectId, tasks);
-            res.json({ tasks: saved });
+            const taskIds = new Set(tasks.map((task) => task.id));
+            const links = (0, schedule_dto_1.validateScheduleLinks)(req.body?.links, taskIds);
+            const saved = await this.scheduleService.saveSchedule(projectId, req.organization.id, req.user?.id ?? null, tasks, links);
+            res.json({ tasks: saved.tasks, links: saved.links });
         }
         catch (err) {
             if (err instanceof schedule_dto_1.ValidationError) {

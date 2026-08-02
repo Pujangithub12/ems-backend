@@ -52,7 +52,8 @@ export class TaskCommentController {
 
       return res.status(201).json({ message: "Comment added", comment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -86,7 +87,8 @@ export class TaskCommentController {
 
       return res.status(200).json(comments);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -118,7 +120,8 @@ export class TaskCommentController {
         .status(200)
         .json({ message: "Feedback added", comment: responseComment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -168,7 +171,8 @@ export class TaskCommentController {
 
       return res.status(201).json({ message: "Comment added", comment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -214,7 +218,8 @@ export class TaskCommentController {
 
       return res.status(200).json(comments);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -260,7 +265,8 @@ export class TaskCommentController {
         .status(200)
         .json({ message: "Feedback added", comment: responseComment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

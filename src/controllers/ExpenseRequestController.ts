@@ -8,6 +8,7 @@ import {
   UpdateExpenseRequestStatusDto,
 } from "../dto/expense-request.dto";
 import { canApprove } from "../utils/hierarchyAuthority";
+import { notifyUsers, getUserIdsByRole } from "../services/notificationService";
 
 // `user` was an eager relation on ExpenseRequest under TypeORM, so it was
 // always populated (and included the password hash) regardless of the
@@ -57,11 +58,31 @@ export class ExpenseRequestController {
       const expenseRequest: any = { ...newRequest, user };
       sanitizeUser(expenseRequest);
 
+      getUserIdsByRole(organization.id, [
+        UserRole.ADMIN,
+        UserRole.SUPER_ADMIN,
+        UserRole.FINANCE,
+      ])
+        .then((approverIds) =>
+          notifyUsers(
+            approverIds.filter((id) => id !== user.id),
+            {
+              organizationId: organization.id,
+              type: "approval_requested",
+              title: "New expense request",
+              message: `${user.fullName} submitted an expense request: "${title}"`,
+              link: `/${organization.id}/leaverequests`,
+            },
+          ),
+        )
+        .catch((err) => console.error("Failed to send expense-request notification:", err));
+
       return res
         .status(201)
         .json({ message: "Expense request created", expenseRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -103,7 +124,8 @@ export class ExpenseRequestController {
 
       return res.status(200).json(mineShaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -153,11 +175,22 @@ export class ExpenseRequestController {
       const expenseRequest: any = { ...updated, user: er.user };
       sanitizeUser(expenseRequest);
 
+      if (er.userId) {
+        notifyUsers([er.userId], {
+          organizationId: organization.id,
+          type: "approval_decided",
+          title: `Expense request ${status}`,
+          message: `Your expense request "${er.title}" was ${status}`,
+          link: `/${organization.id}/leaverequests`,
+        }).catch((err) => console.error("Failed to send expense-decision notification:", err));
+      }
+
       return res
         .status(200)
         .json({ message: `Expense request ${status}`, expenseRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -189,7 +222,8 @@ export class ExpenseRequestController {
       sanitizeUser(shaped);
       return res.status(200).json(shaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -241,7 +275,8 @@ export class ExpenseRequestController {
         .status(200)
         .json({ message: "Expense request updated", expenseRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -263,7 +298,8 @@ export class ExpenseRequestController {
 
       return res.status(200).json({ message: "Expense request deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

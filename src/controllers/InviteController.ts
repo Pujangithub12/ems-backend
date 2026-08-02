@@ -235,7 +235,8 @@ export class InviteController {
 
       return res.status(200).json({ message: "Invitation sent" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -270,7 +271,8 @@ export class InviteController {
         organization: { name: organization?.name || "this organization" },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -419,7 +421,8 @@ export class InviteController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

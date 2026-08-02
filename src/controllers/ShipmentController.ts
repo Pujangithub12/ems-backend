@@ -81,7 +81,8 @@ export class ShipmentController {
 
       return res.status(201).json({ message: "Shipment created", shipment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -143,7 +144,8 @@ export class ShipmentController {
 
       return res.status(200).json({ message: "Shipment updated", shipment });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -172,7 +174,8 @@ export class ShipmentController {
 
       return res.status(201).json({ message: "Insurance added", insurance });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -208,7 +211,8 @@ export class ShipmentController {
 
       return res.status(200).json({ message: "Insurance updated", insurance });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -259,7 +263,8 @@ export class ShipmentController {
 
       return res.status(201).json({ message: "Customs added", customs });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -317,7 +322,8 @@ export class ShipmentController {
 
       return res.status(200).json({ message: "Customs updated", customs });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -343,7 +349,8 @@ export class ShipmentController {
 
       return res.status(201).json({ message: "Document uploaded", document });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -362,7 +369,8 @@ export class ShipmentController {
       await prisma.customsDocument.delete({ where: { id: document.id } });
       return res.status(200).json({ message: "Document deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

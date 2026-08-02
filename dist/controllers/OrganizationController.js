@@ -38,7 +38,7 @@ class OrganizationController {
     // account once it gains access to more than one organization.
     static async create(req, res) {
         try {
-            const { name, description } = req.body;
+            const { name, description, address, contact, email, website } = req.body;
             if (!name) {
                 return res.status(400).json({ message: "Organization name is required" });
             }
@@ -50,6 +50,10 @@ class OrganizationController {
                 data: {
                     name,
                     ...(description !== undefined ? { description } : {}),
+                    ...(address !== undefined ? { address } : {}),
+                    ...(contact !== undefined ? { contact } : {}),
+                    ...(email !== undefined ? { email } : {}),
+                    ...(website !== undefined ? { website } : {}),
                 },
             });
             await prisma_1.prisma.organizationMembership.create({
@@ -124,7 +128,7 @@ class OrganizationController {
     static async update(req, res) {
         try {
             const { id } = req.params;
-            const { name, description } = req.body;
+            const { name, description, address, contact, email, website } = req.body;
             if (!name || !String(name).trim()) {
                 return res.status(400).json({ message: "Organization name is required" });
             }
@@ -150,6 +154,10 @@ class OrganizationController {
                 data: {
                     name: String(name).trim(),
                     ...(description !== undefined ? { description } : {}),
+                    ...(address !== undefined ? { address } : {}),
+                    ...(contact !== undefined ? { contact } : {}),
+                    ...(email !== undefined ? { email } : {}),
+                    ...(website !== undefined ? { website } : {}),
                 },
             });
             return res.status(200).json({ organization: updatedOrganization });

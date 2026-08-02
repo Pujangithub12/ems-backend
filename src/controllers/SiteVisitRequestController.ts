@@ -8,6 +8,7 @@ import {
   UpdateSiteVisitRequestStatusDto,
 } from "../dto/site-visit-request.dto";
 import { canApprove } from "../utils/hierarchyAuthority";
+import { notifyUsers, getUserIdsByRole } from "../services/notificationService";
 
 // `user` was an eager relation on SiteVisitRequest under TypeORM, so it was
 // always populated (and included the password hash) regardless of the
@@ -55,11 +56,27 @@ export class SiteVisitRequestController {
       const siteVisitRequest: any = { ...newRequest, user };
       sanitizeUser(siteVisitRequest);
 
+      getUserIdsByRole(organization.id, [UserRole.ADMIN, UserRole.SUPER_ADMIN])
+        .then((approverIds) =>
+          notifyUsers(
+            approverIds.filter((id) => id !== user.id),
+            {
+              organizationId: organization.id,
+              type: "approval_requested",
+              title: "New site visit request",
+              message: `${user.fullName} submitted a site visit request: "${title}"`,
+              link: `/${organization.id}/leaverequests`,
+            },
+          ),
+        )
+        .catch((err) => console.error("Failed to send site-visit-request notification:", err));
+
       return res
         .status(201)
         .json({ message: "Site visit request created", siteVisitRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -100,7 +117,8 @@ export class SiteVisitRequestController {
 
       return res.status(200).json(mineShaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -145,11 +163,22 @@ export class SiteVisitRequestController {
       const siteVisitRequest: any = { ...updated, user: sv.user };
       sanitizeUser(siteVisitRequest);
 
+      if (sv.userId) {
+        notifyUsers([sv.userId], {
+          organizationId: organization.id,
+          type: "approval_decided",
+          title: `Site visit request ${status}`,
+          message: `Your site visit request "${sv.title}" was ${status}`,
+          link: `/${organization.id}/leaverequests`,
+        }).catch((err) => console.error("Failed to send site-visit-decision notification:", err));
+      }
+
       return res
         .status(200)
         .json({ message: `Site visit request ${status}`, siteVisitRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -180,7 +209,8 @@ export class SiteVisitRequestController {
       sanitizeUser(shaped);
       return res.status(200).json(shaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -226,7 +256,8 @@ export class SiteVisitRequestController {
         .status(200)
         .json({ message: "Site visit request updated", siteVisitRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -248,7 +279,8 @@ export class SiteVisitRequestController {
 
       return res.status(200).json({ message: "Site visit request deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

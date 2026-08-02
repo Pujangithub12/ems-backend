@@ -185,10 +185,16 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   y = triTextY + maxTriHeight + 14;
 
   // ---- Items table ----
+  // Unit goes in the Quantity header (matching the original template) rather than
+  // appended to each row's description, when every item shares one common unit.
+  const itemUnits = new Set(po.items.map((i) => (i.unit || "").trim()).filter((u) => u.length > 0));
+  const commonUnit = itemUnits.size === 1 ? [...itemUnits][0] : null;
+  const quantityLabel = commonUnit ? `Quantity (${commonUnit})` : "Quantity";
+
   const cols = [
     { label: "HSN Code", width: 60 },
     { label: "Product Description", width: 210 },
-    { label: "Quantity", width: 70, align: "right" as const },
+    { label: quantityLabel, width: 70, align: "right" as const },
     { label: "Unit Price", width: 80, align: "right" as const },
     { label: "Amount", width: CONTENT_WIDTH - 60 - 210 - 70 - 80, align: "right" as const },
   ];
@@ -211,10 +217,12 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     const amount = unitPrice * item.quantity;
     grandTotal += amount;
 
+    const rowUnit = (item.unit || "").trim();
+    const rowQuantity = commonUnit ? String(item.quantity) : rowUnit ? `${item.quantity} ${rowUnit}` : String(item.quantity);
     const rowValues = [
       item.hsnCode || "--",
-      `${item.itemName}${item.unit ? ` (${item.unit})` : ""}`,
-      String(item.quantity),
+      item.itemName,
+      rowQuantity,
       fmtAmount(unitPrice),
       fmtAmount(amount),
     ];

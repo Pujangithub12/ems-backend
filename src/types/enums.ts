@@ -11,7 +11,9 @@ export enum TaskPriority {
 }
 
 export enum TaskStatus {
-  PENDING = "pending",
+  // Stored/displayed as "to_do" — the member name PENDING is unchanged
+  // (all call sites reference it symbolically) to keep this rename small.
+  PENDING = "to_do",
   IN_PROGRESS = "in_progress",
   COMPLETED = "completed",
   ON_HOLD = "on_hold",

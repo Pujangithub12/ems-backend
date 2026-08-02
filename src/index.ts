@@ -1,4 +1,5 @@
 import express, { ErrorRequestHandler } from "express";
+import { createServer } from "http";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
@@ -15,6 +16,7 @@ import { backfillOrganization } from "./utils/backfill-organization";
 import { seedRolePermissions } from "./utils/permissionService";
 import { authMiddleware } from "./middlewares/auth";
 import { verifyUploadAccess } from "./middlewares/uploadAccess";
+import { initSocket } from "./realtime/socket";
 
 dotenv.config();
 
@@ -30,6 +32,8 @@ process.on("unhandledRejection", (reason, promise) => {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const httpServer = createServer(app);
+initSocket(httpServer);
 
 app.use(
   helmet({
@@ -53,6 +57,10 @@ app.use(
       "https://emsjandaenergy.vercel.app",
       "http://localhost:5173",
       "http://127.0.0.1:5173",
+      // Expo's web dev server (`npx expo start --web`, mobile/) — only
+      // matters for browser testing; native builds aren't subject to CORS.
+      "http://localhost:8081",
+      "http://127.0.0.1:8081",
     ],
     credentials: true,
   }),
@@ -85,7 +93,7 @@ const uploadErrorHandler: ErrorRequestHandler = (err, _req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ message: err.message });
   }
-  if (err instanceof Error && /not allowed/i.test(err.message)) {
+  if (err instanceof Error && /not allowed|^invalid /i.test(err.message)) {
     return res.status(400).json({ message: err.message });
   }
   next(err);
@@ -268,7 +276,7 @@ prisma
       deleteOldApprovedRequests();
     });
 
-    app.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`);
     });
   })

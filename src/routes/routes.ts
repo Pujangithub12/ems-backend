@@ -4,6 +4,7 @@ import { OrganizationController } from "../controllers/OrganizationController";
 import { UserController } from "../controllers/UserController";
 import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
+import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
 import { PurchaseRequestController } from "../controllers/PurchaseRequestController";
@@ -31,6 +32,7 @@ import { ReportsController } from "../controllers/ReportsController";
 import { CatalogItemController } from "../controllers/CatalogItemController";
 import { authMiddleware, roleMiddleware, permissionMiddleware, anyPermissionMiddleware } from "../middlewares/auth";
 import { loginLimiter, authActionLimiter } from "../middlewares/rateLimit";
+import { requireCsrfHeader } from "../middlewares/csrfHeader";
 import {
   upload,
   uploadProjectFile,
@@ -146,6 +148,24 @@ router.delete(
   AnnouncementController.deleteAnnouncement,
 );
 
+// Notification routes — every authenticated user reads/manages only their own.
+router.get("/notifications", authMiddleware, NotificationController.list);
+router.get(
+  "/notifications/unread-count",
+  authMiddleware,
+  NotificationController.unreadCount,
+);
+router.patch(
+  "/notifications/:id/read",
+  authMiddleware,
+  NotificationController.markRead,
+);
+router.patch(
+  "/notifications/read-all",
+  authMiddleware,
+  NotificationController.markAllRead,
+);
+
 // Project routes
 router.post(
   "/projects",
@@ -221,6 +241,7 @@ router.post(
 router.post(
   "/projects/:projectId/files",
   authMiddleware,
+  requireCsrfHeader,
   uploadProjectFile.single("file"),
   ProjectFileController.addProjectFile,
 );
@@ -333,6 +354,7 @@ router.post(
   "/purchase-requests/:itemId/attachments",
   authMiddleware,
   permissionMiddleware("projects.procurement"),
+  requireCsrfHeader,
   uploadPurchaseRequestFile.single("file"),
   PurchaseRequestController.addAttachment,
 );
@@ -359,6 +381,7 @@ router.post(
   "/purchase-orders/:itemId/attachments",
   authMiddleware,
   permissionMiddleware("projects.procurement"),
+  requireCsrfHeader,
   uploadPurchaseOrderFile.single("file"),
   PurchaseOrderController.addAttachment,
 );
@@ -370,6 +393,7 @@ router.delete(
 );
 
 // Proforma Invoices
+router.get("/workspace/proforma-invoices", authMiddleware, ProformaInvoiceController.getAllProformaInvoices);
 router.post(
   "/purchase-orders/:id/proforma-invoices",
   authMiddleware,
@@ -398,6 +422,7 @@ router.post(
   "/proforma-invoices/:itemId/attachment",
   authMiddleware,
   permissionMiddleware("projects.procurement"),
+  requireCsrfHeader,
   uploadProformaInvoiceFile.single("file"),
   ProformaInvoiceController.addAttachment,
 );
@@ -443,6 +468,7 @@ router.post(
   "/customs/:itemId/documents",
   authMiddleware,
   permissionMiddleware("projects.procurement"),
+  requireCsrfHeader,
   uploadCustomsFile.single("file"),
   ShipmentController.addCustomsDocument,
 );
@@ -455,6 +481,11 @@ router.delete(
 
 // Goods Receipt (GRN) — accepting/partially-accepting is the only action in this whole
 // pipeline that increments real Inventory stock (see GoodsReceiptController.updateStatus).
+router.get(
+  "/workspace/goods-receipts",
+  authMiddleware,
+  GoodsReceiptController.getOrganizationGoodsReceipts,
+);
 router.post(
   "/purchase-orders/:id/goods-receipts",
   authMiddleware,
@@ -471,6 +502,7 @@ router.post(
   "/goods-receipts/:itemId/photos",
   authMiddleware,
   permissionMiddleware("projects.procurement"),
+  requireCsrfHeader,
   uploadGoodsReceiptFile.single("file"),
   GoodsReceiptController.addPhoto,
 );
@@ -576,6 +608,7 @@ router.post(
   "/projects/inventory/:itemId/attachments",
   authMiddleware,
   permissionMiddleware("projects.inventory"),
+  requireCsrfHeader,
   uploadInventoryFile.single("file"),
   InventoryController.addAttachment,
 );
@@ -679,6 +712,7 @@ router.post(
 router.post(
   "/workspace/files",
   authMiddleware,
+  requireCsrfHeader,
   uploadOrganizationFile.single("file"),
   OrganizationFileController.addOrganizationFile,
 );
@@ -694,6 +728,7 @@ router.post(
   "/tasks",
   authMiddleware,
   // roleMiddleware([UserRole.ADMIN]),
+  requireCsrfHeader,
   upload.array("files"),
   TaskController.createTask,
 );
@@ -709,6 +744,7 @@ router.put(
   "/tasks/:id",
   authMiddleware,
   permissionMiddleware("tasks.edit"),
+  requireCsrfHeader,
   upload.array("files"),
   TaskController.updateTask,
 );

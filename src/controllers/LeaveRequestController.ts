@@ -8,6 +8,7 @@ import {
   UpdateLeaveRequestStatusDto,
 } from "../dto/leave-request.dto";
 import { canApprove } from "../utils/hierarchyAuthority";
+import { notifyUsers, getUserIdsByRole } from "../services/notificationService";
 
 // `user` was an eager relation on LeaveRequest under TypeORM, so it was
 // always populated (and included the password hash) regardless of the
@@ -55,11 +56,27 @@ export class LeaveRequestController {
       const leaveRequest: any = { ...newRequest, user };
       sanitizeUser(leaveRequest);
 
+      getUserIdsByRole(organization.id, [UserRole.ADMIN, UserRole.SUPER_ADMIN])
+        .then((approverIds) =>
+          notifyUsers(
+            approverIds.filter((id) => id !== user.id),
+            {
+              organizationId: organization.id,
+              type: "approval_requested",
+              title: "New leave request",
+              message: `${user.fullName} submitted a leave request: "${title}"`,
+              link: `/${organization.id}/leaverequests`,
+            },
+          ),
+        )
+        .catch((err) => console.error("Failed to send leave-request notification:", err));
+
       return res
         .status(201)
         .json({ message: "Leave request created", leaveRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -112,7 +129,8 @@ export class LeaveRequestController {
 
       return res.status(200).json(mineShaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -164,11 +182,22 @@ export class LeaveRequestController {
       const leaveRequest: any = { ...updated, user: lr.user };
       sanitizeUser(leaveRequest);
 
+      if (lr.userId) {
+        notifyUsers([lr.userId], {
+          organizationId: organization.id,
+          type: "approval_decided",
+          title: `Leave request ${status}`,
+          message: `Your leave request "${lr.title}" was ${status}`,
+          link: `/${organization.id}/leaverequests`,
+        }).catch((err) => console.error("Failed to send leave-decision notification:", err));
+      }
+
       return res
         .status(200)
         .json({ message: `Leave request ${status}`, leaveRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -199,7 +228,8 @@ export class LeaveRequestController {
       sanitizeUser(shaped);
       return res.status(200).json(shaped);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -245,7 +275,8 @@ export class LeaveRequestController {
         .status(200)
         .json({ message: "Leave request updated", leaveRequest });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -274,7 +305,8 @@ export class LeaveRequestController {
 
       return res.status(200).json({ message: "Leave request deleted" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

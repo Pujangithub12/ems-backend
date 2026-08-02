@@ -47,7 +47,8 @@ export class UserController {
 
       return res.status(200).json(users);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -93,7 +94,8 @@ export class UserController {
         .status(200)
         .json({ message: "User removed from organization successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 
@@ -185,7 +187,8 @@ export class UserController {
 
       return res.status(200).json({ message: "User updated successfully" });
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error", error });
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   };
 }

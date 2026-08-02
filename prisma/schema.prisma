@@ -28,6 +28,10 @@ model User {
   createdAt          DateTime @default(now()) @db.Timestamp(6)
   /// Non-null for accounts locked to one organization via an accepted invite. No physical FK (see OrganizationInvite).
   homeOrganizationId Int?     @map("homeWorkspaceId")
+  /// Bumped on password change/reset so previously-issued JWTs (which carry
+  /// the version they were signed with) are rejected by authMiddleware —
+  /// the only way to revoke a leaked/stolen token before its 3h expiry.
+  tokenVersion       Int      @default(0)
 
   activities                          Activity[]
   expenseRequests                     ExpenseRequest[]
@@ -59,6 +63,7 @@ model User {
   assignedTasks                       TaskAssignee[]
   taskComments                        TaskComment[]
   memberships                         OrganizationMembership[]
+  notifications                       Notification[]
 
   @@map("user")
 }
@@ -98,6 +103,7 @@ model Organization {
   vendors               Vendor[]
   warehouses            Warehouse[]
   memberships           OrganizationMembership[]
+  notifications         Notification[]
 
   @@map("workspace")
 }
@@ -408,6 +414,29 @@ model MyTask {
   user           User?         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_7ce02825b211eb0f6c8515324e4")
 
   @@map("my_task")
+}
+
+/// Per-user, real-time notification (task assignment/completion, approval
+/// request submitted/decided, announcement posted) — see notificationService.ts,
+/// which creates these and pushes a matching socket.io event in one call.
+model Notification {
+  id             Int      @id @default(autoincrement())
+  /// "task_assigned" | "task_completed" | "approval_requested" | "approval_decided" | "announcement"
+  type           String   @db.VarChar
+  title          String   @db.VarChar
+  message        String
+  /// Frontend route to deep-link into when clicked (e.g. a task or approvals page), organization prefix included.
+  link           String?  @db.VarChar
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  userId         Int
+  organizationId Int?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId, isRead, createdAt])
+  @@map("notification")
 }
 
 model PasswordResetOtp {
@@ -886,6 +915,7 @@ model Project {
   scheduleTasks      ScheduleTask[]
   scheduleTaskLinks  ScheduleTaskLink[]
   projectTasks       Task[]
+  taskLinks          TaskLink[]
 
   @@map("project")
 }
@@ -978,22 +1008,26 @@ model RolePermission {
   @@map("role_permission")
 }
 
+/// Deprecated — superseded by Task's parentTaskId/startDate/duration/orderIndex
+/// columns (Schedule and Task tabs now share the Task table). Left in place,
+/// unwritten by new code, for historical/rollback safety; see
+/// migrate-schedule-to-task.ts for the one-off backfill into Task.
 model ScheduleTask {
-  id            Int       @id(map: "PK_b184187cc1517c0972cedc4f0b6") @default(autoincrement())
+  id            Int                @id(map: "PK_b184187cc1517c0972cedc4f0b6") @default(autoincrement())
   projectId     Int
-  taskId        String    @db.VarChar
-  taskName      String    @db.VarChar
+  taskId        String             @db.VarChar
+  taskName      String             @db.VarChar
   duration      Float?
-  startDate     DateTime? @db.Date
-  parentId      String?   @db.VarChar
+  startDate     DateTime?          @db.Date
+  parentId      String?            @db.VarChar
   /// Deprecated — superseded by ScheduleTaskLink (real FK-backed table with dependency type + lag). Left in place, unwritten by new code, for historical/rollback safety; see ScheduleTaskLink for the current model.
-  predecessorId String?   @db.VarChar
-  orderIndex    Int       @default(0)
-  createdAt     DateTime  @default(now()) @db.Timestamp(6)
-  updatedAt     DateTime  @default(now()) @db.Timestamp(6)
+  predecessorId String?            @db.VarChar
+  orderIndex    Int                @default(0)
+  createdAt     DateTime           @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime           @default(now()) @db.Timestamp(6)
   progress      Float?
-  status        String    @default("pending") @db.VarChar
-  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_4a5d5f0b5eb1490a8e704b07035")
+  status        String             @default("to_do") @db.VarChar
+  project       Project            @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_4a5d5f0b5eb1490a8e704b07035")
   outgoingLinks ScheduleTaskLink[] @relation("ScheduleTaskLinkPredecessor")
   incomingLinks ScheduleTaskLink[] @relation("ScheduleTaskLinkSuccessor")
 
@@ -1001,10 +1035,9 @@ model ScheduleTask {
   @@map("schedule_task")
 }
 
-/// Dependency link between two ScheduleTask rows within the same project — MS-Project-style
-/// FS/SS/FF/SF relationship with an optional lag/lead (lagDays, negative = lead/overlap).
-/// Record-and-display only: no auto-scheduling, dates are never recalculated from this table.
-/// Full-replaced alongside ScheduleTask on every schedule save (see schedule.service.ts).
+/// Deprecated — superseded by TaskLink (same shape, FK-backed against Task
+/// instead of ScheduleTask). Left in place, unwritten by new code, for
+/// historical/rollback safety.
 model ScheduleTaskLink {
   id            Int      @id @default(autoincrement())
   projectId     Int
@@ -1095,32 +1128,77 @@ model SubTaskComment {
 }
 
 model Task {
-  id               Int             @id(map: "PK_fb213f79ee45060ba925ecd576e") @default(autoincrement())
-  title            String          @db.VarChar
-  description      String?
-  dueDate          DateTime        @db.Timestamp(6)
-  createdAt        DateTime        @default(now()) @db.Timestamp(6)
-  priority         String          @default("medium") @db.VarChar
-  status           String          @default("pending") @db.VarChar
-  projectId        Int?
-  progress         Int             @default(0)
-  projectHeadingId Int?
+  id                         Int             @id(map: "PK_fb213f79ee45060ba925ecd576e") @default(autoincrement())
+  title                      String          @db.VarChar
+  description                String?
+  dueDate                    DateTime        @db.Timestamp(6)
+  createdAt                  DateTime        @default(now()) @db.Timestamp(6)
+  priority                   String          @default("medium") @db.VarChar
+  status                     String          @default("to_do") @db.VarChar
+  projectId                  Int?
+  progress                   Int             @default(0)
+  projectHeadingId           Int?
   /// Physically `text` holding a comma-joined string — TypeORM's simple-array
   /// (de)serialized this transparently; app code must now split/join manually.
-  files            String?
-  projectName      String?         @db.VarChar
-  createdById      Int?
-  organizationId   Int?            @map("workspaceId")
-  activities       Activity[]
-  subTasks         SubTask[]
-  project          Project?        @relation(fields: [projectId], references: [id], onUpdate: NoAction, map: "FK_3797a20ef5553ae87af126bc2fe")
-  createdBy        User?           @relation(fields: [createdById], references: [id], onUpdate: NoAction, map: "FK_91d76dd2ae372b9b7dfb6bf3fd2")
-  projectHeading   ProjectHeading? @relation(fields: [projectHeadingId], references: [id], onUpdate: NoAction, map: "FK_b39775a45b2597e07036bf805ef")
-  organization     Organization?   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_ce8f24979af169c6cd19cc94e52")
-  assignedUsers    TaskAssignee[]
-  comments         TaskComment[]
+  files                      String?
+  projectName                String?         @db.VarChar
+  createdById                Int?
+  organizationId             Int?            @map("workspaceId")
+  /// Gantt hierarchy (Schedule tab) — self-referential, arbitrary depth.
+  /// Independent of projectHeadingId, which stays the orthogonal Kanban
+  /// grouping concept; a task can have both.
+  parentTaskId               Int?
+  /// Gantt-only (Schedule tab). dueDate above stays the Kanban-owned
+  /// deadline; the two are never auto-synced.
+  startDate                  DateTime?       @db.Date
+  /// Gantt-only (Schedule tab). 0 = milestone.
+  duration                   Float?
+  /// Sibling order among same-parentTaskId tasks (or top-level when null) —
+  /// drives Gantt/WBS ordering. Independent of projectHeadingId grouping.
+  orderIndex                 Int             @default(0)
+  /// Set only by migrate-schedule-to-task.ts; marks the legacy ScheduleTask
+  /// this row was migrated from, and makes that script idempotent.
+  migratedFromScheduleTaskId Int?            @unique
+  activities                 Activity[]
+  subTasks                   SubTask[]
+  project                    Project?        @relation(fields: [projectId], references: [id], onUpdate: NoAction, map: "FK_3797a20ef5553ae87af126bc2fe")
+  createdBy                  User?           @relation(fields: [createdById], references: [id], onUpdate: NoAction, map: "FK_91d76dd2ae372b9b7dfb6bf3fd2")
+  projectHeading             ProjectHeading? @relation(fields: [projectHeadingId], references: [id], onUpdate: NoAction, map: "FK_b39775a45b2597e07036bf805ef")
+  organization               Organization?   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_ce8f24979af169c6cd19cc94e52")
+  assignedUsers              TaskAssignee[]
+  comments                   TaskComment[]
+  parentTask                 Task?           @relation("TaskParent", fields: [parentTaskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  childTasks                 Task[]          @relation("TaskParent")
+  outgoingLinks              TaskLink[]      @relation("TaskLinkPredecessor")
+  incomingLinks              TaskLink[]      @relation("TaskLinkSuccessor")
 
+  @@index([projectId, parentTaskId])
   @@map("task")
+}
+
+/// Dependency link between two Task rows within the same project —
+/// MS-Project-style FS/SS/FF/SF relationship with an optional lag/lead
+/// (lagDays, negative = lead/overlap). Record-and-display only: no
+/// auto-scheduling recompute here. FK-backed successor to the deprecated
+/// ScheduleTaskLink, now pointed at Task instead of ScheduleTask.
+model TaskLink {
+  id                Int      @id @default(autoincrement())
+  projectId         Int
+  predecessorTaskId Int
+  successorTaskId   Int
+  /// FS | SS | FF | SF
+  type              String   @default("FS") @db.VarChar
+  lagDays           Float    @default(0)
+  createdAt         DateTime @default(now())
+
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  predecessor Task    @relation("TaskLinkPredecessor", fields: [predecessorTaskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  successor   Task    @relation("TaskLinkSuccessor", fields: [successorTaskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([predecessorTaskId, successorTaskId])
+  @@index([projectId])
+  @@index([successorTaskId])
+  @@map("task_link")
 }
 
 model TaskAssignee {

@@ -4,18 +4,19 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuthController = void 0;
+const crypto_1 = require("crypto");
 const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const dotenv_1 = __importDefault(require("dotenv"));
 const emailService_1 = require("../utils/emailService");
 const passwordPolicy_1 = require("../utils/passwordPolicy");
+const jwt_1 = require("../config/jwt");
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_OTP_ATTEMPTS = 5;
-dotenv_1.default.config();
-const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
+// Cryptographically strong 6-digit OTP (crypto.randomInt is a CSPRNG, unlike Math.random).
+const generateOtp = () => (0, crypto_1.randomInt)(100000, 1000000).toString();
 class AuthController {
     static login = async (req, res) => {
         const { email, password } = req.body;
@@ -36,7 +37,7 @@ class AuthController {
             // Role is per-organization now (see OrganizationMembership), so it can't be
             // baked into a token that outlives any single organization context —
             // authMiddleware resolves req.user.role fresh on every request instead.
-            const token = jsonwebtoken_1.default.sign({ id: user.id }, JWT_SECRET, {
+            const token = jsonwebtoken_1.default.sign({ id: user.id, v: user.tokenVersion }, jwt_1.JWT_SECRET, {
                 expiresIn: "3h",
             });
             const isProduction = process.env.NODE_ENV === "production";
@@ -62,7 +63,8 @@ class AuthController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     // Self-service signup, step 1: validates the details and emails a 6-digit
@@ -91,7 +93,7 @@ class AuthController {
                     .json({ message: "An account with this email already exists" });
             }
             const hashedPassword = await bcrypt_1.default.hash(password, 10);
-            const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+            const otpCode = generateOtp();
             const otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
             await prisma_1.prisma.pendingSignup.upsert({
                 where: { email: normalizedEmail },
@@ -120,7 +122,8 @@ class AuthController {
             return res.status(200).json({ message: "Verification code sent" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     // Self-service signup, step 2: confirms the OTP and only then creates the
@@ -195,7 +198,7 @@ class AuthController {
             });
             await prisma_1.prisma.pendingSignup.delete({ where: { id: pending.id } });
             // Role is per-organization now — see the matching comment in login().
-            const token = jsonwebtoken_1.default.sign({ id: user.id }, JWT_SECRET, {
+            const token = jsonwebtoken_1.default.sign({ id: user.id, v: user.tokenVersion }, jwt_1.JWT_SECRET, {
                 expiresIn: "3h",
             });
             const isProduction = process.env.NODE_ENV === "production";
@@ -233,7 +236,8 @@ class AuthController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     // Forgot-password, step 1: emails a 6-digit OTP if the address has an
@@ -254,7 +258,7 @@ class AuthController {
                 // Don't reveal whether the account exists — just respond as if it worked.
                 return res.status(200).json(genericResponse);
             }
-            const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+            const otpCode = generateOtp();
             const otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
             await prisma_1.prisma.passwordResetOtp.upsert({
                 where: { email: normalizedEmail },
@@ -279,7 +283,8 @@ class AuthController {
             return res.status(200).json(genericResponse);
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     // Forgot-password, step 2: confirms the OTP and sets the new password in
@@ -333,13 +338,21 @@ class AuthController {
                 await prisma_1.prisma.passwordResetOtp.delete({ where: { id: otpRecord.id } });
                 return res.status(404).json({ message: "Account no longer exists" });
             }
-            await prisma_1.prisma.user.update({
+            // tokenVersion bumps in the same update as the password — any token
+            // issued before this reset (e.g. by whoever's session led to the
+            // "forgot password" request in the first place) stops passing
+            // authMiddleware's version check immediately, not just after its
+            // natural 3h expiry.
+            const updatedUser = await prisma_1.prisma.user.update({
                 where: { id: user.id },
-                data: { password: await bcrypt_1.default.hash(newPassword, 10) },
+                data: {
+                    password: await bcrypt_1.default.hash(newPassword, 10),
+                    tokenVersion: { increment: 1 },
+                },
             });
             await prisma_1.prisma.passwordResetOtp.delete({ where: { id: otpRecord.id } });
             // Role is per-organization now — see the matching comment in login().
-            const token = jsonwebtoken_1.default.sign({ id: user.id }, JWT_SECRET, {
+            const token = jsonwebtoken_1.default.sign({ id: updatedUser.id, v: updatedUser.tokenVersion }, jwt_1.JWT_SECRET, {
                 expiresIn: "3h",
             });
             const isProduction = process.env.NODE_ENV === "production";
@@ -365,7 +378,8 @@ class AuthController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static logout = async (req, res) => {
@@ -401,7 +415,8 @@ class AuthController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static updateMe = async (req, res) => {
@@ -433,7 +448,8 @@ class AuthController {
             });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
     static changePassword = async (req, res) => {
@@ -456,14 +472,35 @@ class AuthController {
             if (!isPasswordValid) {
                 return res.status(401).json({ message: "Current password is incorrect" });
             }
-            await prisma_1.prisma.user.update({
+            // Bumping tokenVersion here invalidates every other token issued for
+            // this account (see authMiddleware's version check) — the whole point
+            // of changing your password after suspecting a leak. That would also
+            // invalidate the very cookie this request is authenticated with, so a
+            // fresh token/cookie carrying the new version is reissued below to
+            // keep the current session alive; every other session/leaked token is
+            // the one that actually gets logged out.
+            const updatedUser = await prisma_1.prisma.user.update({
                 where: { id: user.id },
-                data: { password: await bcrypt_1.default.hash(newPassword, 10) },
+                data: {
+                    password: await bcrypt_1.default.hash(newPassword, 10),
+                    tokenVersion: { increment: 1 },
+                },
+            });
+            const token = jsonwebtoken_1.default.sign({ id: updatedUser.id, v: updatedUser.tokenVersion }, jwt_1.JWT_SECRET, {
+                expiresIn: "3h",
+            });
+            const isProduction = process.env.NODE_ENV === "production";
+            res.cookie("token", token, {
+                httpOnly: true,
+                secure: isProduction,
+                sameSite: isProduction ? "none" : "lax",
+                maxAge: THREE_HOURS_MS,
             });
             return res.status(200).json({ message: "Password updated successfully" });
         }
         catch (error) {
-            return res.status(500).json({ message: "Internal server error", error });
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
         }
     };
 }
