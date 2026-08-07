@@ -194,6 +194,19 @@ export const authMiddleware = async (
     req.user.role = membership.role;
     req.organization = resolvedOrganization;
 
+    // Keep the durable "last active organization" in sync so a future login
+    // (see AuthController.login) can restore it even after this cookie has
+    // expired — only written when it actually changes, so a normal request
+    // within an already-resolved organization costs no extra write.
+    if (user.lastOrganizationId !== resolvedOrganization.id) {
+      prisma.user
+        .update({
+          where: { id: user.id },
+          data: { lastOrganizationId: resolvedOrganization.id },
+        })
+        .catch((err) => console.error("Failed to persist last active organization:", err));
+    }
+
     const isProduction = process.env.NODE_ENV === "production";
     res.cookie("workspaceId", resolvedOrganization.id.toString(), {
       httpOnly: true,

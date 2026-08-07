@@ -55,7 +55,8 @@ export async function migrateScheduleToTask() {
 
     const organizationId = rows[0]!.project.organizationId;
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(
+      async (tx) => {
       // Pass 1: create a Task per legacy row, no parentTaskId yet.
       const legacyIdToNewTaskId = new Map<number, number>();
       for (const legacy of rows) {
@@ -112,7 +113,14 @@ export async function migrateScheduleToTask() {
         });
         linksMigrated += legacyLinks.length;
       }
-    });
+      },
+      // Default interactive-transaction timeout is 5s — too tight for a
+      // project with many legacy rows when every query is a WAN round-trip
+      // to a remote (Supabase pooler) database, as opposed to typical
+      // same-region production latency. One-off/manual script, so a
+      // generous timeout here has no ongoing cost.
+      { timeout: 120_000, maxWait: 30_000 },
+    );
 
     projectsMigrated += 1;
   }

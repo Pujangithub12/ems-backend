@@ -3,19 +3,30 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProjectController = void 0;
 const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
-const hierarchyAuthority_1 = require("../utils/hierarchyAuthority");
 /** Deep relation tree matching the old QueryBuilder's leftJoinAndSelect chain:
  * assignees, files, headings -> tasks -> assignedUsers, headings -> subHeadings
  * -> tasks -> assignedUsers, and projectTasks -> assignedUsers. */
+// Gantt-nested children (Task.parentTaskId, set via the Schedule tab's "add
+// child task") — surfaced alongside every task list below so the Kanban
+// drawer can show them too. Each child is also its own top-level row in
+// whichever list it belongs to (this include is unfiltered), so this is
+// just enough to render a summary list, not the full child record.
+const CHILD_TASKS_INCLUDE = {
+    childTasks: { select: { id: true, title: true, status: true, progress: true } },
+};
 const PROJECT_INCLUDE = {
     assignees: { include: { user: true } },
     files: true,
     headings: {
         include: {
-            tasks: { include: { assignedUsers: { include: { user: true } } } },
+            tasks: {
+                include: { assignedUsers: { include: { user: true } }, ...CHILD_TASKS_INCLUDE },
+            },
             subHeadings: {
                 include: {
-                    tasks: { include: { assignedUsers: { include: { user: true } } } },
+                    tasks: {
+                        include: { assignedUsers: { include: { user: true } }, ...CHILD_TASKS_INCLUDE },
+                    },
                 },
             },
         },
@@ -23,12 +34,7 @@ const PROJECT_INCLUDE = {
     projectTasks: {
         include: {
             assignedUsers: { include: { user: true } },
-            // Gantt-nested children (Task.parentTaskId, set via the Schedule tab's
-            // "add child task") — surfaced here so the Kanban drawer can show them
-            // too. Each child is also its own top-level row in projectTasks
-            // already (this include is unfiltered by projectHeadingId), so this
-            // is just enough to render a summary list, not the full child record.
-            childTasks: { select: { id: true, title: true, status: true, progress: true } },
+            ...CHILD_TASKS_INCLUDE,
         },
     },
 };
@@ -282,14 +288,17 @@ class ProjectController {
             }
             let assignedUsers = [];
             if (assignedUserIds && Array.isArray(assignedUserIds)) {
-                if (user.role !== "super_admin") {
-                    const descendantIds = new Set(await (0, hierarchyAuthority_1.getDescendantUserIds)(req.organization.id, user.id));
-                    const invalidIds = assignedUserIds.filter((uid) => uid !== user.id && !descendantIds.has(uid));
-                    if (invalidIds.length > 0) {
-                        return res.status(403).json({
-                            message: "You can only assign a task to yourself or someone below you in the hierarchy",
-                        });
-                    }
+                // Any organization member can be assigned by anyone else in the
+                // organization — assignment is no longer scoped by the hierarchy tree.
+                const memberIds = new Set((await prisma_1.prisma.organizationMembership.findMany({
+                    where: { organizationId: req.organization.id },
+                    select: { userId: true },
+                })).map((m) => m.userId));
+                const invalidIds = assignedUserIds.filter((uid) => !memberIds.has(uid));
+                if (invalidIds.length > 0) {
+                    return res.status(403).json({
+                        message: "You can only assign a task to members of this organization",
+                    });
                 }
                 assignedUsers = await prisma_1.prisma.user.findMany({
                     where: { id: { in: assignedUserIds } },

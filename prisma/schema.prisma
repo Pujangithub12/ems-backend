@@ -28,6 +28,11 @@ model User {
   createdAt          DateTime @default(now()) @db.Timestamp(6)
   /// Non-null for accounts locked to one organization via an accepted invite. No physical FK (see OrganizationInvite).
   homeOrganizationId Int?     @map("homeWorkspaceId")
+  /// The organization this user was last active in — set on login (from here)
+  /// and kept in sync by authMiddleware on every organization switch, so a
+  /// fresh login lands back where the user left off instead of defaulting to
+  /// their first membership. No physical FK, same as homeOrganizationId.
+  lastOrganizationId Int?     @map("lastWorkspaceId")
   /// Bumped on password change/reset so previously-issued JWTs (which carry
   /// the version they were signed with) are rejected by authMiddleware —
   /// the only way to revoke a leaked/stolen token before its 3h expiry.
@@ -64,6 +69,8 @@ model User {
   taskComments                        TaskComment[]
   memberships                         OrganizationMembership[]
   notifications                       Notification[]
+  plantDailyReportsCreated            PlantDailyReport[]
+  plantReportStaffEntries             PlantReportStaff[]
 
   @@map("user")
 }
@@ -104,6 +111,7 @@ model Organization {
   warehouses            Warehouse[]
   memberships           OrganizationMembership[]
   notifications         Notification[]
+  plantDailyReports     PlantDailyReport[]
 
   @@map("workspace")
 }
@@ -461,6 +469,70 @@ model PendingSignup {
   createdAt    DateTime @default(now()) @db.Timestamp(6)
 
   @@map("pending_signup")
+}
+
+/// A boiler/plant operator's daily log entry — steam, water, pellet stock,
+/// burner status. One row per organization per calendar date (enforced by
+/// the unique index below); derived figures (steam ton, water flow, pellet
+/// stock closing) are computed by the API from the raw readings rather than
+/// stored as separate columns, so there's no chance of them drifting out of
+/// sync with the readings they're derived from.
+model PlantDailyReport {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  /// Which plant/project this day's log belongs to — an organization can run
+  /// more than one plant, each logged (and totaled) separately.
+  projectId      Int?
+  date           DateTime @db.Date
+
+  steamInitial  Decimal? @db.Decimal
+  steamFinal    Decimal? @db.Decimal
+  steamPressure Decimal? @db.Decimal
+  steamTemp     Decimal? @db.Decimal
+  feedwaterTemp Decimal? @db.Decimal
+
+  pelletUsedKg       Decimal? @db.Decimal
+  pelletsBag         Decimal? @db.Decimal
+  pelletReceivedKg   Decimal? @db.Decimal
+  /// Snapshotted at creation from the previous day's closing balance for
+  /// this organization (0 if there's no prior entry) — never edited by hand.
+  pelletStockOpening Decimal? @db.Decimal
+
+  waterInitial Decimal? @db.Decimal
+  waterFinal   Decimal? @db.Decimal
+
+  burnerStatus   String?  @db.VarChar
+  burnerHours    Decimal? @db.Decimal
+  /// Required by the API whenever steam ton works out to 0 or burnerStatus
+  /// is "stopped" — see PlantReportController.
+  shutdownReason String?
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy    User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  staff        PlantReportStaff[]
+
+  @@unique([organizationId, projectId, date])
+  @@map("plant_daily_report")
+}
+
+/// Which staff were present for a given day's plant report — a join table
+/// instead of a text list so the "staff present" count is always derived
+/// from real rows, never typed (and thus never drifts) separately.
+model PlantReportStaff {
+  id       Int @id @default(autoincrement())
+  reportId Int
+  userId   Int
+
+  report PlantDailyReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([reportId, userId])
+  @@map("plant_report_staff")
 }
 
 model ProcurementAttachment {
@@ -905,6 +977,7 @@ model Project {
 
   inventoryItems     InventoryItem[]
   monthlyPerformance MonthlyPerformance[]
+  plantDailyReports  PlantDailyReport[]
   procurementItems   ProcurementItem[]
   purchaseRequests   PurchaseRequest[]
   purchaseOrders     PurchaseOrder[]

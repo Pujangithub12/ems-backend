@@ -6,6 +6,7 @@ const OrganizationController_1 = require("../controllers/OrganizationController"
 const UserController_1 = require("../controllers/UserController");
 const InviteController_1 = require("../controllers/InviteController");
 const AnnouncementController_1 = require("../controllers/AnnouncementController");
+const PlantReportController_1 = require("../controllers/PlantReportController");
 const NotificationController_1 = require("../controllers/NotificationController");
 const ProjectController_1 = require("../controllers/ProjectController");
 const ProjectFileController_1 = require("../controllers/ProjectFileController");
@@ -81,6 +82,14 @@ router.put("/users/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)
 router.post("/announcements", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("announcements.manage"), AnnouncementController_1.AnnouncementController.createAnnouncement);
 router.get("/announcements", auth_1.authMiddleware, AnnouncementController_1.AnnouncementController.getHistory);
 router.delete("/announcements/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("announcements.manage"), AnnouncementController_1.AnnouncementController.deleteAnnouncement);
+// Plant daily report routes — any org member can log/view entries; editing
+// or deleting someone else's entry is gated inside the controller (creator
+// or admin/super_admin only), not by role, since it's per-resource.
+router.get("/plant-reports", auth_1.authMiddleware, PlantReportController_1.PlantReportController.getMonth);
+router.get("/plant-reports/prefill", auth_1.authMiddleware, PlantReportController_1.PlantReportController.getPrefill);
+router.post("/plant-reports", auth_1.authMiddleware, PlantReportController_1.PlantReportController.create);
+router.put("/plant-reports/:id", auth_1.authMiddleware, PlantReportController_1.PlantReportController.update);
+router.delete("/plant-reports/:id", auth_1.authMiddleware, PlantReportController_1.PlantReportController.remove);
 // Notification routes — every authenticated user reads/manages only their own.
 router.get("/notifications", auth_1.authMiddleware, NotificationController_1.NotificationController.list);
 router.get("/notifications/unread-count", auth_1.authMiddleware, NotificationController_1.NotificationController.unreadCount);
@@ -110,6 +119,7 @@ router.get("/projects/:projectId/files", auth_1.authMiddleware, ProjectFileContr
 router.post("/projects/:projectId/folders", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.addProjectFolder);
 router.post("/projects/:projectId/files", auth_1.authMiddleware, csrfHeader_1.requireCsrfHeader, upload_1.uploadProjectFile.single("file"), ProjectFileController_1.ProjectFileController.addProjectFile);
 router.get("/projects/files/:fileId/download", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.downloadProjectFile);
+router.get("/projects/files/:fileId/view", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.viewProjectFile);
 router.put("/projects/files/:fileId", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.renameProjectFile);
 router.delete("/projects/files/:fileId", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.deleteProjectFile);
 // File/folder access management — who can read/write a given node. Deliberately

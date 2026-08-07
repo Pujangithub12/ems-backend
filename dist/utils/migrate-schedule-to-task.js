@@ -110,7 +110,13 @@ async function migrateScheduleToTask() {
                 });
                 linksMigrated += legacyLinks.length;
             }
-        });
+        }, 
+        // Default interactive-transaction timeout is 5s — too tight for a
+        // project with many legacy rows when every query is a WAN round-trip
+        // to a remote (Supabase pooler) database, as opposed to typical
+        // same-region production latency. One-off/manual script, so a
+        // generous timeout here has no ongoing cost.
+        { timeout: 120_000, maxWait: 30_000 });
         projectsMigrated += 1;
     }
     console.log(`Migration complete: ${projectsMigrated} project(s) migrated (${tasksMigrated} tasks, ${linksMigrated} links), ${projectsSkipped} project(s) skipped (already migrated).`);

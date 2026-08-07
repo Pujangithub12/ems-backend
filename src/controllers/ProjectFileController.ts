@@ -230,6 +230,41 @@ export class ProjectFileController {
     }
   };
 
+  /** GET /projects/files/:fileId/view — streams the file for inline viewing (not download). PDFs and images display in browser. */
+  static viewProjectFile = async (req: AuthRequest, res: Response) => {
+    const { fileId } = req.params;
+    try {
+      const file = await prisma.projectFile.findFirst({
+        where: { id: parseInt(fileId as string) },
+      });
+
+      if (
+        !file ||
+        file.isFolder ||
+        !file.path ||
+        ownerOrganizationId(file) !== req.organization!.id
+      ) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const level = await resolveAccessForFile(file, req.user!.id, req.user!.role);
+      if (level === "none") {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const absolutePath = path.resolve("uploads", file.path);
+      const stat = fs.statSync(absolutePath);
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename="${file.name}"`);
+      res.setHeader("Content-Length", stat.size);
+      const stream = fs.createReadStream(absolutePath);
+      return stream.pipe(res);
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   /** PUT /projects/files/:fileId — rename a file or folder. */
   static renameProjectFile = async (req: AuthRequest, res: Response) => {
     const { fileId } = req.params;

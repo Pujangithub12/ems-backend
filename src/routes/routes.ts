@@ -4,6 +4,7 @@ import { OrganizationController } from "../controllers/OrganizationController";
 import { UserController } from "../controllers/UserController";
 import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
+import { PlantReportController } from "../controllers/PlantReportController";
 import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
@@ -148,6 +149,15 @@ router.delete(
   AnnouncementController.deleteAnnouncement,
 );
 
+// Plant daily report routes — any org member can log/view entries; editing
+// or deleting someone else's entry is gated inside the controller (creator
+// or admin/super_admin only), not by role, since it's per-resource.
+router.get("/plant-reports", authMiddleware, PlantReportController.getMonth);
+router.get("/plant-reports/prefill", authMiddleware, PlantReportController.getPrefill);
+router.post("/plant-reports", authMiddleware, PlantReportController.create);
+router.put("/plant-reports/:id", authMiddleware, PlantReportController.update);
+router.delete("/plant-reports/:id", authMiddleware, PlantReportController.remove);
+
 // Notification routes — every authenticated user reads/manages only their own.
 router.get("/notifications", authMiddleware, NotificationController.list);
 router.get(
@@ -249,6 +259,11 @@ router.get(
   "/projects/files/:fileId/download",
   authMiddleware,
   ProjectFileController.downloadProjectFile,
+);
+router.get(
+  "/projects/files/:fileId/view",
+  authMiddleware,
+  ProjectFileController.viewProjectFile,
 );
 router.put(
   "/projects/files/:fileId",

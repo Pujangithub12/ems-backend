@@ -47,6 +47,34 @@ class AuthController {
                 sameSite: isProduction ? "none" : "lax",
                 maxAge: THREE_HOURS_MS, // 3 hours
             });
+            // Restore whichever organization this user was last active in, so a
+            // fresh login doesn't drop them back to their first membership —
+            // authMiddleware would otherwise pick that as the default once the
+            // previous session's workspaceId cookie has expired/been cleared.
+            // Home-organization-locked accounts (accepted-invite users) always go
+            // to their home organization — authMiddleware rejects any other
+            // workspaceId cookie value for them, so lastOrganizationId is never
+            // used in that case even if it's stale.
+            let workspaceIdToRestore = null;
+            if (user.homeOrganizationId != null) {
+                workspaceIdToRestore = user.homeOrganizationId;
+            }
+            else if (user.lastOrganizationId != null) {
+                const stillMember = await prisma_1.prisma.organizationMembership.findFirst({
+                    where: { userId: user.id, organizationId: user.lastOrganizationId },
+                    select: { id: true },
+                });
+                if (stillMember)
+                    workspaceIdToRestore = user.lastOrganizationId;
+            }
+            if (workspaceIdToRestore != null) {
+                res.cookie("workspaceId", workspaceIdToRestore.toString(), {
+                    httpOnly: true,
+                    secure: isProduction,
+                    sameSite: isProduction ? "none" : "lax",
+                    maxAge: THREE_HOURS_MS,
+                });
+            }
             return res.status(200).json({
                 message: "Login successful",
                 user: {
