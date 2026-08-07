@@ -5,7 +5,6 @@ const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
 const emailService_1 = require("../utils/emailService");
 const subtaskTree_1 = require("../utils/subtaskTree");
-const hierarchyAuthority_1 = require("../utils/hierarchyAuthority");
 const simpleArray_1 = require("../utils/simpleArray");
 const notificationService_1 = require("../services/notificationService");
 // Falls back by NODE_ENV (not just a single hardcoded default) so a missing
@@ -95,33 +94,25 @@ class TaskController {
                 }
             }
             const actorId = req.user.id;
-            const actorRole = req.user.role;
             const organizationId = req.organization.id;
-            const isSuperAdmin = actorRole === enums_1.UserRole.SUPER_ADMIN;
             if (assignAll === "true" || assignAll === true) {
-                if (isSuperAdmin) {
-                    assignedUsers = (await prisma_1.prisma.organizationMembership.findMany({
-                        where: { organizationId },
-                        include: { user: true },
-                    })).map((m) => m.user);
-                }
-                else {
-                    // Non-root actors can only ever assign within their own reporting
-                    // line — "all" means "all of my descendants", not the organization.
-                    const descendantIds = await (0, hierarchyAuthority_1.getDescendantUserIds)(organizationId, actorId);
-                    const ids = Array.from(new Set([actorId, ...descendantIds]));
-                    assignedUsers = await prisma_1.prisma.user.findMany({ where: { id: { in: ids } } });
-                }
+                // Any organization member can be assigned by anyone else in the
+                // organization — assignment is no longer scoped by the hierarchy tree.
+                assignedUsers = (await prisma_1.prisma.organizationMembership.findMany({
+                    where: { organizationId },
+                    include: { user: true },
+                })).map((m) => m.user);
             }
             else if (parsedUserIds.length > 0) {
-                if (!isSuperAdmin) {
-                    const descendantIds = new Set(await (0, hierarchyAuthority_1.getDescendantUserIds)(organizationId, actorId));
-                    const invalidIds = parsedUserIds.filter((id) => id !== actorId && !descendantIds.has(id));
-                    if (invalidIds.length > 0) {
-                        return res.status(403).json({
-                            message: "You can only assign a task to yourself or someone below you in the hierarchy",
-                        });
-                    }
+                const memberIds = new Set((await prisma_1.prisma.organizationMembership.findMany({
+                    where: { organizationId },
+                    select: { userId: true },
+                })).map((m) => m.userId));
+                const invalidIds = parsedUserIds.filter((id) => !memberIds.has(id));
+                if (invalidIds.length > 0) {
+                    return res.status(403).json({
+                        message: "You can only assign a task to members of this organization",
+                    });
                 }
                 assignedUsers = await prisma_1.prisma.user.findMany({ where: { id: { in: parsedUserIds } } });
             }
@@ -490,6 +481,30 @@ EMS Management
             if (!task)
                 return res.status(404).json({ message: "Task not found" });
             const previousAssigneeIds = new Set(task.assignedUsers.map((a) => a.userId));
+            if (title && title !== task.title && task.createdById !== req.user.id) {
+                return res
+                    .status(403)
+                    .json({ message: "Only the person who created this task can rename it" });
+            }
+            if (description !== undefined &&
+                description !== task.description &&
+                task.createdById !== req.user.id) {
+                return res
+                    .status(403)
+                    .json({ message: "Only the person who created this task can edit its description" });
+            }
+            if (priority && priority !== task.priority && task.createdById !== req.user.id) {
+                return res
+                    .status(403)
+                    .json({ message: "Only the person who created this task can change its priority" });
+            }
+            if (dueDate &&
+                new Date(dueDate).getTime() !== task.dueDate.getTime() &&
+                task.createdById !== req.user.id) {
+                return res
+                    .status(403)
+                    .json({ message: "Only the person who created this task can change its due date" });
+            }
             const data = {};
             if (title)
                 data.title = title;
@@ -526,29 +541,26 @@ EMS Management
                 }
             }
             const actorId = req.user.id;
-            const actorRole = req.user.role;
             const organizationId = req.organization.id;
-            const isSuperAdmin = actorRole === enums_1.UserRole.SUPER_ADMIN;
             let newAssignedUserIds = null;
             if (assignAll === "true" || assignAll === true) {
-                if (isSuperAdmin) {
-                    newAssignedUserIds = (await prisma_1.prisma.organizationMembership.findMany({
-                        where: { organizationId },
-                        select: { userId: true },
-                    })).map((m) => m.userId);
-                }
-                else {
-                    const descendantIds = await (0, hierarchyAuthority_1.getDescendantUserIds)(organizationId, actorId);
-                    newAssignedUserIds = Array.from(new Set([actorId, ...descendantIds]));
-                }
+                // Any organization member can be assigned by anyone else in the
+                // organization — assignment is no longer scoped by the hierarchy tree.
+                newAssignedUserIds = (await prisma_1.prisma.organizationMembership.findMany({
+                    where: { organizationId },
+                    select: { userId: true },
+                })).map((m) => m.userId);
             }
             else if (userIds !== undefined && userIds !== null) {
-                if (!isSuperAdmin && parsedUserIds.length > 0) {
-                    const descendantIds = new Set(await (0, hierarchyAuthority_1.getDescendantUserIds)(organizationId, actorId));
-                    const invalidIds = parsedUserIds.filter((uid) => uid !== actorId && !descendantIds.has(uid));
+                if (parsedUserIds.length > 0) {
+                    const memberIds = new Set((await prisma_1.prisma.organizationMembership.findMany({
+                        where: { organizationId },
+                        select: { userId: true },
+                    })).map((m) => m.userId));
+                    const invalidIds = parsedUserIds.filter((uid) => !memberIds.has(uid));
                     if (invalidIds.length > 0) {
                         return res.status(403).json({
-                            message: "You can only assign a task to yourself or someone below you in the hierarchy",
+                            message: "You can only assign a task to members of this organization",
                         });
                     }
                 }
