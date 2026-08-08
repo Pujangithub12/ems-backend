@@ -1,8 +1,10 @@
-import { Response } from "express";
+import { Request, Response } from "express";
 import path from "path";
 import fs from "fs";
+import jwt from "jsonwebtoken";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
+import { JWT_SECRET } from "../config/jwt";
 import { AddProjectFolderDto, RenameProjectFileDto } from "../dto/project-file.dto";
 import { SetFileAccessDto, FileAccessGrantDto } from "../dto/file-access.dto";
 import type { FileAccessLevel, FileGranteeType } from "../types/domain";
@@ -12,6 +14,13 @@ import {
   grantCreatorAccess,
 } from "../utils/fileAccess";
 import { roleHasPermission } from "../utils/permissionService";
+
+/** Short-lived, single-file-scoped token purpose, distinct from session JWTs so one can never be used as the other. */
+const FILE_VIEW_TOKEN_PURPOSE = "file-view";
+interface FileViewTokenPayload {
+  purpose: typeof FILE_VIEW_TOKEN_PURPOSE;
+  fileId: number;
+}
 
 /** A file/folder is either project-scoped (Documents tab) or organization-scoped (sidebar Documents page, project null) — every ProjectFile row carries its own organizationId regardless, so this is just that column. */
 const ownerOrganizationId = (file: { organizationId: number | null }): number | undefined =>
@@ -200,7 +209,12 @@ export class ProjectFileController {
     }
   };
 
-  /** GET /projects/files/:fileId/download — streams the file back with its original name. */
+  /**
+   * GET /projects/files/:fileId/download — streams the file back with its
+   * original name, forcing a download. Requires "write" access — read-only
+   * grantees can view the file in-browser (see /view, /view-token) but can't
+   * pull a local copy of it.
+   */
   static downloadProjectFile = async (req: AuthRequest, res: Response) => {
     const { fileId } = req.params;
     try {
@@ -220,6 +234,9 @@ export class ProjectFileController {
       const level = await resolveAccessForFile(file, req.user!.id, req.user!.role);
       if (level === "none") {
         return res.status(404).json({ message: "File not found" });
+      }
+      if (level !== "write") {
+        return res.status(403).json({ message: "You don't have permission to download this file" });
       }
 
       const absolutePath = path.resolve("uploads", file.path);
@@ -252,18 +269,102 @@ export class ProjectFileController {
         return res.status(404).json({ message: "File not found" });
       }
 
-      const absolutePath = path.resolve("uploads", file.path);
-      const stat = fs.statSync(absolutePath);
-      res.setHeader("Content-Type", "application/octet-stream");
-      res.setHeader("Content-Disposition", `inline; filename="${file.name}"`);
-      res.setHeader("Content-Length", stat.size);
-      const stream = fs.createReadStream(absolutePath);
-      return stream.pipe(res);
+      return ProjectFileController.streamFileInline(res, file.path, file.name);
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
     }
   };
+
+  /**
+   * GET /projects/files/:fileId/view-token — authenticated. Issues a short-lived
+   * (5 min), single-file-scoped token that lets the *unauthenticated* view-public
+   * route below serve this one file without a session cookie. Needed so
+   * Microsoft's Office Online viewer (which has no way to send our auth cookie)
+   * can fetch Word/Excel/PowerPoint files to render an in-browser preview —
+   * the read-access check still happens here, before the link is ever issued.
+   */
+  static getFileViewToken = async (req: AuthRequest, res: Response) => {
+    const { fileId } = req.params;
+    try {
+      const file = await prisma.projectFile.findFirst({
+        where: { id: parseInt(fileId as string) },
+      });
+
+      if (
+        !file ||
+        file.isFolder ||
+        !file.path ||
+        ownerOrganizationId(file) !== req.organization!.id
+      ) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const level = await resolveAccessForFile(file, req.user!.id, req.user!.role);
+      if (level === "none") {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const payload: FileViewTokenPayload = { purpose: FILE_VIEW_TOKEN_PURPOSE, fileId: file.id };
+      const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "5m" });
+      const base = `${req.protocol}://${req.get("host")}`;
+      return res
+        .status(200)
+        .json({ url: `${base}/api/projects/files/${file.id}/view-public?token=${encodeURIComponent(token)}` });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /**
+   * GET /projects/files/:fileId/view-public — deliberately NOT behind authMiddleware
+   * (see routes.ts): external viewers like Microsoft's Office Online embed can't
+   * send our session cookie, so this route is gated entirely by the short-lived
+   * signed token from getFileViewToken above instead. The token is scoped to
+   * exactly one fileId and expires in 5 minutes, so a leaked/logged URL has a
+   * narrow, self-limiting blast radius.
+   */
+  static viewProjectFilePublic = async (req: Request, res: Response) => {
+    const { fileId } = req.params;
+    const { token } = req.query;
+    try {
+      if (typeof token !== "string") {
+        return res.status(401).json({ message: "Missing token" });
+      }
+      let payload: FileViewTokenPayload;
+      try {
+        payload = jwt.verify(token, JWT_SECRET) as FileViewTokenPayload;
+      } catch {
+        return res.status(401).json({ message: "Invalid or expired token" });
+      }
+      const parsedFileId = parseInt(fileId as string);
+      if (payload.purpose !== FILE_VIEW_TOKEN_PURPOSE || payload.fileId !== parsedFileId) {
+        return res.status(401).json({ message: "Invalid token" });
+      }
+
+      const file = await prisma.projectFile.findFirst({ where: { id: parsedFileId } });
+      if (!file || file.isFolder || !file.path) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      return ProjectFileController.streamFileInline(res, file.path, file.name);
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** Shared inline-stream body for viewProjectFile / viewProjectFilePublic. */
+  private static streamFileInline(res: Response, relativePath: string, fileName: string) {
+    const absolutePath = path.resolve("uploads", relativePath);
+    const stat = fs.statSync(absolutePath);
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    res.setHeader("Content-Length", stat.size);
+    const stream = fs.createReadStream(absolutePath);
+    return stream.pipe(res);
+  }
 
   /** PUT /projects/files/:fileId — rename a file or folder. */
   static renameProjectFile = async (req: AuthRequest, res: Response) => {

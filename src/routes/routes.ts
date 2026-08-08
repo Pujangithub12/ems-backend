@@ -265,6 +265,18 @@ router.get(
   authMiddleware,
   ProjectFileController.viewProjectFile,
 );
+router.get(
+  "/projects/files/:fileId/view-token",
+  authMiddleware,
+  ProjectFileController.getFileViewToken,
+);
+// Deliberately no authMiddleware: external embeds (Microsoft Office Online)
+// can't send our session cookie, so this route is gated by the short-lived
+// signed token from view-token above instead — see viewProjectFilePublic.
+router.get(
+  "/projects/files/:fileId/view-public",
+  ProjectFileController.viewProjectFilePublic,
+);
 router.put(
   "/projects/files/:fileId",
   authMiddleware,
