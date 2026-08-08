@@ -307,7 +307,21 @@ export class ProjectFileController {
 
       const payload: FileViewTokenPayload = { purpose: FILE_VIEW_TOKEN_PURPOSE, fileId: file.id };
       const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "5m" });
-      const base = `${req.protocol}://${req.get("host")}`;
+      // Prefer the raw X-Forwarded-Proto header (works regardless of whether
+      // trust-proxy's hop count matches this host's actual proxy chain), then
+      // fall back to forcing https in production — this deployment is always
+      // https-only there (see the CORS origin list in index.ts) — and only
+      // trust req.protocol as-is for local dev. A wrong scheme here means
+      // Microsoft's Office viewer can't fetch the file at all ("File not
+      // found... not publicly accessible") even though the token/permissions
+      // are fine, so this is worth being defensive about.
+      const forwardedProtoHeader = req.headers["x-forwarded-proto"];
+      const forwardedProto = Array.isArray(forwardedProtoHeader)
+        ? forwardedProtoHeader[0]
+        : forwardedProtoHeader;
+      const protoFromHeader = forwardedProto ? forwardedProto.split(",")[0]?.trim() : undefined;
+      const scheme = protoFromHeader || (process.env.NODE_ENV === "production" ? "https" : req.protocol);
+      const base = `${scheme}://${req.get("host")}`;
       return res
         .status(200)
         .json({ url: `${base}/api/projects/files/${file.id}/view-public?token=${encodeURIComponent(token)}` });

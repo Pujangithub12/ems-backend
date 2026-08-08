@@ -31,6 +31,14 @@ process.on("unhandledRejection", (reason, promise) => {
 });
 
 const app = express();
+// The Express process only ever speaks plain HTTP (see createServer below) —
+// in production it sits behind a reverse proxy/load balancer that terminates
+// TLS, so without this, req.protocol always reports "http" regardless of the
+// real public scheme. That broke signed file-view URLs (getFileViewToken
+// built an http:// link even though the site is https-only), which Microsoft's
+// Office Online viewer then couldn't fetch. Also fixes req.ip for the rate
+// limiters below, which otherwise all see the proxy's IP instead of the client's.
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 3000;
 const httpServer = createServer(app);
 initSocket(httpServer);
