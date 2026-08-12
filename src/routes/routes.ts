@@ -252,7 +252,7 @@ router.post(
   "/projects/:projectId/files",
   authMiddleware,
   requireCsrfHeader,
-  uploadProjectFile.single("file"),
+  ...uploadProjectFile,
   ProjectFileController.addProjectFile,
 );
 router.get(
@@ -265,17 +265,13 @@ router.get(
   authMiddleware,
   ProjectFileController.viewProjectFile,
 );
+// Issues a short-lived signed Supabase Storage URL for this file — used by
+// the Office-document preview flow (Microsoft's Office Online viewer fetches
+// that URL directly, so it needs no session cookie / no separate public route).
 router.get(
   "/projects/files/:fileId/view-token",
   authMiddleware,
   ProjectFileController.getFileViewToken,
-);
-// Deliberately no authMiddleware: external embeds (Microsoft Office Online)
-// can't send our session cookie, so this route is gated by the short-lived
-// signed token from view-token above instead — see viewProjectFilePublic.
-router.get(
-  "/projects/files/:fileId/view-public",
-  ProjectFileController.viewProjectFilePublic,
 );
 router.put(
   "/projects/files/:fileId",
@@ -382,7 +378,7 @@ router.post(
   authMiddleware,
   permissionMiddleware("projects.procurement"),
   requireCsrfHeader,
-  uploadPurchaseRequestFile.single("file"),
+  ...uploadPurchaseRequestFile,
   PurchaseRequestController.addAttachment,
 );
 router.delete(
@@ -409,7 +405,7 @@ router.post(
   authMiddleware,
   permissionMiddleware("projects.procurement"),
   requireCsrfHeader,
-  uploadPurchaseOrderFile.single("file"),
+  ...uploadPurchaseOrderFile,
   PurchaseOrderController.addAttachment,
 );
 router.delete(
@@ -450,7 +446,7 @@ router.post(
   authMiddleware,
   permissionMiddleware("projects.procurement"),
   requireCsrfHeader,
-  uploadProformaInvoiceFile.single("file"),
+  ...uploadProformaInvoiceFile,
   ProformaInvoiceController.addAttachment,
 );
 
@@ -496,7 +492,7 @@ router.post(
   authMiddleware,
   permissionMiddleware("projects.procurement"),
   requireCsrfHeader,
-  uploadCustomsFile.single("file"),
+  ...uploadCustomsFile,
   ShipmentController.addCustomsDocument,
 );
 router.delete(
@@ -530,7 +526,7 @@ router.post(
   authMiddleware,
   permissionMiddleware("projects.procurement"),
   requireCsrfHeader,
-  uploadGoodsReceiptFile.single("file"),
+  ...uploadGoodsReceiptFile,
   GoodsReceiptController.addPhoto,
 );
 router.delete(
@@ -636,7 +632,7 @@ router.post(
   authMiddleware,
   permissionMiddleware("projects.inventory"),
   requireCsrfHeader,
-  uploadInventoryFile.single("file"),
+  ...uploadInventoryFile,
   InventoryController.addAttachment,
 );
 router.delete(
@@ -740,7 +736,7 @@ router.post(
   "/workspace/files",
   authMiddleware,
   requireCsrfHeader,
-  uploadOrganizationFile.single("file"),
+  ...uploadOrganizationFile,
   OrganizationFileController.addOrganizationFile,
 );
 
@@ -756,7 +752,7 @@ router.post(
   authMiddleware,
   // roleMiddleware([UserRole.ADMIN]),
   requireCsrfHeader,
-  upload.array("files"),
+  ...upload,
   TaskController.createTask,
 );
 router.get("/tasks", authMiddleware, TaskController.getAllTasks);
@@ -772,7 +768,7 @@ router.put(
   authMiddleware,
   permissionMiddleware("tasks.edit"),
   requireCsrfHeader,
-  upload.array("files"),
+  ...upload,
   TaskController.updateTask,
 );
 router.put(

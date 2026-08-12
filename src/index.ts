@@ -16,6 +16,7 @@ import { backfillOrganization } from "./utils/backfill-organization";
 import { seedRolePermissions } from "./utils/permissionService";
 import { authMiddleware } from "./middlewares/auth";
 import { verifyUploadAccess } from "./middlewares/uploadAccess";
+import { downloadFileFromStorage } from "./config/supabaseStorage";
 import { initSocket } from "./realtime/socket";
 
 dotenv.config();
@@ -82,16 +83,27 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files from uploads directory — gated behind auth + an
-// organization-ownership check (see uploadAccess.ts) so attachments from one
-// organization can't be read via URL by a user of another, or by anyone
-// unauthenticated at all.
-app.use(
-  "/uploads",
-  authMiddleware,
-  verifyUploadAccess,
-  express.static(path.join(__dirname, "../uploads")),
-);
+// Serves task attachments, purchase request/order files, proforma invoices,
+// customs docs, goods receipts, and inventory attachments — gated behind auth
+// + an organization-ownership check (see uploadAccess.ts) so attachments from
+// one organization can't be read via URL by a user of another, or by anyone
+// unauthenticated at all. Files themselves live in Supabase Storage (see
+// config/supabaseStorage.ts) under the same "<category>/<id>/<filename>" key
+// this route's path always used locally — only the backing store changed,
+// not the URL scheme, so nothing downstream needed to change.
+app.use("/uploads", authMiddleware, verifyUploadAccess, async (req, res) => {
+  const key = req.path.replace(/^\/+/, "");
+  try {
+    const buffer = await downloadFileFromStorage(key);
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${path.basename(key)}"`);
+    res.setHeader("Content-Length", buffer.length);
+    res.send(buffer);
+  } catch (error) {
+    console.error(`Failed to serve upload "${key}":`, error);
+    res.status(404).json({ message: "File not found" });
+  }
+});
 
 app.use("/api", routes);
 

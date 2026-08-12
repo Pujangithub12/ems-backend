@@ -1,11 +1,11 @@
 import { Response } from "express";
 import path from "path";
-import fs from "fs";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { AddOrganizationFolderDto } from "../dto/organization-file.dto";
 import { filterAndAnnotate, resolveAccessForFile, grantCreatorAccess } from "../utils/fileAccess";
 import { roleHasPermission } from "../utils/permissionService";
+import { deleteFileFromStorage } from "../config/supabaseStorage";
 
 /** Every ProjectFile row carries its own organizationId regardless of whether it's project-scoped or organization-root — just that column. */
 const ownerOrganizationId = (file: { organizationId: number | null }): number | undefined =>
@@ -170,12 +170,13 @@ export class OrganizationFileController {
       return res.status(400).json({ message: "A file is required" });
     }
 
+    const relativePath = path
+      .relative("uploads", uploadedFile.path)
+      .split(path.sep)
+      .join("/");
+
     try {
       const uploadedBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
-      const relativePath = path
-        .relative("uploads", uploadedFile.path)
-        .split(path.sep)
-        .join("/");
       const ext = path.extname(uploadedFile.originalname).replace(".", "").toLowerCase();
 
       const fileData: any = {
@@ -192,19 +193,19 @@ export class OrganizationFileController {
         const parsedParentId = parseInt(parentId as string);
         const parentFile = await prisma.projectFile.findFirst({ where: { id: parsedParentId } });
         if (!parentFile || ownerOrganizationId(parentFile) !== req.organization!.id) {
-          fs.unlink(uploadedFile.path, () => {});
+          deleteFileFromStorage(relativePath);
           return res.status(404).json({ message: "Parent folder not found" });
         }
         const parentLevel = await resolveAccessForFile(parentFile, req.user!.id, req.user!.role);
         if (parentLevel !== "write") {
-          fs.unlink(uploadedFile.path, () => {});
+          deleteFileFromStorage(relativePath);
           return res.status(403).json({ message: "You don't have permission to add items to this folder" });
         }
         fileData.parentId = parsedParentId;
       } else {
         const allowed = await roleHasPermission(req.user!.role, "projects.documents");
         if (!allowed) {
-          fs.unlink(uploadedFile.path, () => {});
+          deleteFileFromStorage(relativePath);
           return res.status(403).json({ message: "You don't have permission to manage documents" });
         }
       }
@@ -213,7 +214,7 @@ export class OrganizationFileController {
       await grantCreatorAccess(file, req.user!.id, req.user!.role, req.organization!.id);
       return res.status(201).json({ message: "File uploaded", file });
     } catch (error) {
-      fs.unlink(uploadedFile.path, () => {});
+      deleteFileFromStorage(relativePath);
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
     }
