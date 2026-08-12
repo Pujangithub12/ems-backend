@@ -1,7 +1,6 @@
 import { Response } from "express";
-import path from "path";
-import fs from "fs";
 import { prisma } from "../config/prisma";
+import { deleteFilesFromStorage } from "../config/supabaseStorage";
 import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import {
@@ -220,22 +219,25 @@ export class OrganizationController {
           .json({ message: "Organization name confirmation does not match" });
       }
 
-      // Clean up files on disk that the DB cascade won't touch.
+      // Clean up storage objects that the DB cascade won't touch.
       const projectFiles = await prisma.projectFile.findMany({
         where: { organizationId, isFolder: false },
       });
-      projectFiles.forEach((f) => {
-        if (f.path) fs.unlink(path.resolve("uploads", f.path), () => {});
-      });
+      const projectFileKeys = projectFiles
+        .map((f) => f.path)
+        .filter((p): p is string => !!p);
 
       const tasks = await prisma.task.findMany({
         where: { organizationId },
       });
-      tasks.forEach((t) => {
-        toSimpleArray(t.files).forEach((filePath) =>
-          fs.unlink(path.resolve(filePath), () => {}),
-        );
-      });
+      // Task attachment paths are stored with the "uploads/" prefix still
+      // attached (see TaskController) — strip it to get the storage key,
+      // matching every other file type's key format.
+      const taskFileKeys = tasks.flatMap((t) =>
+        toSimpleArray(t.files).map((filePath) => filePath.replace(/^uploads\//, "")),
+      );
+
+      deleteFilesFromStorage([...projectFileKeys, ...taskFileKeys]);
 
       // The organization FK on Project/Task/Announcement/LeaveRequest/MyTask/
       // CalendarEvent/HierarchyNode/OrganizationMembership all carry ON

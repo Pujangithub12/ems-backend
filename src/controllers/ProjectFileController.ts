@@ -1,10 +1,7 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import path from "path";
-import fs from "fs";
-import jwt from "jsonwebtoken";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
-import { JWT_SECRET } from "../config/jwt";
 import { AddProjectFolderDto, RenameProjectFileDto } from "../dto/project-file.dto";
 import { SetFileAccessDto, FileAccessGrantDto } from "../dto/file-access.dto";
 import type { FileAccessLevel, FileGranteeType } from "../types/domain";
@@ -14,13 +11,12 @@ import {
   grantCreatorAccess,
 } from "../utils/fileAccess";
 import { roleHasPermission } from "../utils/permissionService";
-
-/** Short-lived, single-file-scoped token purpose, distinct from session JWTs so one can never be used as the other. */
-const FILE_VIEW_TOKEN_PURPOSE = "file-view";
-interface FileViewTokenPayload {
-  purpose: typeof FILE_VIEW_TOKEN_PURPOSE;
-  fileId: number;
-}
+import {
+  downloadFileFromStorage,
+  deleteFileFromStorage,
+  deleteFilesFromStorage,
+  getSignedStorageUrl,
+} from "../config/supabaseStorage";
 
 /** A file/folder is either project-scoped (Documents tab) or organization-scoped (sidebar Documents page, project null) — every ProjectFile row carries its own organizationId regardless, so this is just that column. */
 const ownerOrganizationId = (file: { organizationId: number | null }): number | undefined =>
@@ -147,6 +143,14 @@ export class ProjectFileController {
       return res.status(400).json({ message: "A file is required" });
     }
 
+    // Computed up front (used by every early-return cleanup below) — this is
+    // the Supabase Storage key the upload middleware already wrote the bytes
+    // to, stripped of the "uploads/" prefix that mimics the old disk-path shape.
+    const relativePath = path
+      .relative("uploads", uploadedFile.path)
+      .split(path.sep)
+      .join("/");
+
     try {
       const project = await prisma.project.findFirst({
         where: {
@@ -156,15 +160,11 @@ export class ProjectFileController {
       });
       if (!project) {
         // Clean up the orphaned upload if the project doesn't exist/isn't in this organization
-        fs.unlink(uploadedFile.path, () => {});
+        deleteFileFromStorage(relativePath);
         return res.status(404).json({ message: "Project not found" });
       }
 
       const uploadedBy = await prisma.user.findUnique({ where: { id: req.user!.id } });
-      const relativePath = path
-        .relative("uploads", uploadedFile.path)
-        .split(path.sep)
-        .join("/");
       const ext = path.extname(uploadedFile.originalname).replace(".", "").toLowerCase();
 
       const fileData: any = {
@@ -182,19 +182,19 @@ export class ProjectFileController {
         const parsedParentId = parseInt(parentId as string);
         const parentFile = await prisma.projectFile.findFirst({ where: { id: parsedParentId } });
         if (!parentFile || ownerOrganizationId(parentFile) !== req.organization!.id) {
-          fs.unlink(uploadedFile.path, () => {});
+          deleteFileFromStorage(relativePath);
           return res.status(404).json({ message: "Parent folder not found" });
         }
         const parentLevel = await resolveAccessForFile(parentFile, req.user!.id, req.user!.role);
         if (parentLevel !== "write") {
-          fs.unlink(uploadedFile.path, () => {});
+          deleteFileFromStorage(relativePath);
           return res.status(403).json({ message: "You don't have permission to add items to this folder" });
         }
         fileData.parentId = parsedParentId;
       } else {
         const allowed = await roleHasPermission(req.user!.role, "projects.documents");
         if (!allowed) {
-          fs.unlink(uploadedFile.path, () => {});
+          deleteFileFromStorage(relativePath);
           return res.status(403).json({ message: "You don't have permission to manage documents" });
         }
       }
@@ -203,7 +203,7 @@ export class ProjectFileController {
       await grantCreatorAccess(file, req.user!.id, req.user!.role, req.organization!.id);
       return res.status(201).json({ message: "File uploaded", file });
     } catch (error) {
-      fs.unlink(uploadedFile.path, () => {});
+      deleteFileFromStorage(relativePath);
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
     }
@@ -239,8 +239,7 @@ export class ProjectFileController {
         return res.status(403).json({ message: "You don't have permission to download this file" });
       }
 
-      const absolutePath = path.resolve("uploads", file.path);
-      return res.download(absolutePath, file.name);
+      return ProjectFileController.streamFileToResponse(res, file.path, file.name, "attachment");
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -269,7 +268,7 @@ export class ProjectFileController {
         return res.status(404).json({ message: "File not found" });
       }
 
-      return ProjectFileController.streamFileInline(res, file.path, file.name);
+      return ProjectFileController.streamFileToResponse(res, file.path, file.name, "inline");
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -277,12 +276,11 @@ export class ProjectFileController {
   };
 
   /**
-   * GET /projects/files/:fileId/view-token — authenticated. Issues a short-lived
-   * (5 min), single-file-scoped token that lets the *unauthenticated* view-public
-   * route below serve this one file without a session cookie. Needed so
-   * Microsoft's Office Online viewer (which has no way to send our auth cookie)
-   * can fetch Word/Excel/PowerPoint files to render an in-browser preview —
-   * the read-access check still happens here, before the link is ever issued.
+   * GET /projects/files/:fileId/view-token — issues a short-lived (5 min)
+   * signed Supabase Storage URL for this one file. Needed so Microsoft's
+   * Office Online viewer (which has no way to send our auth cookie) can fetch
+   * Word/Excel/PowerPoint files to render an in-browser preview — the
+   * read-access check still happens here, before the link is ever issued.
    */
   static getFileViewToken = async (req: AuthRequest, res: Response) => {
     const { fileId } = req.params;
@@ -305,79 +303,32 @@ export class ProjectFileController {
         return res.status(404).json({ message: "File not found" });
       }
 
-      const payload: FileViewTokenPayload = { purpose: FILE_VIEW_TOKEN_PURPOSE, fileId: file.id };
-      const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "5m" });
-      // Prefer the raw X-Forwarded-Proto header (works regardless of whether
-      // trust-proxy's hop count matches this host's actual proxy chain), then
-      // fall back to forcing https in production — this deployment is always
-      // https-only there (see the CORS origin list in index.ts) — and only
-      // trust req.protocol as-is for local dev. A wrong scheme here means
-      // Microsoft's Office viewer can't fetch the file at all ("File not
-      // found... not publicly accessible") even though the token/permissions
-      // are fine, so this is worth being defensive about.
-      const forwardedProtoHeader = req.headers["x-forwarded-proto"];
-      const forwardedProto = Array.isArray(forwardedProtoHeader)
-        ? forwardedProtoHeader[0]
-        : forwardedProtoHeader;
-      const protoFromHeader = forwardedProto ? forwardedProto.split(",")[0]?.trim() : undefined;
-      const scheme = protoFromHeader || (process.env.NODE_ENV === "production" ? "https" : req.protocol);
-      const base = `${scheme}://${req.get("host")}`;
-      return res
-        .status(200)
-        .json({ url: `${base}/api/projects/files/${file.id}/view-public?token=${encodeURIComponent(token)}` });
+      const url = await getSignedStorageUrl(file.path, 5 * 60);
+      return res.status(200).json({ url });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /**
-   * GET /projects/files/:fileId/view-public — deliberately NOT behind authMiddleware
-   * (see routes.ts): external viewers like Microsoft's Office Online embed can't
-   * send our session cookie, so this route is gated entirely by the short-lived
-   * signed token from getFileViewToken above instead. The token is scoped to
-   * exactly one fileId and expires in 5 minutes, so a leaked/logged URL has a
-   * narrow, self-limiting blast radius.
-   */
-  static viewProjectFilePublic = async (req: Request, res: Response) => {
-    const { fileId } = req.params;
-    const { token } = req.query;
+  /** Shared download body for viewProjectFile / downloadProjectFile — same bytes, different Content-Disposition. */
+  private static async streamFileToResponse(
+    res: Response,
+    key: string,
+    fileName: string,
+    disposition: "inline" | "attachment",
+  ) {
+    let buffer: Buffer;
     try {
-      if (typeof token !== "string") {
-        return res.status(401).json({ message: "Missing token" });
-      }
-      let payload: FileViewTokenPayload;
-      try {
-        payload = jwt.verify(token, JWT_SECRET) as FileViewTokenPayload;
-      } catch {
-        return res.status(401).json({ message: "Invalid or expired token" });
-      }
-      const parsedFileId = parseInt(fileId as string);
-      if (payload.purpose !== FILE_VIEW_TOKEN_PURPOSE || payload.fileId !== parsedFileId) {
-        return res.status(401).json({ message: "Invalid token" });
-      }
-
-      const file = await prisma.projectFile.findFirst({ where: { id: parsedFileId } });
-      if (!file || file.isFolder || !file.path) {
-        return res.status(404).json({ message: "File not found" });
-      }
-
-      return ProjectFileController.streamFileInline(res, file.path, file.name);
+      buffer = await downloadFileFromStorage(key);
     } catch (error) {
       console.error(error);
-      return res.status(500).json({ message: "Internal server error" });
+      return res.status(404).json({ message: "File not found" });
     }
-  };
-
-  /** Shared inline-stream body for viewProjectFile / viewProjectFilePublic. */
-  private static streamFileInline(res: Response, relativePath: string, fileName: string) {
-    const absolutePath = path.resolve("uploads", relativePath);
-    const stat = fs.statSync(absolutePath);
     res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
-    res.setHeader("Content-Length", stat.size);
-    const stream = fs.createReadStream(absolutePath);
-    return stream.pipe(res);
+    res.setHeader("Content-Disposition", `${disposition}; filename="${fileName}"`);
+    res.setHeader("Content-Length", buffer.length);
+    return res.send(buffer);
   }
 
   /** PUT /projects/files/:fileId — rename a file or folder. */
@@ -470,12 +421,10 @@ export class ProjectFileController {
       };
       collect(file.id);
 
-      for (const node of toDelete) {
-        if (!node.isFolder && node.path) {
-          const absolutePath = path.resolve("uploads", node.path);
-          fs.unlink(absolutePath, () => {});
-        }
-      }
+      const storageKeys = toDelete
+        .filter((node) => !node.isFolder && node.path)
+        .map((node) => node.path as string);
+      deleteFilesFromStorage(storageKeys);
 
       await prisma.projectFile.deleteMany({ where: { id: { in: toDelete.map((n) => n.id) } } });
       return res.status(200).json({ message: "Deleted" });

@@ -1,11 +1,13 @@
 import multer from "multer";
 import path from "path";
-import fs from "fs";
+import { Response, NextFunction, RequestHandler } from "express";
+import { AuthRequest } from "./auth";
+import { uploadFileToStorage } from "../config/supabaseStorage";
 
 // Blocks upload of file types the browser would treat as executable/active
-// content if served back later (e.g. via the /uploads static route) — this
-// is what stands between an uploaded attachment and stored XSS, since none
-// of the upload routes otherwise restrict file type today.
+// content if served back later — this is what stands between an uploaded
+// attachment and stored XSS, since none of the upload routes otherwise
+// restrict file type today.
 const BLOCKED_EXTENSIONS = new Set([
   ".html", ".htm", ".xhtml", ".shtml", ".svg", ".svgz",
   ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
@@ -25,188 +27,148 @@ const fileFilter: NonNullable<multer.Options["fileFilter"]> = (_req, file, cb) =
 };
 
 /** Every per-resource upload destination below joins a route/organization id
- * straight into a filesystem path (`uploads/<segment>/<id>/`). Without this
- * check, an id containing ".." (or anything non-numeric) would let
- * `path.join` resolve outside the intended `uploads/<segment>/` directory —
- * a path-traversal write. Every id used in a destination callback must be
- * validated through this first. */
+ * straight into a storage key (`<segment>/<id>/<filename>`). Without this
+ * check, an id containing ".." (or anything non-numeric) would let a
+ * malformed key escape the intended `<segment>/` prefix — a path-traversal
+ * write. Every id used to build a key must be validated through this first. */
 const parsePositiveIntParam = (value: unknown): number | null => {
   if (typeof value !== "string" && typeof value !== "number") return null;
   const n = Number(value);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// Ensure upload directory exists
-const uploadDir = "uploads/tasks";
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(
-      null,
-      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname),
-    );
-  },
-});
-
-export const upload = multer({
-  storage: storage,
-  fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
-});
-
-// Project documents (Documents tab) stored per-project under uploads/projects/<projectId>/
 const sanitizeFilename = (originalname: string): string => {
   const base = path.basename(originalname).replace(/[^a-zA-Z0-9.\-_ ]/g, "_");
   return base || "file";
 };
 
-const projectFileStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const projectId = parsePositiveIntParam(req.params.projectId);
-    if (projectId == null) {
-      cb(new Error("Invalid project id."), "");
-      return;
+/**
+ * Uploads one already-parsed (in-memory) multer file to Supabase Storage
+ * under `<dir>/<uniqueSuffix>-<sanitizedName>`, then mutates the file object
+ * to look like a diskStorage result (`path`/`destination`/`filename` set to
+ * that same key, prefixed with "uploads/") — every controller that reads
+ * `file.path` and strips the "uploads/" prefix before saving it to the DB
+ * keeps working completely unchanged, now storing a Storage key instead of a
+ * local disk path.
+ */
+async function persistFileToStorage(file: Express.Multer.File, dir: string): Promise<void> {
+  const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+  const filename = `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`;
+  const key = `${dir}/${filename}`;
+  await uploadFileToStorage(key, file.buffer, file.mimetype);
+  file.path = `uploads/${key}`;
+  file.destination = `uploads/${dir}`;
+  file.filename = filename;
+}
+
+interface UploadConfig {
+  field: string;
+  mode: "single" | "array";
+  fileSizeLimit: number;
+  /** Returns the storage directory (e.g. "projects/10"), or null to reject the request with 400. */
+  resolveDir: (req: AuthRequest) => number | string | null;
+}
+
+/** Builds a [multer-parse, persist-to-storage] middleware pair standing in for what used to be a single multer(diskStorage) instance. */
+function makeUploadMiddleware(config: UploadConfig): RequestHandler[] {
+  const parser = multer({
+    storage: multer.memoryStorage(),
+    fileFilter,
+    limits: { fileSize: config.fileSizeLimit },
+  });
+  const parseStep = config.mode === "single" ? parser.single(config.field) : parser.array(config.field);
+
+  const persistStep = async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const resolved = config.resolveDir(req);
+      if (resolved == null) {
+        return res.status(400).json({ message: "Invalid id." });
+      }
+      const dir = String(resolved);
+
+      if (config.mode === "single") {
+        const file = req.file;
+        if (file) await persistFileToStorage(file, dir);
+      } else {
+        const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+        await Promise.all(files.map((f) => persistFileToStorage(f, dir)));
+      }
+      next();
+    } catch (error) {
+      console.error("Upload storage error:", error);
+      res.status(500).json({ message: "Failed to store uploaded file." });
     }
-    const dir = path.join("uploads", "projects", String(projectId));
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
-  },
+  };
+
+  return [parseStep, persistStep];
+}
+
+// Task attachments, uploads/tasks/ — no id-based subdirectory (kept flat, matching the pre-migration layout).
+export const upload = makeUploadMiddleware({
+  field: "files",
+  mode: "array",
+  fileSizeLimit: 10 * 1024 * 1024, // 10MB limit
+  resolveDir: () => "tasks",
 });
 
-export const uploadProjectFile = multer({
-  storage: projectFileStorage,
-  fileFilter,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25MB limit
+// Project documents (Documents tab) stored per-project under uploads/projects/<projectId>/
+export const uploadProjectFile = makeUploadMiddleware({
+  field: "file",
+  mode: "single",
+  fileSizeLimit: 25 * 1024 * 1024, // 25MB limit
+  resolveDir: (req) => {
+    const projectId = parsePositiveIntParam(req.params.projectId);
+    return projectId == null ? null : `projects/${projectId}`;
   },
 });
 
 // Organization-level documents (sidebar Documents page) stored under
-// uploads/organizations/<organizationId>/ — req.organization is set by authMiddleware,
+// uploads/workspaces/<organizationId>/ — req.organization is set by authMiddleware,
 // which always runs before this in the route chain.
-const organizationFileStorage = multer.diskStorage({
-  destination: (req: any, file, cb) => {
+export const uploadOrganizationFile = makeUploadMiddleware({
+  field: "file",
+  mode: "single",
+  fileSizeLimit: 25 * 1024 * 1024, // 25MB limit
+  resolveDir: (req) => {
     const organizationId = parsePositiveIntParam(req.organization?.id);
-    if (organizationId == null) {
-      cb(new Error("Invalid organization id."), "");
-      return;
-    }
-    const dir = path.join("uploads", "workspaces", String(organizationId));
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
+    return organizationId == null ? null : `workspaces/${organizationId}`;
   },
 });
 
-export const uploadOrganizationFile = multer({
-  storage: organizationFileStorage,
-  fileFilter,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25MB limit
-  },
-});
-
-// Inventory item attachments (drawer Documents section), stored under
-// uploads/inventory/<itemId>/
-const inventoryFileStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
+// Inventory item attachments (drawer Documents section), stored under uploads/inventory/<itemId>/
+export const uploadInventoryFile = makeUploadMiddleware({
+  field: "file",
+  mode: "single",
+  fileSizeLimit: 25 * 1024 * 1024, // 25MB limit
+  resolveDir: (req) => {
     const itemId = parsePositiveIntParam(req.params.itemId);
-    if (itemId == null) {
-      cb(new Error("Invalid item id."), "");
-      return;
-    }
-    const dir = path.join("uploads", "inventory", String(itemId));
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
+    return itemId == null ? null : `inventory/${itemId}`;
   },
 });
 
-export const uploadInventoryFile = multer({
-  storage: inventoryFileStorage,
-  fileFilter,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25MB limit
-  },
-});
-
-// Procurement item attachments (drawer Documents section), stored under
-// uploads/procurement/<itemId>/
-const procurementFileStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
+// Procurement item attachments (drawer Documents section), stored under uploads/procurement/<itemId>/
+export const uploadProcurementFile = makeUploadMiddleware({
+  field: "file",
+  mode: "single",
+  fileSizeLimit: 25 * 1024 * 1024, // 25MB limit
+  resolveDir: (req) => {
     const itemId = parsePositiveIntParam(req.params.itemId);
-    if (itemId == null) {
-      cb(new Error("Invalid item id."), "");
-      return;
-    }
-    const dir = path.join("uploads", "procurement", String(itemId));
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
-  },
-});
-
-export const uploadProcurementFile = multer({
-  storage: procurementFileStorage,
-  fileFilter,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25MB limit
+    return itemId == null ? null : `procurement/${itemId}`;
   },
 });
 
 /** Factory for the procurement-pipeline-v2 upload configs below — all follow the same
- * uploads/<segment>/<:itemId param>/ shape as uploadProcurementFile/uploadInventoryFile above. */
-const makeOwnedResourceUpload = (segment: string) => {
-  const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
+ * <segment>/<:itemId param>/ shape as uploadProcurementFile/uploadInventoryFile above. */
+const makeOwnedResourceUpload = (segment: string): RequestHandler[] =>
+  makeUploadMiddleware({
+    field: "file",
+    mode: "single",
+    fileSizeLimit: 25 * 1024 * 1024,
+    resolveDir: (req) => {
       const itemId = parsePositiveIntParam(req.params.itemId);
-      if (itemId == null) {
-        cb(new Error("Invalid item id."), "");
-        return;
-      }
-      const dir = path.join("uploads", segment, String(itemId));
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
+      return itemId == null ? null : `${segment}/${itemId}`;
     },
   });
-  return multer({ storage, fileFilter, limits: { fileSize: 25 * 1024 * 1024 } });
-};
 
 // Purchase request attachments (quotations/comparison sheets/general), uploads/purchase-requests/<purchaseRequestId>/
 export const uploadPurchaseRequestFile = makeOwnedResourceUpload("purchase-requests");
