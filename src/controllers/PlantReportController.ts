@@ -2,7 +2,7 @@ import { Response } from "express";
 import { prisma } from "../config/prisma";
 import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
-import { SavePlantReportDto } from "../dto/plant-report.dto";
+import { SavePlantReportDto, PlantReportFieldDataType } from "../dto/plant-report.dto";
 
 const toNum = (v: unknown): number | null =>
   v === null || v === undefined ? null : Number(v);
@@ -56,6 +56,7 @@ const shapeReport = (report: any) => {
     burnerStatus: report.burnerStatus,
     burnerHours: toNum(report.burnerHours),
     shutdownReason: report.shutdownReason,
+    customValues: report.customValues ?? {},
     staff: Array.isArray(report.staff) ? report.staff.map((s: any) => s.user) : [],
     staffCount: Array.isArray(report.staff) ? report.staff.length : 0,
     project: report.project,
@@ -99,6 +100,52 @@ async function resolveProjectId(
   const project = await prisma.project.findFirst({ where: { id: projectId, organizationId } });
   if (!project) throw new Error("Project not found in this organization");
   return projectId;
+}
+
+/** Coerces one raw custom-field value to match its field's declared
+ * dataType — an empty/unparseable value becomes null rather than rejecting
+ * the whole save, since these are optional extra columns, not required
+ * plant readings. */
+function coerceCustomValue(
+  value: unknown,
+  dataType: PlantReportFieldDataType,
+): string | number | boolean | null {
+  if (value === null || value === undefined || value === "") return null;
+  switch (dataType) {
+    case "number": {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    case "boolean":
+      return Boolean(value);
+    case "date": {
+      const s = String(value);
+      return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+    }
+    case "text":
+    default:
+      return String(value).trim() || null;
+  }
+}
+
+/** Validates+coerces a report's customValues payload against this
+ * organization's defined custom fields: drops any key that isn't a real
+ * field id for this organization (stale field picked up from a stale form,
+ * or a tampered request), and coerces the rest per-field to match its
+ * dataType. */
+async function coerceCustomValues(
+  organizationId: number,
+  raw: Record<string, unknown> | undefined,
+): Promise<Record<string, string | number | boolean | null>> {
+  if (!raw || typeof raw !== "object") return {};
+  const fields = await prisma.plantReportCustomField.findMany({ where: { organizationId } });
+  const result: Record<string, string | number | boolean | null> = {};
+  for (const field of fields) {
+    const key = String(field.id);
+    if (!(key in raw)) continue;
+    result[key] = coerceCustomValue(raw[key], field.dataType as PlantReportFieldDataType);
+  }
+  return result;
 }
 
 /** Whether `actor` may edit/delete a report they didn't create themselves. */
@@ -246,6 +293,7 @@ export class PlantReportController {
       }
       const pelletStockOpening = await previousClosingBalance(organizationId, projectId, date);
       const staffUserIds = Array.isArray(body.staffUserIds) ? [...new Set(body.staffUserIds)] : [];
+      const customValues = await coerceCustomValues(organizationId, body.customValues);
 
       const created = await prisma.$transaction(async (tx) => {
         const report = await tx.plantDailyReport.create({
@@ -267,6 +315,7 @@ export class PlantReportController {
             burnerStatus: body.burnerStatus ?? null,
             burnerHours: body.burnerHours ?? null,
             shutdownReason: body.shutdownReason?.trim() || null,
+            customValues,
             createdById: req.user!.id,
           },
         });
@@ -335,6 +384,7 @@ export class PlantReportController {
       }
 
       const staffUserIds = Array.isArray(body.staffUserIds) ? [...new Set(body.staffUserIds)] : [];
+      const customValues = await coerceCustomValues(organizationId, body.customValues);
 
       const updated = await prisma.$transaction(async (tx) => {
         await tx.plantDailyReport.update({
@@ -353,6 +403,7 @@ export class PlantReportController {
             burnerStatus: body.burnerStatus ?? null,
             burnerHours: body.burnerHours ?? null,
             shutdownReason: body.shutdownReason?.trim() || null,
+            customValues,
           },
         });
         await tx.plantReportStaff.deleteMany({ where: { reportId } });

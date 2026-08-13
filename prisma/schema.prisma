@@ -85,33 +85,34 @@ model Organization {
   email       String?  @db.VarChar
   website     String?  @db.VarChar
 
-  activities            Activity[]
-  announcements         Announcement[]
-  calendarEvents        CalendarEvent[]
-  catalogItems          CatalogItem[]
-  expenseRequests       ExpenseRequest[]
-  fileAccess            FileAccess[]
-  hierarchyNodes        HierarchyNode[]
-  inventoryItems        InventoryItem[]
-  inventoryTransactions InventoryTransaction[]
-  leaveRequests         LeaveRequest[]
-  monthlyPerformance    MonthlyPerformance[]
-  myTasks               MyTask[]
-  procurementItems      ProcurementItem[]
-  purchaseRequests      PurchaseRequest[]
-  purchaseOrders        PurchaseOrder[]
-  projects              Project[]
-  projectFiles          ProjectFile[]
-  projectHeadings       ProjectHeading[]
-  reportActivities      ReportActivity[]
-  reportComments        ReportComment[]
-  siteVisitRequests     SiteVisitRequest[]
-  tasks                 Task[]
-  vendors               Vendor[]
-  warehouses            Warehouse[]
-  memberships           OrganizationMembership[]
-  notifications         Notification[]
-  plantDailyReports     PlantDailyReport[]
+  activities              Activity[]
+  announcements           Announcement[]
+  calendarEvents          CalendarEvent[]
+  catalogItems            CatalogItem[]
+  expenseRequests         ExpenseRequest[]
+  fileAccess              FileAccess[]
+  hierarchyNodes          HierarchyNode[]
+  inventoryItems          InventoryItem[]
+  inventoryTransactions   InventoryTransaction[]
+  leaveRequests           LeaveRequest[]
+  monthlyPerformance      MonthlyPerformance[]
+  myTasks                 MyTask[]
+  procurementItems        ProcurementItem[]
+  purchaseRequests        PurchaseRequest[]
+  purchaseOrders          PurchaseOrder[]
+  projects                Project[]
+  projectFiles            ProjectFile[]
+  projectHeadings         ProjectHeading[]
+  reportActivities        ReportActivity[]
+  reportComments          ReportComment[]
+  siteVisitRequests       SiteVisitRequest[]
+  tasks                   Task[]
+  vendors                 Vendor[]
+  warehouses              Warehouse[]
+  memberships             OrganizationMembership[]
+  notifications           Notification[]
+  plantDailyReports       PlantDailyReport[]
+  plantReportCustomFields PlantReportCustomField[]
 
   @@map("workspace")
 }
@@ -507,6 +508,13 @@ model PlantDailyReport {
   /// is "stopped" — see PlantReportController.
   shutdownReason String?
 
+  /// Values for this organization's custom fields (see PlantReportCustomField),
+  /// keyed by field id (as a JSON string key) -> string | number | boolean | null.
+  /// Stored loosely rather than in a normalized value table since fields are
+  /// low-cardinality and org-defined; a deleted field just leaves an orphaned,
+  /// ignored key behind instead of requiring a cleanup pass.
+  customValues Json?
+
   createdById Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -533,6 +541,26 @@ model PlantReportStaff {
 
   @@unique([reportId, userId])
   @@map("plant_report_staff")
+}
+
+/// An org-defined extra column for the daily plant report form — e.g. "Ash
+/// Removed (kg)" as a number field, or "Inspector Notes" as text. Values are
+/// stored per-report in PlantDailyReport.customValues, keyed by this field's
+/// id; dataType is enforced in the application layer (PlantReportController),
+/// not as a Postgres enum, so new types can be added without a migration.
+model PlantReportCustomField {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  name           String   @db.VarChar
+  /// "text" | "number" | "date" | "boolean"
+  dataType       String   @db.VarChar
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@map("plant_report_custom_field")
 }
 
 model ProcurementAttachment {

@@ -5,6 +5,7 @@ import { UserController } from "../controllers/UserController";
 import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { PlantReportController } from "../controllers/PlantReportController";
+import { PlantReportFieldController } from "../controllers/PlantReportFieldController";
 import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
@@ -157,6 +158,29 @@ router.get("/plant-reports/prefill", authMiddleware, PlantReportController.getPr
 router.post("/plant-reports", authMiddleware, PlantReportController.create);
 router.put("/plant-reports/:id", authMiddleware, PlantReportController.update);
 router.delete("/plant-reports/:id", authMiddleware, PlantReportController.remove);
+
+// Plant report custom fields — any org member can read them (needed to
+// render the daily entry form), but defining/renaming/removing a field is an
+// organization-wide schema change, so it's admin-gated.
+router.get("/plant-report-fields", authMiddleware, PlantReportFieldController.list);
+router.post(
+  "/plant-report-fields",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportFieldController.create,
+);
+router.put(
+  "/plant-report-fields/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportFieldController.update,
+);
+router.delete(
+  "/plant-report-fields/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportFieldController.remove,
+);
 
 // Notification routes — every authenticated user reads/manages only their own.
 router.get("/notifications", authMiddleware, NotificationController.list);
