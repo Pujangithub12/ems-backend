@@ -2,7 +2,11 @@ import { Response } from "express";
 import { prisma } from "../config/prisma";
 import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
-import { SavePlantReportDto, PlantReportFieldDataType } from "../dto/plant-report.dto";
+import {
+  SavePlantReportDto,
+  PlantReportFieldDataType,
+  PlantReportItemEntryInput,
+} from "../dto/plant-report.dto";
 
 const toNum = (v: unknown): number | null =>
   v === null || v === undefined ? null : Number(v);
@@ -21,6 +25,7 @@ const REPORT_INCLUDE = {
   createdBy: { select: { id: true, fullName: true } },
   project: { select: { id: true, name: true } },
   staff: { include: { user: { select: { id: true, fullName: true } } } },
+  itemEntries: { include: { item: true } },
 } as const;
 
 /** Flattens the raw Decimal/join-row shape into plain numbers, and adds the
@@ -57,6 +62,24 @@ const shapeReport = (report: any) => {
     burnerHours: toNum(report.burnerHours),
     shutdownReason: report.shutdownReason,
     customValues: report.customValues ?? {},
+    items: Array.isArray(report.itemEntries)
+      ? report.itemEntries.map((e: any) => {
+          const opening = toNum(e.openingStock) ?? 0;
+          const received = toNum(e.receivedQty) ?? 0;
+          const used = toNum(e.usedQty) ?? 0;
+          return {
+            itemId: e.itemId,
+            name: e.item.name,
+            unit: e.item.unit,
+            trackStock: e.item.trackStock,
+            opening,
+            received,
+            used,
+            closing: opening + received - used,
+            note: e.note,
+          };
+        })
+      : [],
     staff: Array.isArray(report.staff) ? report.staff.map((s: any) => s.user) : [],
     staffCount: Array.isArray(report.staff) ? report.staff.length : 0,
     project: report.project,
@@ -84,6 +107,67 @@ async function previousClosingBalance(
   const received = toNum(prev.pelletReceivedKg) ?? 0;
   const used = toNum(prev.pelletUsedKg) ?? 0;
   return opening + received - used;
+}
+
+/** The most recent entry strictly before `date` for this item on this
+ * organization+project — its derived closing balance becomes the new
+ * entry's opening balance. Generalized version of previousClosingBalance,
+ * keyed by item instead of hardcoded to pellets. */
+async function previousItemClosingBalance(
+  organizationId: number,
+  projectId: number | null,
+  itemId: number,
+  date: Date,
+): Promise<number> {
+  const prevEntry = await prisma.plantReportItemEntry.findFirst({
+    where: {
+      itemId,
+      report: { organizationId, projectId, date: { lt: date } },
+    },
+    orderBy: { report: { date: "desc" } },
+  });
+  if (!prevEntry) return 0;
+  const opening = toNum(prevEntry.openingStock) ?? 0;
+  const received = toNum(prevEntry.receivedQty) ?? 0;
+  const used = toNum(prevEntry.usedQty) ?? 0;
+  return opening + received - used;
+}
+
+/** Validates the incoming item-entry payload against this organization's
+ * defined items (dropping any itemId that isn't one of them — same
+ * tolerance as coerceCustomValues), and snapshots each entry's opening
+ * stock from the previous report's closing balance for that item. */
+async function resolveItemEntries(
+  organizationId: number,
+  projectId: number | null,
+  date: Date,
+  raw: PlantReportItemEntryInput[] | undefined,
+): Promise<
+  Array<{
+    itemId: number;
+    openingStock: number;
+    receivedQty: number | null;
+    usedQty: number | null;
+    note: string | null;
+  }>
+> {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const orgItems = await prisma.plantReportItem.findMany({ where: { organizationId } });
+  const validIds = new Set(orgItems.map((i) => i.id));
+
+  const result = [];
+  for (const entry of raw) {
+    if (!validIds.has(entry.itemId)) continue; // stale/tampered itemId — drop, same tolerance as customValues
+    const openingStock = await previousItemClosingBalance(organizationId, projectId, entry.itemId, date);
+    result.push({
+      itemId: entry.itemId,
+      openingStock,
+      receivedQty: entry.receivedQty ?? null,
+      usedQty: entry.usedQty ?? null,
+      note: entry.note?.trim() || null,
+    });
+  }
+  return result;
 }
 
 /** Parses+validates a projectId that must belong to this organization —
@@ -198,12 +282,36 @@ export class PlantReportController {
         return present.length ? present.reduce((a, b) => a + b, 0) / present.length : null;
       };
 
+      // Per-item totals across the month (Pellets, Diesel, ...) — generalizes
+      // the old totalPelletUsedKg/totalPelletReceivedKg pair below (kept for
+      // backward compatibility with historical rows written before items
+      // existed) to any number of org-defined items.
+      const itemTotalsByItemId = new Map<
+        number,
+        { itemId: number; name: string; unit: string; totalUsed: number | null; totalReceived: number | null }
+      >();
+      for (const r of shaped) {
+        for (const it of r.items) {
+          const cur = itemTotalsByItemId.get(it.itemId) ?? {
+            itemId: it.itemId,
+            name: it.name,
+            unit: it.unit,
+            totalUsed: null,
+            totalReceived: null,
+          };
+          if (it.used != null) cur.totalUsed = (cur.totalUsed ?? 0) + it.used;
+          if (it.received != null) cur.totalReceived = (cur.totalReceived ?? 0) + it.received;
+          itemTotalsByItemId.set(it.itemId, cur);
+        }
+      }
+
       const summary = {
         totalSteamTon: sum(shaped.map((r) => r.steamTon)),
         avgSteamPressure: avg(shaped.map((r) => r.steamPressure)),
         avgSteamTemp: avg(shaped.map((r) => r.steamTemp)),
         totalPelletUsedKg: sum(shaped.map((r) => r.pelletUsedKg)),
         totalPelletReceivedKg: sum(shaped.map((r) => r.pelletReceivedKg)),
+        itemTotals: Array.from(itemTotalsByItemId.values()),
         totalWaterFlow: sum(shaped.map((r) => r.waterFlow)),
         totalBurnerHours: sum(shaped.map((r) => r.burnerHours)),
         shutdownDays: shaped.filter((r) => r.steamTon === 0 || r.burnerStatus === "stopped").length,
@@ -245,7 +353,26 @@ export class PlantReportController {
       }
 
       const openingBalance = await previousClosingBalance(organizationId, projectId, date);
-      return res.status(200).json({ exists: false, openingBalance });
+
+      // Each active tracked item's projected opening balance for this new
+      // entry — same purpose as `openingBalance` above (pellets), just
+      // generalized, so the form can show a correct opening figure per item
+      // before the operator has saved anything.
+      const items = await prisma.plantReportItem.findMany({
+        where: { organizationId, isActive: true },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      });
+      const itemOpeningBalances: Record<string, number> = {};
+      for (const item of items) {
+        itemOpeningBalances[String(item.id)] = await previousItemClosingBalance(
+          organizationId,
+          projectId,
+          item.id,
+          date,
+        );
+      }
+
+      return res.status(200).json({ exists: false, openingBalance, itemOpeningBalances });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -294,6 +421,7 @@ export class PlantReportController {
       const pelletStockOpening = await previousClosingBalance(organizationId, projectId, date);
       const staffUserIds = Array.isArray(body.staffUserIds) ? [...new Set(body.staffUserIds)] : [];
       const customValues = await coerceCustomValues(organizationId, body.customValues);
+      const itemEntries = await resolveItemEntries(organizationId, projectId, date, body.itemEntries);
 
       const created = await prisma.$transaction(async (tx) => {
         const report = await tx.plantDailyReport.create({
@@ -322,6 +450,11 @@ export class PlantReportController {
         if (staffUserIds.length > 0) {
           await tx.plantReportStaff.createMany({
             data: staffUserIds.map((userId) => ({ reportId: report.id, userId })),
+          });
+        }
+        if (itemEntries.length > 0) {
+          await tx.plantReportItemEntry.createMany({
+            data: itemEntries.map((e) => ({ ...e, reportId: report.id })),
           });
         }
         return tx.plantDailyReport.findUniqueOrThrow({
@@ -385,6 +518,12 @@ export class PlantReportController {
 
       const staffUserIds = Array.isArray(body.staffUserIds) ? [...new Set(body.staffUserIds)] : [];
       const customValues = await coerceCustomValues(organizationId, body.customValues);
+      const itemEntries = await resolveItemEntries(
+        organizationId,
+        existing.projectId,
+        existing.date,
+        body.itemEntries,
+      );
 
       const updated = await prisma.$transaction(async (tx) => {
         await tx.plantDailyReport.update({
@@ -410,6 +549,12 @@ export class PlantReportController {
         if (staffUserIds.length > 0) {
           await tx.plantReportStaff.createMany({
             data: staffUserIds.map((userId) => ({ reportId, userId })),
+          });
+        }
+        await tx.plantReportItemEntry.deleteMany({ where: { reportId } });
+        if (itemEntries.length > 0) {
+          await tx.plantReportItemEntry.createMany({
+            data: itemEntries.map((e) => ({ ...e, reportId })),
           });
         }
         return tx.plantDailyReport.findUniqueOrThrow({

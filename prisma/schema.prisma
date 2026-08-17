@@ -113,6 +113,7 @@ model Organization {
   notifications           Notification[]
   plantDailyReports       PlantDailyReport[]
   plantReportCustomFields PlantReportCustomField[]
+  plantReportItems        PlantReportItem[]
 
   @@map("workspace")
 }
@@ -519,10 +520,11 @@ model PlantDailyReport {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  project      Project?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdBy    User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy    User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull)
   staff        PlantReportStaff[]
+  itemEntries  PlantReportItemEntry[]
 
   @@unique([organizationId, projectId, date])
   @@map("plant_daily_report")
@@ -561,6 +563,53 @@ model PlantReportCustomField {
 
   @@unique([organizationId, name])
   @@map("plant_report_custom_field")
+}
+
+/// An org-defined consumable/material tracked on the daily plant report —
+/// e.g. "Pellets" (kg), "Diesel" (litre), "Caustic Soda" (kg). Each item gets
+/// its own running stock ledger across reports, the same way pellets do
+/// today. Distinct from PlantReportCustomField, which is for flat one-off
+/// values with no opening/closing balance semantics.
+model PlantReportItem {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  name           String   @db.VarChar
+  /// Display-only unit label — "kg", "ltr", "bag", "pcs", etc.
+  unit           String   @db.VarChar
+  /// false = just log usage for this item, no opening/closing ledger.
+  trackStock     Boolean  @default(true)
+  /// Soft-disable instead of deleting, so past reports keep their history.
+  isActive       Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entries      PlantReportItemEntry[]
+
+  @@unique([organizationId, name])
+  @@map("plant_report_item")
+}
+
+/// One item's reading on one day's report. openingStock is snapshotted at
+/// creation the same way PlantDailyReport.pelletStockOpening is — carried
+/// forward from the previous report's closing balance for this item+project,
+/// never edited by hand. closingStock is derived (opening + received - used),
+/// not stored, to avoid drift — same pattern as steamTon/pelletStockClosing
+/// in PlantReportController today.
+model PlantReportItemEntry {
+  id           Int      @id @default(autoincrement())
+  reportId     Int
+  itemId       Int
+  openingStock Decimal? @db.Decimal(12, 3)
+  receivedQty  Decimal? @db.Decimal(12, 3)
+  usedQty      Decimal? @db.Decimal(12, 3)
+  note         String?
+
+  report PlantDailyReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  item   PlantReportItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([reportId, itemId])
+  @@map("plant_report_item_entry")
 }
 
 model ProcurementAttachment {
