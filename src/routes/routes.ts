@@ -6,6 +6,7 @@ import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { PlantReportController } from "../controllers/PlantReportController";
 import { PlantReportFieldController } from "../controllers/PlantReportFieldController";
+import { PlantReportItemController } from "../controllers/PlantReportItemController";
 import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
@@ -180,6 +181,30 @@ router.delete(
   authMiddleware,
   roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   PlantReportFieldController.remove,
+);
+
+// Plant report items — any org member can read them (needed to render the
+// daily entry form's item rows), but defining/renaming/removing an item is
+// an organization-wide schema change, so it's admin-gated. Same pattern as
+// plant-report-fields above.
+router.get("/plant-report-items", authMiddleware, PlantReportItemController.list);
+router.post(
+  "/plant-report-items",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportItemController.create,
+);
+router.put(
+  "/plant-report-items/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportItemController.update,
+);
+router.delete(
+  "/plant-report-items/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportItemController.remove,
 );
 
 // Notification routes — every authenticated user reads/manages only their own.
