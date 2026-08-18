@@ -16,6 +16,7 @@ import { ProformaInvoiceController } from "../controllers/ProformaInvoiceControl
 import { ShipmentController } from "../controllers/ShipmentController";
 import { GoodsReceiptController } from "../controllers/GoodsReceiptController";
 import { MonthlyPerformanceController } from "../controllers/MonthlyPerformanceController";
+import { DailyGenerationController } from "../controllers/DailyGenerationController";
 import { InventoryController } from "../controllers/InventoryController";
 import { OrganizationFileController } from "../controllers/OrganizationFileController";
 import { MyTaskController } from "../controllers/MyTaskController";
@@ -597,6 +598,22 @@ router.put(
   authMiddleware,
   permissionMiddleware("projects.performance"),
   MonthlyPerformanceController.upsertMonthlyPerformance,
+);
+router.get(
+  "/projects/:projectId/performance/daily",
+  authMiddleware,
+  DailyGenerationController.getDaily,
+);
+router.put(
+  "/projects/:projectId/performance/daily",
+  authMiddleware,
+  permissionMiddleware("projects.performance"),
+  DailyGenerationController.upsertDaily,
+);
+router.get(
+  "/projects/:projectId/performance/summary",
+  authMiddleware,
+  DailyGenerationController.getSummary,
 );
 
 // Project inventory routes (Inventory tab) — view is open to any organization
