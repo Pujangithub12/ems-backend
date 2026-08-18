@@ -89,6 +89,7 @@ model Organization {
   announcements           Announcement[]
   calendarEvents          CalendarEvent[]
   catalogItems            CatalogItem[]
+  dailyGeneration         DailyGeneration[]
   expenseRequests         ExpenseRequest[]
   fileAccess              FileAccess[]
   hierarchyNodes          HierarchyNode[]
@@ -390,6 +391,20 @@ model LeaveRequest {
   organization   Organization?             @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_eb8ac0dcc12a5fa35c97622e153")
 
   @@map("leave_request")
+}
+
+model DailyGeneration {
+  id             Int          @id @default(autoincrement())
+  date           DateTime     @db.Date
+  generation     Decimal?     @db.Decimal
+  createdAt      DateTime     @default(now())
+  projectId      Int
+  organizationId Int
+  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@map("daily_generation")
 }
 
 model MonthlyPerformance {
@@ -1052,6 +1067,7 @@ model Project {
   estimatedTotalCost Decimal?  @db.Decimal
   sellingPrice       Decimal?  @db.Decimal
 
+  dailyGeneration    DailyGeneration[]
   inventoryItems     InventoryItem[]
   monthlyPerformance MonthlyPerformance[]
   plantDailyReports  PlantDailyReport[]

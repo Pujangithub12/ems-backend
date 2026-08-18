@@ -2,8 +2,11 @@ import { Response } from "express";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { UpsertMonthlyPerformanceDto } from "../dto/monthlyPerformance.dto";
+import { sumGenerationByMonth } from "./DailyGenerationController";
 
-/** Energy Performance tab: one row per (project, year, month) generation/financial report. */
+/** Energy Performance tab: one row per (project, year, month) generation/financial report.
+ * actualGeneration is derived from DailyGeneration (see DailyGenerationController) — it is
+ * overlaid onto each row on read and is never written by upsertMonthlyPerformance. */
 export class MonthlyPerformanceController {
   /** GET /projects/:projectId/performance?year=YYYY — the rows that exist for that year. Open to any organization member. */
   static getMonthlyPerformance = async (req: AuthRequest, res: Response) => {
@@ -21,12 +24,19 @@ export class MonthlyPerformanceController {
         return res.status(404).json({ message: "Project not found" });
       }
 
-      const rows = await prisma.monthlyPerformance.findMany({
-        where: { projectId: project.id, year },
-        orderBy: { month: "asc" },
-      });
+      const [rows, generationSums] = await Promise.all([
+        prisma.monthlyPerformance.findMany({
+          where: { projectId: project.id, year },
+          orderBy: { month: "asc" },
+        }),
+        sumGenerationByMonth(project.id, req.organization!.id, year),
+      ]);
+      const shaped = rows.map((r) => ({
+        ...r,
+        actualGeneration: generationSums.get(r.month) ?? null,
+      }));
 
-      return res.status(200).json({ rows, year });
+      return res.status(200).json({ rows: shaped, year });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -40,7 +50,6 @@ export class MonthlyPerformanceController {
       year,
       month,
       contractEnergy,
-      actualGeneration,
       incomeReceived,
       monthlyExpenditure,
       sparePartPurchase,
@@ -69,7 +78,6 @@ export class MonthlyPerformanceController {
       // of silently excluding the column from the UPDATE when clearing a value.
       const data: any = {};
       if (contractEnergy !== undefined) data.contractEnergy = contractEnergy;
-      if (actualGeneration !== undefined) data.actualGeneration = actualGeneration;
       if (incomeReceived !== undefined) data.incomeReceived = incomeReceived;
       if (monthlyExpenditure !== undefined) data.monthlyExpenditure = monthlyExpenditure;
       if (sparePartPurchase !== undefined) data.sparePartPurchase = sparePartPurchase;
