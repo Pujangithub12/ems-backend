@@ -394,14 +394,21 @@ model LeaveRequest {
 }
 
 model DailyGeneration {
-  id             Int          @id @default(autoincrement())
-  date           DateTime     @db.Date
-  generation     Decimal?     @db.Decimal
-  createdAt      DateTime     @default(now())
-  projectId      Int
-  organizationId Int
-  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  id                Int          @id @default(autoincrement())
+  date              DateTime     @db.Date
+  /**
+   * = checkMeterFinal - checkMeterInitial, computed server-side on upsert.
+   */
+  generation        Decimal?     @db.Decimal
+  checkMeterInitial Decimal?     @db.Decimal
+  checkMeterFinal   Decimal?     @db.Decimal
+  mainMeterInitial  Decimal?     @db.Decimal
+  mainMeterFinal    Decimal?     @db.Decimal
+  createdAt         DateTime     @default(now())
+  projectId         Int
+  organizationId    Int
+  project           Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, date])
   @@map("daily_generation")

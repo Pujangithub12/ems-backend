@@ -1,50 +1,60 @@
 import { Response } from "express";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
-import { UpsertDailyGenerationDto, MonthlyGenerationSummaryRow } from "../dto/dailyGeneration.dto";
+import {
+  UpsertDailyGenerationDto,
+  GenerationSummaryBucket,
+  GenerationSummaryBucketResult,
+} from "../dto/dailyGeneration.dto";
 
 /** Postgres `numeric` (Decimal) columns come back as Prisma's Decimal wrapper, not a plain number — coerce for arithmetic. */
 const toNum = (value: { toNumber(): number } | null | undefined): number | null =>
   value == null ? null : value.toNumber();
 
-/** Sums DailyGeneration rows for one project/year, bucketed by month (1-12).
- * Shared by getMonthlyPerformance (to overlay the derived actualGeneration
- * onto the financial-fields table) and getSummary (the trend chart). */
-export async function sumGenerationByMonth(
-  projectId: number,
-  organizationId: number,
-  year: number,
-): Promise<Map<number, number>> {
-  const rows = await prisma.dailyGeneration.findMany({
-    where: {
-      projectId,
-      organizationId,
-      date: { gte: new Date(Date.UTC(year, 0, 1)), lt: new Date(Date.UTC(year + 1, 0, 1)) },
-    },
-    select: { date: true, generation: true },
-  });
+const shapeRow = (row: {
+  date: Date;
+  generation: { toNumber(): number } | null;
+  checkMeterInitial: { toNumber(): number } | null;
+  checkMeterFinal: { toNumber(): number } | null;
+  mainMeterInitial: { toNumber(): number } | null;
+  mainMeterFinal: { toNumber(): number } | null;
+}) => {
+  const checkMeterInitial = toNum(row.checkMeterInitial);
+  const checkMeterFinal = toNum(row.checkMeterFinal);
+  const mainMeterInitial = toNum(row.mainMeterInitial);
+  const mainMeterFinal = toNum(row.mainMeterFinal);
+  return {
+    date: row.date.toISOString().slice(0, 10),
+    generation: toNum(row.generation),
+    checkMeterInitial,
+    checkMeterFinal,
+    checkMeterDifference:
+      checkMeterInitial !== null && checkMeterFinal !== null ? checkMeterFinal - checkMeterInitial : null,
+    mainMeterInitial,
+    mainMeterFinal,
+    mainMeterDifference:
+      mainMeterInitial !== null && mainMeterFinal !== null ? mainMeterFinal - mainMeterInitial : null,
+  };
+};
 
-  const sums = new Map<number, number>();
-  for (const row of rows) {
-    const month = row.date.getUTCMonth() + 1;
-    const value = toNum(row.generation);
-    if (value === null) continue;
-    sums.set(month, (sums.get(month) ?? 0) + value);
-  }
-  return sums;
-}
+const parseDateParam = (value: unknown): Date | null => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const d = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
 
-/** Energy Performance tab: per-day generation entries that roll up into MonthlyPerformance.actualGeneration. */
+/** Energy Performance tab: per-day meter readings (Check Meter + Main Meter),
+ * BS-calendar-agnostic on the backend — callers pass explicit AD date ranges,
+ * computed client-side from the selected Bikram Sambat month/year. */
 export class DailyGenerationController {
-  /** GET /projects/:projectId/performance/daily?year=YYYY&month=M — full day-by-day
-   * grid for the month, gaps filled with generation: null. Open to any organization member. */
+  /** GET /projects/:projectId/performance/daily?startDate=&endDate= — rows in
+   * that AD date range (inclusive start, exclusive end). Open to any organization member. */
   static getDaily = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
-    const year = parseInt((req.query.year as string) || `${new Date().getFullYear()}`);
-    const month = parseInt((req.query.month as string) || `${new Date().getMonth() + 1}`);
-
-    if (!year || !month || month < 1 || month > 12) {
-      return res.status(400).json({ message: "A valid year and month (1-12) are required" });
+    const startDate = parseDateParam(req.query.startDate);
+    const endDate = parseDateParam(req.query.endDate);
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: "Valid startDate and endDate (YYYY-MM-DD) are required" });
     }
 
     try {
@@ -55,22 +65,12 @@ export class DailyGenerationController {
         return res.status(404).json({ message: "Project not found" });
       }
 
-      const monthStart = new Date(Date.UTC(year, month - 1, 1));
-      const monthEnd = new Date(Date.UTC(year, month, 1));
       const rows = await prisma.dailyGeneration.findMany({
-        where: { projectId: project.id, date: { gte: monthStart, lt: monthEnd } },
-      });
-      const byDay = new Map<number, number | null>();
-      rows.forEach((r) => byDay.set(r.date.getUTCDate(), toNum(r.generation)));
-
-      const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-      const days = Array.from({ length: daysInMonth }, (_, i) => {
-        const day = i + 1;
-        const date = new Date(Date.UTC(year, month - 1, day)).toISOString().slice(0, 10);
-        return { date, generation: byDay.has(day) ? byDay.get(day)! : null };
+        where: { projectId: project.id, date: { gte: startDate, lt: endDate } },
+        orderBy: { date: "asc" },
       });
 
-      return res.status(200).json({ days, year, month });
+      return res.status(200).json({ days: rows.map(shapeRow) });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -80,9 +80,11 @@ export class DailyGenerationController {
   /** PUT /projects/:projectId/performance/daily — upserts (find-or-create) the row for one day. Admin-gated (see routes.ts). */
   static upsertDaily = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
-    const { date, generation }: UpsertDailyGenerationDto = req.body;
+    const { date, checkMeterInitial, checkMeterFinal, mainMeterInitial, mainMeterFinal }: UpsertDailyGenerationDto =
+      req.body;
 
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const parsedDate = parseDateParam(date);
+    if (!parsedDate) {
       return res.status(400).json({ message: "A valid date (YYYY-MM-DD) is required" });
     }
 
@@ -94,43 +96,47 @@ export class DailyGenerationController {
         return res.status(404).json({ message: "Project not found" });
       }
 
-      const parsedDate = new Date(`${date}T00:00:00.000Z`);
+      const generation =
+        checkMeterInitial != null && checkMeterFinal != null ? checkMeterFinal - checkMeterInitial : null;
+
       const existing = await prisma.dailyGeneration.findFirst({
         where: { projectId: project.id, date: parsedDate },
       });
 
+      const data = {
+        generation,
+        checkMeterInitial: checkMeterInitial ?? null,
+        checkMeterFinal: checkMeterFinal ?? null,
+        mainMeterInitial: mainMeterInitial ?? null,
+        mainMeterFinal: mainMeterFinal ?? null,
+      };
+
       let row;
       if (existing) {
-        row = await prisma.dailyGeneration.update({
-          where: { id: existing.id },
-          data: { generation: generation ?? null },
-        });
+        row = await prisma.dailyGeneration.update({ where: { id: existing.id }, data });
       } else {
         row = await prisma.dailyGeneration.create({
-          data: {
-            date: parsedDate,
-            generation: generation ?? null,
-            projectId: project.id,
-            organizationId: req.organization!.id,
-          },
+          data: { date: parsedDate, projectId: project.id, organizationId: req.organization!.id, ...data },
         });
       }
 
-      return res.status(200).json({
-        message: "Daily generation saved",
-        row: { date: row.date.toISOString().slice(0, 10), generation: toNum(row.generation) },
-      });
+      return res.status(200).json({ message: "Daily generation saved", row: shapeRow(row) });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
     }
   };
 
-  /** GET /projects/:projectId/performance/summary?year=YYYY — 12 rows of
-   * summed daily generation vs. that month's contract target, for the trend chart. */
+  /** POST /projects/:projectId/performance/summary — sums DailyGeneration.generation
+   * over each caller-supplied date-range bucket. No calendar awareness: the caller
+   * (frontend) computes each bucket's AD start/end and an opaque `key` to echo back
+   * (e.g. a BS month number), and pairs the result with contractEnergy itself. */
   static getSummary = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
-    const year = parseInt((req.query.year as string) || `${new Date().getFullYear()}`);
+    const buckets: GenerationSummaryBucket[] = Array.isArray(req.body?.buckets) ? req.body.buckets : [];
+    if (buckets.length === 0) {
+      return res.status(400).json({ message: "At least one bucket is required" });
+    }
 
     try {
       const project = await prisma.project.findFirst({
@@ -140,23 +146,23 @@ export class DailyGenerationController {
         return res.status(404).json({ message: "Project not found" });
       }
 
-      const [generationSums, performanceRows] = await Promise.all([
-        sumGenerationByMonth(project.id, req.organization!.id, year),
-        prisma.monthlyPerformance.findMany({ where: { projectId: project.id, year } }),
-      ]);
-      const contractByMonth = new Map<number, number | null>();
-      performanceRows.forEach((r) => contractByMonth.set(r.month, toNum(r.contractEnergy)));
+      const results: GenerationSummaryBucketResult[] = [];
+      for (const bucket of buckets) {
+        const startDate = parseDateParam(bucket.startDate);
+        const endDate = parseDateParam(bucket.endDate);
+        if (!startDate || !endDate || typeof bucket.key !== "number") {
+          return res.status(400).json({ message: "Each bucket needs a numeric key and valid startDate/endDate" });
+        }
+        const rows = await prisma.dailyGeneration.findMany({
+          where: { projectId: project.id, date: { gte: startDate, lt: endDate } },
+          select: { generation: true },
+        });
+        const sum = rows.reduce((acc, r) => acc + (toNum(r.generation) ?? 0), 0);
+        const hasAny = rows.some((r) => r.generation !== null);
+        results.push({ key: bucket.key, generation: hasAny ? sum : null });
+      }
 
-      const rows: MonthlyGenerationSummaryRow[] = Array.from({ length: 12 }, (_, i) => {
-        const month = i + 1;
-        return {
-          month,
-          generation: generationSums.get(month) ?? null,
-          contractEnergy: contractByMonth.get(month) ?? null,
-        };
-      });
-
-      return res.status(200).json({ rows, year });
+      return res.status(200).json({ rows: results });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
