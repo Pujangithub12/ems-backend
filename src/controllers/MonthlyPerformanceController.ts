@@ -2,11 +2,12 @@ import { Response } from "express";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { UpsertMonthlyPerformanceDto } from "../dto/monthlyPerformance.dto";
-import { sumGenerationByMonth } from "./DailyGenerationController";
 
-/** Energy Performance tab: one row per (project, year, month) generation/financial report.
- * actualGeneration is derived from DailyGeneration (see DailyGenerationController) — it is
- * overlaid onto each row on read and is never written by upsertMonthlyPerformance. */
+/** Energy Performance tab: one row per (project, year, month) financial report.
+ * `year`/`month` are opaque integers to this controller — the frontend treats them
+ * as Bikram Sambat values. actualGeneration is derived from DailyGeneration and
+ * merged in client-side (see DailyGenerationController.getSummary); this controller
+ * never reads or writes it. */
 export class MonthlyPerformanceController {
   /** GET /projects/:projectId/performance?year=YYYY — the rows that exist for that year. Open to any organization member. */
   static getMonthlyPerformance = async (req: AuthRequest, res: Response) => {
@@ -24,19 +25,12 @@ export class MonthlyPerformanceController {
         return res.status(404).json({ message: "Project not found" });
       }
 
-      const [rows, generationSums] = await Promise.all([
-        prisma.monthlyPerformance.findMany({
-          where: { projectId: project.id, year },
-          orderBy: { month: "asc" },
-        }),
-        sumGenerationByMonth(project.id, req.organization!.id, year),
-      ]);
-      const shaped = rows.map((r) => ({
-        ...r,
-        actualGeneration: generationSums.get(r.month) ?? null,
-      }));
+      const rows = await prisma.monthlyPerformance.findMany({
+        where: { projectId: project.id, year },
+        orderBy: { month: "asc" },
+      });
 
-      return res.status(200).json({ rows: shaped, year });
+      return res.status(200).json({ rows, year });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });

@@ -610,7 +610,7 @@ router.put(
   permissionMiddleware("projects.performance"),
   DailyGenerationController.upsertDaily,
 );
-router.get(
+router.post(
   "/projects/:projectId/performance/summary",
   authMiddleware,
   DailyGenerationController.getSummary,
