@@ -5,6 +5,7 @@ import {
   UpsertDailyGenerationDto,
   GenerationSummaryBucket,
   GenerationSummaryBucketResult,
+  DeleteDailyGenerationDto,
 } from "../dto/dailyGeneration.dto";
 
 /** Postgres `numeric` (Decimal) columns come back as Prisma's Decimal wrapper, not a plain number — coerce for arithmetic. */
@@ -163,6 +164,40 @@ export class DailyGenerationController {
       }
 
       return res.status(200).json({ rows: results });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** DELETE /projects/:projectId/performance/daily — deletes one or more days
+   * at once (single-row delete just sends a one-element `dates` array).
+   * Admin-gated (see routes.ts). */
+  static deleteDaily = async (req: AuthRequest, res: Response) => {
+    const { projectId } = req.params;
+    const { dates }: DeleteDailyGenerationDto = req.body;
+
+    if (!Array.isArray(dates) || dates.length === 0) {
+      return res.status(400).json({ message: "At least one date is required" });
+    }
+    const parsedDates = dates.map(parseDateParam);
+    if (parsedDates.some((d) => d === null)) {
+      return res.status(400).json({ message: "Every date must be a valid YYYY-MM-DD" });
+    }
+
+    try {
+      const project = await prisma.project.findFirst({
+        where: { id: parseInt(projectId as string), organizationId: req.organization!.id },
+      });
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const result = await prisma.dailyGeneration.deleteMany({
+        where: { projectId: project.id, date: { in: parsedDates as Date[] } },
+      });
+
+      return res.status(200).json({ message: "Daily generation entries deleted", count: result.count });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
