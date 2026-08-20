@@ -21,3 +21,9 @@ export interface GenerationSummaryBucketResult {
   key: number;
   generation: number | null;
 }
+
+/** Body shape for DELETE /projects/:projectId/performance/daily — deletes one
+ * or more days at once (single delete just sends a one-element array). */
+export interface DeleteDailyGenerationDto {
+  dates: string[]; // YYYY-MM-DD (AD)
+}

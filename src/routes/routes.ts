@@ -610,6 +610,12 @@ router.put(
   permissionMiddleware("projects.performance"),
   DailyGenerationController.upsertDaily,
 );
+router.delete(
+  "/projects/:projectId/performance/daily",
+  authMiddleware,
+  permissionMiddleware("projects.performance"),
+  DailyGenerationController.deleteDaily,
+);
 router.post(
   "/projects/:projectId/performance/summary",
   authMiddleware,
