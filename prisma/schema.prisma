@@ -397,7 +397,8 @@ model DailyGeneration {
   id                Int          @id @default(autoincrement())
   date              DateTime     @db.Date
   /**
-   * = checkMeterFinal - checkMeterInitial, computed server-side on upsert.
+   * = mainMeterFinal - mainMeterInitial, computed server-side on upsert.
+   * Check Meter is a secondary displayed figure, never summed.
    */
   generation        Decimal?     @db.Decimal
   checkMeterInitial Decimal?     @db.Decimal

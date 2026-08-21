@@ -97,8 +97,11 @@ export class DailyGenerationController {
         return res.status(404).json({ message: "Project not found" });
       }
 
+      // "Actual Generation" throughout the app (chart, financial table, yearly
+      // totals) is derived from the Main Meter reading — Check Meter is kept
+      // only as a secondary displayed figure, not summed anywhere.
       const generation =
-        checkMeterInitial != null && checkMeterFinal != null ? checkMeterFinal - checkMeterInitial : null;
+        mainMeterInitial != null && mainMeterFinal != null ? mainMeterFinal - mainMeterInitial : null;
 
       const existing = await prisma.dailyGeneration.findFirst({
         where: { projectId: project.id, date: parsedDate },
