@@ -1,6 +1,6 @@
 /** Body shape for PUT /projects/:projectId/performance/daily — upserts a single day's row.
  * `generation` is not client-writable — it's derived server-side from
- * checkMeterFinal - checkMeterInitial. */
+ * mainMeterFinal - mainMeterInitial (Check Meter is a secondary, unsummed figure). */
 export interface UpsertDailyGenerationDto {
   date: string; // YYYY-MM-DD (AD)
   checkMeterInitial?: number | null;
