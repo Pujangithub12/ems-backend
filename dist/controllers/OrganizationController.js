@@ -1,12 +1,8 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.OrganizationController = void 0;
-const path_1 = __importDefault(require("path"));
-const fs_1 = __importDefault(require("fs"));
 const prisma_1 = require("../config/prisma");
+const supabaseStorage_1 = require("../config/supabaseStorage");
 const enums_1 = require("../types/enums");
 const permissionService_1 = require("../utils/permissionService");
 const simpleArray_1 = require("../utils/simpleArray");
@@ -195,20 +191,21 @@ class OrganizationController {
                     .status(400)
                     .json({ message: "Organization name confirmation does not match" });
             }
-            // Clean up files on disk that the DB cascade won't touch.
+            // Clean up storage objects that the DB cascade won't touch.
             const projectFiles = await prisma_1.prisma.projectFile.findMany({
                 where: { organizationId, isFolder: false },
             });
-            projectFiles.forEach((f) => {
-                if (f.path)
-                    fs_1.default.unlink(path_1.default.resolve("uploads", f.path), () => { });
-            });
+            const projectFileKeys = projectFiles
+                .map((f) => f.path)
+                .filter((p) => !!p);
             const tasks = await prisma_1.prisma.task.findMany({
                 where: { organizationId },
             });
-            tasks.forEach((t) => {
-                (0, simpleArray_1.toSimpleArray)(t.files).forEach((filePath) => fs_1.default.unlink(path_1.default.resolve(filePath), () => { }));
-            });
+            // Task attachment paths are stored with the "uploads/" prefix still
+            // attached (see TaskController) — strip it to get the storage key,
+            // matching every other file type's key format.
+            const taskFileKeys = tasks.flatMap((t) => (0, simpleArray_1.toSimpleArray)(t.files).map((filePath) => filePath.replace(/^uploads\//, "")));
+            (0, supabaseStorage_1.deleteFilesFromStorage)([...projectFileKeys, ...taskFileKeys]);
             // The organization FK on Project/Task/Announcement/LeaveRequest/MyTask/
             // CalendarEvent/HierarchyNode/OrganizationMembership all carry ON
             // DELETE CASCADE, so a single delete here removes everything scoped to
@@ -415,6 +412,67 @@ class OrganizationController {
             return res.status(500).json({ message: "Failed to revoke access" });
         }
     }
+    // Shared by the four signature/stamp handlers below — same admin gate as update/remove,
+    // scoped to the caller's *current* organization (not a :id param) since these are
+    // letterhead assets for whichever organization the caller is currently in, same as the
+    // existing uploadOrganizationFile/"workspace/files" pattern.
+    static async assertCanManageCurrentOrganization(req, res) {
+        if (!(await (0, permissionService_1.roleHasPermission)(req.user.role, "workspace.manage"))) {
+            res.status(403).json({ message: "Only an admin can edit this organization" });
+            return false;
+        }
+        return true;
+    }
+    static async uploadImage(req, res, field) {
+        try {
+            if (!(await OrganizationController.assertCanManageCurrentOrganization(req, res)))
+                return;
+            const file = req.file;
+            if (!file)
+                return res.status(400).json({ message: "An image file is required" });
+            const organizationId = req.organization.id;
+            const existing = await prisma_1.prisma.organization.findUnique({ where: { id: organizationId } });
+            const previousPath = existing?.[field];
+            const filePath = file.path.replace(/\\/g, "/").replace(/^uploads\//, "");
+            const organization = await prisma_1.prisma.organization.update({
+                where: { id: organizationId },
+                data: { [field]: filePath },
+            });
+            if (previousPath)
+                await (0, supabaseStorage_1.deleteFileFromStorage)(previousPath);
+            return res.status(200).json({ message: "Image uploaded", organization });
+        }
+        catch (error) {
+            console.error(`Error uploading organization ${field}:`, error);
+            return res.status(500).json({ message: "Failed to upload image" });
+        }
+    }
+    static async deleteImage(req, res, field) {
+        try {
+            if (!(await OrganizationController.assertCanManageCurrentOrganization(req, res)))
+                return;
+            const organizationId = req.organization.id;
+            const existing = await prisma_1.prisma.organization.findUnique({ where: { id: organizationId } });
+            const previousPath = existing?.[field];
+            const organization = await prisma_1.prisma.organization.update({
+                where: { id: organizationId },
+                data: { [field]: null },
+            });
+            if (previousPath)
+                await (0, supabaseStorage_1.deleteFileFromStorage)(previousPath);
+            return res.status(200).json({ message: "Image removed", organization });
+        }
+        catch (error) {
+            console.error(`Error deleting organization ${field}:`, error);
+            return res.status(500).json({ message: "Failed to delete image" });
+        }
+    }
+    // Letterhead signature/stamp images, used when generating Purchase Order PDFs (see
+    // purchaseOrderPdf.ts) — Settings > Organization tab.
+    static uploadSignature = (req, res) => OrganizationController.uploadImage(req, res, "signatureImagePath");
+    static deleteSignature = (req, res) => OrganizationController.deleteImage(req, res, "signatureImagePath");
+    static uploadStamp = (req, res) => OrganizationController.uploadImage(req, res, "stampImagePath");
+    static deleteStamp = (req, res) => OrganizationController.deleteImage(req, res, "stampImagePath");
 }
 exports.OrganizationController = OrganizationController;
 //# sourceMappingURL=OrganizationController.js.map

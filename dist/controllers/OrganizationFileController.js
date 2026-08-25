@@ -5,10 +5,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.OrganizationFileController = void 0;
 const path_1 = __importDefault(require("path"));
-const fs_1 = __importDefault(require("fs"));
 const prisma_1 = require("../config/prisma");
 const fileAccess_1 = require("../utils/fileAccess");
 const permissionService_1 = require("../utils/permissionService");
+const supabaseStorage_1 = require("../config/supabaseStorage");
 /** Every ProjectFile row carries its own organizationId regardless of whether it's project-scoped or organization-root — just that column. */
 const ownerOrganizationId = (file) => file.organizationId ?? undefined;
 /** Sidebar Documents page: files and folders scoped directly to a organization (no project). */
@@ -156,12 +156,12 @@ class OrganizationFileController {
         if (!uploadedFile) {
             return res.status(400).json({ message: "A file is required" });
         }
+        const relativePath = path_1.default
+            .relative("uploads", uploadedFile.path)
+            .split(path_1.default.sep)
+            .join("/");
         try {
             const uploadedBy = await prisma_1.prisma.user.findUnique({ where: { id: req.user.id } });
-            const relativePath = path_1.default
-                .relative("uploads", uploadedFile.path)
-                .split(path_1.default.sep)
-                .join("/");
             const ext = path_1.default.extname(uploadedFile.originalname).replace(".", "").toLowerCase();
             const fileData = {
                 name: uploadedFile.originalname,
@@ -176,12 +176,12 @@ class OrganizationFileController {
                 const parsedParentId = parseInt(parentId);
                 const parentFile = await prisma_1.prisma.projectFile.findFirst({ where: { id: parsedParentId } });
                 if (!parentFile || ownerOrganizationId(parentFile) !== req.organization.id) {
-                    fs_1.default.unlink(uploadedFile.path, () => { });
+                    (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
                     return res.status(404).json({ message: "Parent folder not found" });
                 }
                 const parentLevel = await (0, fileAccess_1.resolveAccessForFile)(parentFile, req.user.id, req.user.role);
                 if (parentLevel !== "write") {
-                    fs_1.default.unlink(uploadedFile.path, () => { });
+                    (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
                     return res.status(403).json({ message: "You don't have permission to add items to this folder" });
                 }
                 fileData.parentId = parsedParentId;
@@ -189,7 +189,7 @@ class OrganizationFileController {
             else {
                 const allowed = await (0, permissionService_1.roleHasPermission)(req.user.role, "projects.documents");
                 if (!allowed) {
-                    fs_1.default.unlink(uploadedFile.path, () => { });
+                    (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
                     return res.status(403).json({ message: "You don't have permission to manage documents" });
                 }
             }
@@ -198,7 +198,7 @@ class OrganizationFileController {
             return res.status(201).json({ message: "File uploaded", file });
         }
         catch (error) {
-            fs_1.default.unlink(uploadedFile.path, () => { });
+            (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
             console.error(error);
             return res.status(500).json({ message: "Internal server error" });
         }

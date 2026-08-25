@@ -2,7 +2,11 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MonthlyPerformanceController = void 0;
 const prisma_1 = require("../config/prisma");
-/** Energy Performance tab: one row per (project, year, month) generation/financial report. */
+/** Energy Performance tab: one row per (project, year, month) financial report.
+ * `year`/`month` are opaque integers to this controller — the frontend treats them
+ * as Bikram Sambat values. actualGeneration is derived from DailyGeneration and
+ * merged in client-side (see DailyGenerationController.getSummary); this controller
+ * never reads or writes it. */
 class MonthlyPerformanceController {
     /** GET /projects/:projectId/performance?year=YYYY — the rows that exist for that year. Open to any organization member. */
     static getMonthlyPerformance = async (req, res) => {
@@ -32,7 +36,7 @@ class MonthlyPerformanceController {
     /** PUT /projects/:projectId/performance — upserts (find-or-create) the row for one month. Admin-gated (see routes.ts). */
     static upsertMonthlyPerformance = async (req, res) => {
         const { projectId } = req.params;
-        const { year, month, contractEnergy, actualGeneration, incomeReceived, monthlyExpenditure, sparePartPurchase, } = req.body;
+        const { year, month, contractEnergy, incomeReceived, monthlyExpenditure, sparePartPurchase, } = req.body;
         if (!year || !month || month < 1 || month > 12) {
             return res.status(400).json({ message: "A valid year and month (1-12) are required" });
         }
@@ -54,8 +58,6 @@ class MonthlyPerformanceController {
             const data = {};
             if (contractEnergy !== undefined)
                 data.contractEnergy = contractEnergy;
-            if (actualGeneration !== undefined)
-                data.actualGeneration = actualGeneration;
             if (incomeReceived !== undefined)
                 data.incomeReceived = incomeReceived;
             if (monthlyExpenditure !== undefined)

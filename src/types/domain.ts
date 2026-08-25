@@ -33,13 +33,10 @@ export type InventorySerialStatus = "available" | "allocated" | "damaged" | "sol
 
 export type StockTransferStatus = "pending" | "in_transit" | "completed" | "cancelled";
 
-// Procurement pipeline v2: Purchase Request -> Vendor Selection -> Purchase
-// Order -> Proforma Invoice -> Shipment/Insurance/Customs -> Goods Receipt.
-export type PurchaseRequestStatus = "draft" | "submitted" | "approved" | "rejected" | "converted_to_po";
-export type PurchaseRequestPriority = "low" | "medium" | "high" | "urgent";
-export type PurchaseRequestAttachmentType = "general" | "quotation" | "comparison_sheet";
-
+// Procurement pipeline v2: Purchase Order -> Proforma Invoice ->
+// Shipment/Insurance/Customs -> Goods Receipt.
 export type PurchaseOrderStatus = "created" | "sent" | "accepted" | "cancelled" | "completed";
+export type PurchaseOrderApprovalStatus = "pending_approval" | "approved" | "rejected";
 export type PurchaseType = "local" | "international";
 
 export type ProformaInvoiceStatus = "waiting" | "approved" | "rejected";

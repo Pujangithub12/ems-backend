@@ -16,6 +16,6 @@ const adapter = new adapter_pg_1.PrismaPg({
 });
 exports.prisma = new client_1.PrismaClient({
     adapter,
-    log: isProduction ? [] : ["query", "error", "warn"],
+    log: isProduction ? [] : ["error", "warn"],
 });
 //# sourceMappingURL=prisma.js.map

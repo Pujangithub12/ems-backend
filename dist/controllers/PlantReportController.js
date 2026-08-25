@@ -3,7 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PlantReportController = void 0;
 const prisma_1 = require("../config/prisma");
 const enums_1 = require("../types/enums");
-const toNum = (v) => v === null || v === undefined ? null : Number(v);
 /** Parses a "YYYY-MM-DD" date string as a UTC midnight Date — matches how
  * the `date` column (Postgres `date`, no time component) round-trips
  * through Prisma, and avoids the local-timezone-shift bug plain
@@ -19,38 +18,14 @@ const REPORT_INCLUDE = {
     project: { select: { id: true, name: true } },
     staff: { include: { user: { select: { id: true, fullName: true } } } },
 };
-/** Flattens the raw Decimal/join-row shape into plain numbers, and adds the
- * derived figures (steam ton, water flow, pellet stock closing) computed
- * from the raw readings rather than stored — see schema.prisma's comment on
- * PlantDailyReport for why. */
+/** Flattens the raw join-row shape into a plain response object. All plant
+ * metrics live in customValues now — there are no fixed reading columns or
+ * derived figures left to compute here. */
 const shapeReport = (report) => {
-    const steamInitial = toNum(report.steamInitial);
-    const steamFinal = toNum(report.steamFinal);
-    const waterInitial = toNum(report.waterInitial);
-    const waterFinal = toNum(report.waterFinal);
-    const pelletStockOpening = toNum(report.pelletStockOpening) ?? 0;
-    const pelletReceivedKg = toNum(report.pelletReceivedKg) ?? 0;
-    const pelletUsedKg = toNum(report.pelletUsedKg) ?? 0;
     return {
         id: report.id,
         date: report.date.toISOString().slice(0, 10),
-        steamInitial,
-        steamFinal,
-        steamTon: steamInitial != null && steamFinal != null ? steamFinal - steamInitial : null,
-        steamPressure: toNum(report.steamPressure),
-        steamTemp: toNum(report.steamTemp),
-        feedwaterTemp: toNum(report.feedwaterTemp),
-        pelletUsedKg: toNum(report.pelletUsedKg),
-        pelletsBag: toNum(report.pelletsBag),
-        pelletReceivedKg: toNum(report.pelletReceivedKg),
-        pelletStockOpening,
-        pelletStockClosing: pelletStockOpening + pelletReceivedKg - pelletUsedKg,
-        waterInitial,
-        waterFinal,
-        waterFlow: waterInitial != null && waterFinal != null ? waterFinal - waterInitial : null,
-        burnerStatus: report.burnerStatus,
-        burnerHours: toNum(report.burnerHours),
-        shutdownReason: report.shutdownReason,
+        customValues: report.customValues ?? {},
         staff: Array.isArray(report.staff) ? report.staff.map((s) => s.user) : [],
         staffCount: Array.isArray(report.staff) ? report.staff.length : 0,
         project: report.project,
@@ -59,22 +34,6 @@ const shapeReport = (report) => {
         updatedAt: report.updatedAt,
     };
 };
-/** The most recent report strictly before `date` for this organization+project
- * (pellet stock is tracked per plant, not shared across an organization's
- * projects) — its computed closing balance becomes the new entry's opening
- * balance. */
-async function previousClosingBalance(organizationId, projectId, date) {
-    const prev = await prisma_1.prisma.plantDailyReport.findFirst({
-        where: { organizationId, projectId, date: { lt: date } },
-        orderBy: { date: "desc" },
-    });
-    if (!prev)
-        return 0;
-    const opening = toNum(prev.pelletStockOpening) ?? 0;
-    const received = toNum(prev.pelletReceivedKg) ?? 0;
-    const used = toNum(prev.pelletUsedKg) ?? 0;
-    return opening + received - used;
-}
 /** Parses+validates a projectId that must belong to this organization —
  * returns null for an absent/empty value (meaning "no project" / "all
  * projects", depending on call site), or throws a 400-worthy Error for a
@@ -89,6 +48,47 @@ async function resolveProjectId(organizationId, raw) {
     if (!project)
         throw new Error("Project not found in this organization");
     return projectId;
+}
+/** Coerces one raw custom-field value to match its field's declared
+ * dataType — an empty/unparseable value becomes null rather than rejecting
+ * the whole save, since these are optional extra columns, not required
+ * plant readings. */
+function coerceCustomValue(value, dataType) {
+    if (value === null || value === undefined || value === "")
+        return null;
+    switch (dataType) {
+        case "number": {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : null;
+        }
+        case "boolean":
+            return Boolean(value);
+        case "date": {
+            const s = String(value);
+            return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+        }
+        case "text":
+        default:
+            return String(value).trim() || null;
+    }
+}
+/** Validates+coerces a report's customValues payload against this
+ * organization's defined custom fields: drops any key that isn't a real
+ * field id for this organization (stale field picked up from a stale form,
+ * or a tampered request), and coerces the rest per-field to match its
+ * dataType. */
+async function coerceCustomValues(organizationId, raw) {
+    if (!raw || typeof raw !== "object")
+        return {};
+    const fields = await prisma_1.prisma.plantReportCustomField.findMany({ where: { organizationId } });
+    const result = {};
+    for (const field of fields) {
+        const key = String(field.id);
+        if (!(key in raw))
+            continue;
+        result[key] = coerceCustomValue(raw[key], field.dataType);
+    }
+    return result;
 }
 /** Whether `actor` may edit/delete a report they didn't create themselves. */
 const canManage = (report, actorId, actorRole) => report.createdById === actorId ||
@@ -133,15 +133,27 @@ class PlantReportController {
                 const present = vals.filter((v) => v != null);
                 return present.length ? present.reduce((a, b) => a + b, 0) / present.length : null;
             };
+            // Per-numeric-custom-field totals across the month — org-defined
+            // fields are the only source of plant metrics now, so this is the
+            // whole summary beyond daysLogged.
+            const numberFields = await prisma_1.prisma.plantReportCustomField.findMany({
+                where: { organizationId, dataType: "number" },
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+            });
+            const customFieldTotals = numberFields.map((field) => {
+                const key = String(field.id);
+                const values = shaped
+                    .map((r) => r.customValues[key])
+                    .map((v) => (typeof v === "number" ? v : null));
+                return {
+                    fieldId: field.id,
+                    name: field.name,
+                    sum: sum(values),
+                    avg: avg(values),
+                };
+            });
             const summary = {
-                totalSteamTon: sum(shaped.map((r) => r.steamTon)),
-                avgSteamPressure: avg(shaped.map((r) => r.steamPressure)),
-                avgSteamTemp: avg(shaped.map((r) => r.steamTemp)),
-                totalPelletUsedKg: sum(shaped.map((r) => r.pelletUsedKg)),
-                totalPelletReceivedKg: sum(shaped.map((r) => r.pelletReceivedKg)),
-                totalWaterFlow: sum(shaped.map((r) => r.waterFlow)),
-                totalBurnerHours: sum(shaped.map((r) => r.burnerHours)),
-                shutdownDays: shaped.filter((r) => r.steamTon === 0 || r.burnerStatus === "stopped").length,
+                customFieldTotals,
                 daysLogged: shaped.length,
             };
             return res.status(200).json({ reports: shaped, summary, year, month });
@@ -151,11 +163,9 @@ class PlantReportController {
             return res.status(500).json({ message: "Internal server error" });
         }
     };
-    /** GET /plant-reports/prefill?date=YYYY-MM-DD&projectId= — what the entry
-     * form should show before the operator types anything: whether an entry
-     * for this project+date already exists (so the form can switch to edit
-     * mode) and, if not, the opening pellet balance carried over from that
-     * project's previous day. */
+    /** GET /plant-reports/prefill?date=YYYY-MM-DD&projectId= — whether an
+     * entry for this project+date already exists, so the form can switch to
+     * edit mode. */
     static getPrefill = async (req, res) => {
         try {
             const organizationId = req.organization.id;
@@ -176,8 +186,7 @@ class PlantReportController {
             if (existing) {
                 return res.status(200).json({ exists: true, report: shapeReport(existing) });
             }
-            const openingBalance = await previousClosingBalance(organizationId, projectId, date);
-            return res.status(200).json({ exists: false, openingBalance });
+            return res.status(200).json({ exists: false });
         }
         catch (error) {
             console.error(error);
@@ -189,25 +198,6 @@ class PlantReportController {
         const date = parseDateOnly(body.date || "");
         if (!date)
             return res.status(400).json({ message: "A valid date (YYYY-MM-DD) is required" });
-        if (body.steamInitial != null &&
-            body.steamFinal != null &&
-            Number(body.steamFinal) < Number(body.steamInitial)) {
-            return res.status(400).json({ message: "Steam final reading cannot be less than the initial reading" });
-        }
-        if (body.waterInitial != null &&
-            body.waterFinal != null &&
-            Number(body.waterFinal) < Number(body.waterInitial)) {
-            return res.status(400).json({ message: "Water final reading cannot be less than the initial reading" });
-        }
-        const steamTon = body.steamInitial != null && body.steamFinal != null
-            ? Number(body.steamFinal) - Number(body.steamInitial)
-            : null;
-        const shutdownRequired = steamTon === 0 || body.burnerStatus === "stopped";
-        if (shutdownRequired && !body.shutdownReason?.trim()) {
-            return res.status(400).json({
-                message: "A shutdown reason is required when steam ton is 0 or the burner is stopped",
-            });
-        }
         try {
             const organizationId = req.organization.id;
             let projectId;
@@ -217,28 +207,15 @@ class PlantReportController {
             catch (err) {
                 return res.status(400).json({ message: err.message });
             }
-            const pelletStockOpening = await previousClosingBalance(organizationId, projectId, date);
             const staffUserIds = Array.isArray(body.staffUserIds) ? [...new Set(body.staffUserIds)] : [];
+            const customValues = await coerceCustomValues(organizationId, body.customValues);
             const created = await prisma_1.prisma.$transaction(async (tx) => {
                 const report = await tx.plantDailyReport.create({
                     data: {
                         organizationId,
                         projectId,
                         date,
-                        steamInitial: body.steamInitial ?? null,
-                        steamFinal: body.steamFinal ?? null,
-                        steamPressure: body.steamPressure ?? null,
-                        steamTemp: body.steamTemp ?? null,
-                        feedwaterTemp: body.feedwaterTemp ?? null,
-                        pelletUsedKg: body.pelletUsedKg ?? null,
-                        pelletsBag: body.pelletsBag ?? null,
-                        pelletReceivedKg: body.pelletReceivedKg ?? null,
-                        pelletStockOpening,
-                        waterInitial: body.waterInitial ?? null,
-                        waterFinal: body.waterFinal ?? null,
-                        burnerStatus: body.burnerStatus ?? null,
-                        burnerHours: body.burnerHours ?? null,
-                        shutdownReason: body.shutdownReason?.trim() || null,
+                        customValues,
                         createdById: req.user.id,
                     },
                 });
@@ -268,25 +245,6 @@ class PlantReportController {
         const reportId = parseInt(id, 10);
         if (!Number.isInteger(reportId))
             return res.status(400).json({ message: "Invalid report id" });
-        if (body.steamInitial != null &&
-            body.steamFinal != null &&
-            Number(body.steamFinal) < Number(body.steamInitial)) {
-            return res.status(400).json({ message: "Steam final reading cannot be less than the initial reading" });
-        }
-        if (body.waterInitial != null &&
-            body.waterFinal != null &&
-            Number(body.waterFinal) < Number(body.waterInitial)) {
-            return res.status(400).json({ message: "Water final reading cannot be less than the initial reading" });
-        }
-        const steamTon = body.steamInitial != null && body.steamFinal != null
-            ? Number(body.steamFinal) - Number(body.steamInitial)
-            : null;
-        const shutdownRequired = steamTon === 0 || body.burnerStatus === "stopped";
-        if (shutdownRequired && !body.shutdownReason?.trim()) {
-            return res.status(400).json({
-                message: "A shutdown reason is required when steam ton is 0 or the burner is stopped",
-            });
-        }
         try {
             const organizationId = req.organization.id;
             const existing = await prisma_1.prisma.plantDailyReport.findFirst({
@@ -300,24 +258,11 @@ class PlantReportController {
                     .json({ message: "Only the person who created this report (or an admin) can edit it" });
             }
             const staffUserIds = Array.isArray(body.staffUserIds) ? [...new Set(body.staffUserIds)] : [];
+            const customValues = await coerceCustomValues(organizationId, body.customValues);
             const updated = await prisma_1.prisma.$transaction(async (tx) => {
                 await tx.plantDailyReport.update({
                     where: { id: reportId },
-                    data: {
-                        steamInitial: body.steamInitial ?? null,
-                        steamFinal: body.steamFinal ?? null,
-                        steamPressure: body.steamPressure ?? null,
-                        steamTemp: body.steamTemp ?? null,
-                        feedwaterTemp: body.feedwaterTemp ?? null,
-                        pelletUsedKg: body.pelletUsedKg ?? null,
-                        pelletsBag: body.pelletsBag ?? null,
-                        pelletReceivedKg: body.pelletReceivedKg ?? null,
-                        waterInitial: body.waterInitial ?? null,
-                        waterFinal: body.waterFinal ?? null,
-                        burnerStatus: body.burnerStatus ?? null,
-                        burnerHours: body.burnerHours ?? null,
-                        shutdownReason: body.shutdownReason?.trim() || null,
-                    },
+                    data: { customValues },
                 });
                 await tx.plantReportStaff.deleteMany({ where: { reportId } });
                 if (staffUserIds.length > 0) {

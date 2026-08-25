@@ -6,11 +6,9 @@ import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { PlantReportController } from "../controllers/PlantReportController";
 import { PlantReportFieldController } from "../controllers/PlantReportFieldController";
-import { PlantReportItemController } from "../controllers/PlantReportItemController";
 import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
-import { PurchaseRequestController } from "../controllers/PurchaseRequestController";
 import { PurchaseOrderController } from "../controllers/PurchaseOrderController";
 import { ProformaInvoiceController } from "../controllers/ProformaInvoiceController";
 import { ShipmentController } from "../controllers/ShipmentController";
@@ -41,9 +39,9 @@ import {
   upload,
   uploadProjectFile,
   uploadOrganizationFile,
+  uploadOrganizationSignature,
+  uploadOrganizationStamp,
   uploadInventoryFile,
-  uploadPurchaseRequestFile,
-  uploadPurchaseOrderFile,
   uploadProformaInvoiceFile,
   uploadCustomsFile,
   uploadGoodsReceiptFile,
@@ -79,6 +77,25 @@ router.get(
 );
 router.put("/workspaces/:id", authMiddleware, OrganizationController.update);
 router.delete("/workspaces/:id", authMiddleware, OrganizationController.remove);
+
+// Letterhead signature/stamp images (Settings > Organization tab), scoped to the caller's
+// current organization — used when generating Purchase Order PDFs.
+router.post(
+  "/workspace/signature",
+  authMiddleware,
+  requireCsrfHeader,
+  ...uploadOrganizationSignature,
+  OrganizationController.uploadSignature,
+);
+router.delete("/workspace/signature", authMiddleware, OrganizationController.deleteSignature);
+router.post(
+  "/workspace/stamp",
+  authMiddleware,
+  requireCsrfHeader,
+  ...uploadOrganizationStamp,
+  OrganizationController.uploadStamp,
+);
+router.delete("/workspace/stamp", authMiddleware, OrganizationController.deleteStamp);
 
 // Cross-organization member access matrix (Settings > Organization tab) — lets a
 // caller who belongs to more than one of their own organizations manage which
@@ -182,30 +199,6 @@ router.delete(
   authMiddleware,
   roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   PlantReportFieldController.remove,
-);
-
-// Plant report items — any org member can read them (needed to render the
-// daily entry form's item rows), but defining/renaming/removing an item is
-// an organization-wide schema change, so it's admin-gated. Same pattern as
-// plant-report-fields above.
-router.get("/plant-report-items", authMiddleware, PlantReportItemController.list);
-router.post(
-  "/plant-report-items",
-  authMiddleware,
-  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  PlantReportItemController.create,
-);
-router.put(
-  "/plant-report-items/:id",
-  authMiddleware,
-  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  PlantReportItemController.update,
-);
-router.delete(
-  "/plant-report-items/:id",
-  authMiddleware,
-  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  PlantReportItemController.remove,
 );
 
 // Notification routes — every authenticated user reads/manages only their own.
@@ -350,120 +343,39 @@ router.put(
   ProjectFileController.setFileAccess,
 );
 
-// Procurement pipeline v2 (Purchase Request -> Vendor Selection -> Purchase Order ->
-// Proforma Invoice -> Shipment/Insurance/Customs -> Cost Sheet -> Goods Receipt -> Inventory).
+// Procurement pipeline v2 (Purchase Order -> Proforma Invoice ->
+// Shipment/Insurance/Customs -> Cost Sheet -> Goods Receipt -> Inventory).
 // Replaces the old flat "Procurement" routes below — ProcurementController's underlying data
 // (procurement_item/procurement_attachment/procurement_status_history) is intentionally kept
-// in the DB for historical integrity but is no longer routed to; see
-// src/utils/migrate-procurement-to-pr-po.ts for the one-off migration into the new tables.
-// View endpoints are open to any organization member with project access; mutations are gated
-// on the existing "projects.procurement" permission key (no new permission key was introduced),
-// except creating/editing/submitting a Purchase Request itself, which any authenticated member
-// can do (see the "Purchase Requests + Vendor Selection" section below) — raising a request is
-// meant to be self-service, only approving it and everything downstream is admin territory.
+// in the DB for historical integrity but is no longer routed to.
+// View endpoints are open to any organization member with project access; mutations (including
+// creating a Purchase Order) are gated on the existing "projects.procurement" permission key.
 // The Purchase Orders and Vendors *pages* are additionally hidden from non-admins in the
 // frontend (nav + route guard) since browsing PO/vendor pricing is admin-only by design; the
 // underlying read APIs stay open like every other view endpoint here.
 
-// Purchase Requests + Vendor Selection
-// Creating/editing/submitting a draft PR is open to any authenticated organization member
-// (any employee can raise a purchase request) — approving/rejecting it, and everything from
-// vendor selection onward, stays gated on "projects.procurement" (see changeStatus's inline
-// check and the vendor-quote/generate-po routes below).
-router.get("/workspace/purchase-requests", authMiddleware, PurchaseRequestController.getOrganizationPurchaseRequests);
-router.get("/projects/:projectId/purchase-requests", authMiddleware, PurchaseRequestController.getPurchaseRequests);
-router.post(
-  "/projects/:projectId/purchase-requests",
-  authMiddleware,
-  PurchaseRequestController.addPurchaseRequest,
-);
-router.put(
-  "/purchase-requests/:id",
-  authMiddleware,
-  PurchaseRequestController.updatePurchaseRequest,
-);
-router.delete(
-  "/purchase-requests/:id",
-  authMiddleware,
-  PurchaseRequestController.deletePurchaseRequest,
-);
-router.get("/purchase-requests/:id/detail", authMiddleware, PurchaseRequestController.getPurchaseRequestDetail);
-router.post(
-  "/purchase-requests/:id/status",
-  authMiddleware,
-  PurchaseRequestController.changeStatus,
-);
-router.post(
-  "/purchase-requests/:id/vendor-quotes",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  PurchaseRequestController.addVendorQuote,
-);
-router.put(
-  "/purchase-requests/:id/vendor-quotes/:quoteId",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  PurchaseRequestController.updateVendorQuote,
-);
-router.delete(
-  "/purchase-requests/:id/vendor-quotes/:quoteId",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  PurchaseRequestController.deleteVendorQuote,
-);
-router.post(
-  "/purchase-requests/:id/vendor-quotes/:quoteId/select",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  PurchaseRequestController.selectVendorQuote,
-);
-router.post(
-  "/purchase-requests/:id/generate-po",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  PurchaseRequestController.generatePurchaseOrder,
-);
-router.post(
-  "/purchase-requests/:itemId/attachments",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  requireCsrfHeader,
-  ...uploadPurchaseRequestFile,
-  PurchaseRequestController.addAttachment,
-);
-router.delete(
-  "/purchase-requests/:itemId/attachments/:attachmentId",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  PurchaseRequestController.deleteAttachment,
-);
-
 // Purchase Orders + Cost Sheet
 router.get("/workspace/purchase-orders", authMiddleware, PurchaseOrderController.getOrganizationPurchaseOrders);
 router.get("/projects/:projectId/purchase-orders", authMiddleware, PurchaseOrderController.getPurchaseOrders);
+router.post(
+  "/projects/:projectId/purchase-orders",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  PurchaseOrderController.createPurchaseOrder,
+);
 router.get("/purchase-orders/:id/detail", authMiddleware, PurchaseOrderController.getPurchaseOrderDetail);
 router.put(
   "/purchase-orders/:id",
   authMiddleware,
-  permissionMiddleware("projects.procurement"),
   PurchaseOrderController.updatePurchaseOrder,
+);
+router.post(
+  "/purchase-orders/:id/approval",
+  authMiddleware,
+  PurchaseOrderController.decidePurchaseOrderApproval,
 );
 router.get("/purchase-orders/:id/cost-sheet", authMiddleware, PurchaseOrderController.getCostSheet);
 router.get("/purchase-orders/:id/pdf", authMiddleware, PurchaseOrderController.downloadPdf);
-router.post(
-  "/purchase-orders/:itemId/attachments",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  requireCsrfHeader,
-  ...uploadPurchaseOrderFile,
-  PurchaseOrderController.addAttachment,
-);
-router.delete(
-  "/purchase-orders/:itemId/attachments/:attachmentId",
-  authMiddleware,
-  permissionMiddleware("projects.procurement"),
-  PurchaseOrderController.deleteAttachment,
-);
 
 // Proforma Invoices
 router.get("/workspace/proforma-invoices", authMiddleware, ProformaInvoiceController.getAllProformaInvoices);
@@ -772,6 +684,18 @@ router.post(
   authMiddleware,
   anyPermissionMiddleware(["projects.inventory", "projects.procurement"]),
   CatalogItemController.createItem,
+);
+router.put(
+  "/workspace/items/:itemId",
+  authMiddleware,
+  anyPermissionMiddleware(["projects.inventory", "projects.procurement"]),
+  CatalogItemController.updateItem,
+);
+router.delete(
+  "/workspace/items/:itemId",
+  authMiddleware,
+  anyPermissionMiddleware(["projects.inventory", "projects.procurement"]),
+  CatalogItemController.deleteItem,
 );
 
 // Reports dashboard

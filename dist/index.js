@@ -20,6 +20,7 @@ const backfill_organization_1 = require("./utils/backfill-organization");
 const permissionService_1 = require("./utils/permissionService");
 const auth_1 = require("./middlewares/auth");
 const uploadAccess_1 = require("./middlewares/uploadAccess");
+const supabaseStorage_1 = require("./config/supabaseStorage");
 const socket_1 = require("./realtime/socket");
 dotenv_1.default.config();
 console.log("RESEND_API_KEY present?", !!process.env.RESEND_API_KEY);
@@ -31,6 +32,14 @@ process.on("unhandledRejection", (reason, promise) => {
     console.error("Unhandled Rejection at:", promise, "reason:", reason);
 });
 const app = (0, express_1.default)();
+// The Express process only ever speaks plain HTTP (see createServer below) —
+// in production it sits behind a reverse proxy/load balancer that terminates
+// TLS, so without this, req.protocol always reports "http" regardless of the
+// real public scheme. That broke signed file-view URLs (getFileViewToken
+// built an http:// link even though the site is https-only), which Microsoft's
+// Office Online viewer then couldn't fetch. Also fixes req.ip for the rate
+// limiters below, which otherwise all see the proxy's IP instead of the client's.
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 3000;
 const httpServer = (0, http_1.createServer)(app);
 (0, socket_1.initSocket)(httpServer);
@@ -67,11 +76,28 @@ app.use((req, res, next) => {
     console.log(`[REQUEST] ${req.method} ${req.url}`);
     next();
 });
-// Serve static files from uploads directory — gated behind auth + an
-// organization-ownership check (see uploadAccess.ts) so attachments from one
-// organization can't be read via URL by a user of another, or by anyone
-// unauthenticated at all.
-app.use("/uploads", auth_1.authMiddleware, uploadAccess_1.verifyUploadAccess, express_1.default.static(path_1.default.join(__dirname, "../uploads")));
+// Serves task attachments, purchase request/order files, proforma invoices,
+// customs docs, goods receipts, and inventory attachments — gated behind auth
+// + an organization-ownership check (see uploadAccess.ts) so attachments from
+// one organization can't be read via URL by a user of another, or by anyone
+// unauthenticated at all. Files themselves live in Supabase Storage (see
+// config/supabaseStorage.ts) under the same "<category>/<id>/<filename>" key
+// this route's path always used locally — only the backing store changed,
+// not the URL scheme, so nothing downstream needed to change.
+app.use("/uploads", auth_1.authMiddleware, uploadAccess_1.verifyUploadAccess, async (req, res) => {
+    const key = req.path.replace(/^\/+/, "");
+    try {
+        const buffer = await (0, supabaseStorage_1.downloadFileFromStorage)(key);
+        res.setHeader("Content-Type", "application/octet-stream");
+        res.setHeader("Content-Disposition", `inline; filename="${path_1.default.basename(key)}"`);
+        res.setHeader("Content-Length", buffer.length);
+        res.send(buffer);
+    }
+    catch (error) {
+        console.error(`Failed to serve upload "${key}":`, error);
+        res.status(404).json({ message: "File not found" });
+    }
+});
 app.use("/api", routes_1.default);
 // Turns a rejected upload (blocked file type, size-limit) into a clean 400
 // instead of falling through to Express's default 500/HTML error page.

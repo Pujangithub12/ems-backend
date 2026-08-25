@@ -20,10 +20,6 @@ const authMiddleware = async (req, res, next) => {
         return res.status(401).json({ message: "No token provided" });
     }
     try {
-        // The JWT only ever carries the user id now — role is per-organization
-        // (see OrganizationMembership), so it can't be baked into a token that
-        // outlives any single organization context. `req.user.role` is filled in
-        // below once `req.organization` is resolved.
         const decoded = jsonwebtoken_1.default.verify(token, jwt_1.JWT_SECRET);
         req.user = {
             id: decoded.id,
@@ -55,17 +51,9 @@ const authMiddleware = async (req, res, next) => {
             ? headerOrganizationId[0]
             : headerOrganizationId;
         let resolvedOrganization = null;
-        // Accounts created via an accepted organization invite are permanently
-        // pinned to the one organization they were invited into — resolved here,
-        // before any header/cookie logic, so nothing below can ever put them in
-        // a different organization's context.
         if (user.homeOrganizationId != null) {
             const home = userOrganizations.find((w) => w.id === user.homeOrganizationId);
             if (!home) {
-                // Home organization was deleted, or this account's membership in it
-                // was otherwise removed — never fall through to the "no organization
-                // -> create a default one" path below, which would hand a
-                // restricted account an organization of its own.
                 return res
                     .status(403)
                     .json({ message: "Access Forbidden", code: "WORKSPACE_ACCESS_FORBIDDEN" });

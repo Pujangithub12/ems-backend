@@ -9,6 +9,7 @@ import {
   AddProjectTaskDto,
   UpdateProjectTaskDto,
 } from "../dto/project.dto";
+import { parsePageParams } from "../utils/pagination";
 
 /** Deep relation tree matching the old QueryBuilder's leftJoinAndSelect chain:
  * assignees, files, headings -> tasks -> assignedUsers, headings -> subHeadings
@@ -159,39 +160,43 @@ export class ProjectController {
     }
   };
 
+  /** Paginated only when `page`/`pageSize` are explicitly passed (used by the Projects list page) — otherwise
+   * returns the full array as before, since several other pages (dropdowns/lookups) rely on getting every project. */
   static getAllProjects = async (req: AuthRequest, res: Response) => {
     try {
       const organization = req.organization!; // Assert not undefined (set by middleware)
       const user = req.user!;
+      const paginated = req.query.page !== undefined || req.query.pageSize !== undefined;
 
-      let projects;
+      const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+      const status = typeof req.query.status === "string" ? req.query.status : "";
 
-      if (user.role === "admin" || user.role === "super_admin") {
-        // Admin or super admin see all projects
-        projects = await prisma.project.findMany({
-          where: { organizationId: organization.id },
-          include: PROJECT_INCLUDE,
-          orderBy: { createdAt: "desc" },
-        });
-      } else {
-        // Regular users only see projects they are assigned to
-        projects = await prisma.project.findMany({
-          where: {
-            organizationId: organization.id,
-            assignees: { some: { userId: user.id } },
-          },
-          include: PROJECT_INCLUDE,
-          orderBy: { createdAt: "desc" },
-        });
+      const where: any =
+        user.role === "admin" || user.role === "super_admin"
+          ? { organizationId: organization.id }
+          : { organizationId: organization.id, assignees: { some: { userId: user.id } } };
+      if (paginated && search) {
+        where.OR = [
+          { name: { contains: search, mode: "insensitive" } },
+          { description: { contains: search, mode: "insensitive" } },
+        ];
+      }
+      if (paginated && status && status !== "all") {
+        where.status = status;
       }
 
-      const shaped = projects.map(shapeProject);
+      if (!paginated) {
+        const projects = await prisma.project.findMany({ where, include: PROJECT_INCLUDE, orderBy: { createdAt: "desc" } });
+        return res.status(200).json(projects.map(shapeProject));
+      }
 
-      console.log(
-        "[ProjectController.getAllProjects] Projects count:",
-        shaped.length,
-      );
-      return res.status(200).json(shaped);
+      const { page, pageSize, skip, take } = parsePageParams(req);
+      const [projects, total] = await Promise.all([
+        prisma.project.findMany({ where, include: PROJECT_INCLUDE, orderBy: { createdAt: "desc" }, skip, take }),
+        prisma.project.count({ where }),
+      ]);
+
+      return res.status(200).json({ data: projects.map(shapeProject), total, page, pageSize });
     } catch (error) {
       console.error("[ProjectController.getAllProjects] Error:", error);
       console.error(error);
