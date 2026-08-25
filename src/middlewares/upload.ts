@@ -26,6 +26,15 @@ const fileFilter: NonNullable<multer.Options["fileFilter"]> = (_req, file, cb) =
   cb(null, true);
 };
 
+/** Used for the organization letterhead signature/stamp uploads — images only. */
+const imageFileFilter: NonNullable<multer.Options["fileFilter"]> = (_req, file, cb) => {
+  if (!file.mimetype.startsWith("image/")) {
+    cb(new Error(`File type "${file.mimetype}" is not allowed — only image files may be uploaded here.`));
+    return;
+  }
+  cb(null, true);
+};
+
 /** Every per-resource upload destination below joins a route/organization id
  * straight into a storage key (`<segment>/<id>/<filename>`). Without this
  * check, an id containing ".." (or anything non-numeric) would let a
@@ -67,13 +76,15 @@ interface UploadConfig {
   fileSizeLimit: number;
   /** Returns the storage directory (e.g. "projects/10"), or null to reject the request with 400. */
   resolveDir: (req: AuthRequest) => number | string | null;
+  /** Restrict to image mimetypes only — used for the org letterhead signature/stamp uploads. */
+  imagesOnly?: boolean;
 }
 
 /** Builds a [multer-parse, persist-to-storage] middleware pair standing in for what used to be a single multer(diskStorage) instance. */
 function makeUploadMiddleware(config: UploadConfig): RequestHandler[] {
   const parser = multer({
     storage: multer.memoryStorage(),
-    fileFilter,
+    fileFilter: config.imagesOnly ? imageFileFilter : fileFilter,
     limits: { fileSize: config.fileSizeLimit },
   });
   const parseStep = config.mode === "single" ? parser.single(config.field) : parser.array(config.field);
@@ -135,6 +146,31 @@ export const uploadOrganizationFile = makeUploadMiddleware({
   },
 });
 
+// Organization letterhead signature/stamp images (Settings > Organization tab), stored under
+// uploads/workspaces/<organizationId>/signature|stamp/ — used when generating Purchase Order
+// PDFs (see purchaseOrderPdf.ts). Capped small (200KB) since these are just a letterhead
+// signature/seal image, not a general document attachment.
+export const uploadOrganizationSignature = makeUploadMiddleware({
+  field: "file",
+  mode: "single",
+  fileSizeLimit: 200 * 1024,
+  imagesOnly: true,
+  resolveDir: (req) => {
+    const organizationId = parsePositiveIntParam(req.organization?.id);
+    return organizationId == null ? null : `workspaces/${organizationId}/signature`;
+  },
+});
+export const uploadOrganizationStamp = makeUploadMiddleware({
+  field: "file",
+  mode: "single",
+  fileSizeLimit: 200 * 1024,
+  imagesOnly: true,
+  resolveDir: (req) => {
+    const organizationId = parsePositiveIntParam(req.organization?.id);
+    return organizationId == null ? null : `workspaces/${organizationId}/stamp`;
+  },
+});
+
 // Inventory item attachments (drawer Documents section), stored under uploads/inventory/<itemId>/
 export const uploadInventoryFile = makeUploadMiddleware({
   field: "file",
@@ -170,10 +206,6 @@ const makeOwnedResourceUpload = (segment: string): RequestHandler[] =>
     },
   });
 
-// Purchase request attachments (quotations/comparison sheets/general), uploads/purchase-requests/<purchaseRequestId>/
-export const uploadPurchaseRequestFile = makeOwnedResourceUpload("purchase-requests");
-// Purchase order attachments, uploads/purchase-orders/<purchaseOrderId>/
-export const uploadPurchaseOrderFile = makeOwnedResourceUpload("purchase-orders");
 // Proforma invoice PDF, uploads/proforma-invoices/<proformaInvoiceId>/
 export const uploadProformaInvoiceFile = makeOwnedResourceUpload("proforma-invoices");
 // Customs supporting documents (BoL/commercial invoice/etc.), uploads/customs/<customsId>/

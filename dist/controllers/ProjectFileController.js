@@ -5,10 +5,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProjectFileController = void 0;
 const path_1 = __importDefault(require("path"));
-const fs_1 = __importDefault(require("fs"));
 const prisma_1 = require("../config/prisma");
 const fileAccess_1 = require("../utils/fileAccess");
 const permissionService_1 = require("../utils/permissionService");
+const supabaseStorage_1 = require("../config/supabaseStorage");
 /** A file/folder is either project-scoped (Documents tab) or organization-scoped (sidebar Documents page, project null) — every ProjectFile row carries its own organizationId regardless, so this is just that column. */
 const ownerOrganizationId = (file) => file.organizationId ?? undefined;
 /** Documents tab: files and folders scoped to a project. */
@@ -120,6 +120,13 @@ class ProjectFileController {
         if (!uploadedFile) {
             return res.status(400).json({ message: "A file is required" });
         }
+        // Computed up front (used by every early-return cleanup below) — this is
+        // the Supabase Storage key the upload middleware already wrote the bytes
+        // to, stripped of the "uploads/" prefix that mimics the old disk-path shape.
+        const relativePath = path_1.default
+            .relative("uploads", uploadedFile.path)
+            .split(path_1.default.sep)
+            .join("/");
         try {
             const project = await prisma_1.prisma.project.findFirst({
                 where: {
@@ -129,14 +136,10 @@ class ProjectFileController {
             });
             if (!project) {
                 // Clean up the orphaned upload if the project doesn't exist/isn't in this organization
-                fs_1.default.unlink(uploadedFile.path, () => { });
+                (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
                 return res.status(404).json({ message: "Project not found" });
             }
             const uploadedBy = await prisma_1.prisma.user.findUnique({ where: { id: req.user.id } });
-            const relativePath = path_1.default
-                .relative("uploads", uploadedFile.path)
-                .split(path_1.default.sep)
-                .join("/");
             const ext = path_1.default.extname(uploadedFile.originalname).replace(".", "").toLowerCase();
             const fileData = {
                 name: uploadedFile.originalname,
@@ -152,12 +155,12 @@ class ProjectFileController {
                 const parsedParentId = parseInt(parentId);
                 const parentFile = await prisma_1.prisma.projectFile.findFirst({ where: { id: parsedParentId } });
                 if (!parentFile || ownerOrganizationId(parentFile) !== req.organization.id) {
-                    fs_1.default.unlink(uploadedFile.path, () => { });
+                    (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
                     return res.status(404).json({ message: "Parent folder not found" });
                 }
                 const parentLevel = await (0, fileAccess_1.resolveAccessForFile)(parentFile, req.user.id, req.user.role);
                 if (parentLevel !== "write") {
-                    fs_1.default.unlink(uploadedFile.path, () => { });
+                    (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
                     return res.status(403).json({ message: "You don't have permission to add items to this folder" });
                 }
                 fileData.parentId = parsedParentId;
@@ -165,7 +168,7 @@ class ProjectFileController {
             else {
                 const allowed = await (0, permissionService_1.roleHasPermission)(req.user.role, "projects.documents");
                 if (!allowed) {
-                    fs_1.default.unlink(uploadedFile.path, () => { });
+                    (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
                     return res.status(403).json({ message: "You don't have permission to manage documents" });
                 }
             }
@@ -174,12 +177,17 @@ class ProjectFileController {
             return res.status(201).json({ message: "File uploaded", file });
         }
         catch (error) {
-            fs_1.default.unlink(uploadedFile.path, () => { });
+            (0, supabaseStorage_1.deleteFileFromStorage)(relativePath);
             console.error(error);
             return res.status(500).json({ message: "Internal server error" });
         }
     };
-    /** GET /projects/files/:fileId/download — streams the file back with its original name. */
+    /**
+     * GET /projects/files/:fileId/download — streams the file back with its
+     * original name, forcing a download. Requires "write" access — read-only
+     * grantees can view the file in-browser (see /view, /view-token) but can't
+     * pull a local copy of it.
+     */
     static downloadProjectFile = async (req, res) => {
         const { fileId } = req.params;
         try {
@@ -196,8 +204,10 @@ class ProjectFileController {
             if (level === "none") {
                 return res.status(404).json({ message: "File not found" });
             }
-            const absolutePath = path_1.default.resolve("uploads", file.path);
-            return res.download(absolutePath, file.name);
+            if (level !== "write") {
+                return res.status(403).json({ message: "You don't have permission to download this file" });
+            }
+            return ProjectFileController.streamFileToResponse(res, file.path, file.name, "attachment");
         }
         catch (error) {
             console.error(error);
@@ -221,19 +231,59 @@ class ProjectFileController {
             if (level === "none") {
                 return res.status(404).json({ message: "File not found" });
             }
-            const absolutePath = path_1.default.resolve("uploads", file.path);
-            const stat = fs_1.default.statSync(absolutePath);
-            res.setHeader("Content-Type", "application/octet-stream");
-            res.setHeader("Content-Disposition", `inline; filename="${file.name}"`);
-            res.setHeader("Content-Length", stat.size);
-            const stream = fs_1.default.createReadStream(absolutePath);
-            return stream.pipe(res);
+            return ProjectFileController.streamFileToResponse(res, file.path, file.name, "inline");
         }
         catch (error) {
             console.error(error);
             return res.status(500).json({ message: "Internal server error" });
         }
     };
+    /**
+     * GET /projects/files/:fileId/view-token — issues a short-lived (5 min)
+     * signed Supabase Storage URL for this one file. Needed so Microsoft's
+     * Office Online viewer (which has no way to send our auth cookie) can fetch
+     * Word/Excel/PowerPoint files to render an in-browser preview — the
+     * read-access check still happens here, before the link is ever issued.
+     */
+    static getFileViewToken = async (req, res) => {
+        const { fileId } = req.params;
+        try {
+            const file = await prisma_1.prisma.projectFile.findFirst({
+                where: { id: parseInt(fileId) },
+            });
+            if (!file ||
+                file.isFolder ||
+                !file.path ||
+                ownerOrganizationId(file) !== req.organization.id) {
+                return res.status(404).json({ message: "File not found" });
+            }
+            const level = await (0, fileAccess_1.resolveAccessForFile)(file, req.user.id, req.user.role);
+            if (level === "none") {
+                return res.status(404).json({ message: "File not found" });
+            }
+            const url = await (0, supabaseStorage_1.getSignedStorageUrl)(file.path, 5 * 60);
+            return res.status(200).json({ url });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** Shared download body for viewProjectFile / downloadProjectFile — same bytes, different Content-Disposition. */
+    static async streamFileToResponse(res, key, fileName, disposition) {
+        let buffer;
+        try {
+            buffer = await (0, supabaseStorage_1.downloadFileFromStorage)(key);
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(404).json({ message: "File not found" });
+        }
+        res.setHeader("Content-Type", "application/octet-stream");
+        res.setHeader("Content-Disposition", `${disposition}; filename="${fileName}"`);
+        res.setHeader("Content-Length", buffer.length);
+        return res.send(buffer);
+    }
     /** PUT /projects/files/:fileId — rename a file or folder. */
     static renameProjectFile = async (req, res) => {
         const { fileId } = req.params;
@@ -314,12 +364,10 @@ class ProjectFileController {
                     .forEach((child) => collect(child.id));
             };
             collect(file.id);
-            for (const node of toDelete) {
-                if (!node.isFolder && node.path) {
-                    const absolutePath = path_1.default.resolve("uploads", node.path);
-                    fs_1.default.unlink(absolutePath, () => { });
-                }
-            }
+            const storageKeys = toDelete
+                .filter((node) => !node.isFolder && node.path)
+                .map((node) => node.path);
+            (0, supabaseStorage_1.deleteFilesFromStorage)(storageKeys);
             await prisma_1.prisma.projectFile.deleteMany({ where: { id: { in: toDelete.map((n) => n.id) } } });
             return res.status(200).json({ message: "Deleted" });
         }

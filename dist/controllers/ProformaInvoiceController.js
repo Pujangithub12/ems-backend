@@ -10,7 +10,7 @@ const LIST_INCLUDE = {
     purchaseOrder: { include: { vendor: true, project: true } },
     items: true,
 };
-/** Resolves item-name/catalog-item pairs for a proforma invoice's line items — prefers the catalog reference when given, same pattern as PurchaseRequestController.resolveItemInputs. Tolerates an empty/undefined list. */
+/** Resolves item-name/catalog-item pairs for a proforma invoice's line items — prefers the catalog reference when given. Tolerates an empty/undefined list. */
 async function resolveItemInputs(rawItems, organizationId) {
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
         return [];
@@ -135,7 +135,7 @@ class ProformaInvoiceController {
                 catch (validationError) {
                     return res.status(400).json({ message: validationError.message });
                 }
-                // Full-replace the line items, matching PurchaseRequestController's full-replace convention.
+                // Full-replace the line items.
                 await prisma_1.prisma.proformaInvoiceItem.deleteMany({ where: { proformaInvoiceId: existing.id } });
                 data.items = { create: resolvedItems };
             }

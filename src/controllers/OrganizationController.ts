@@ -1,6 +1,6 @@
 import { Response } from "express";
 import { prisma } from "../config/prisma";
-import { deleteFilesFromStorage } from "../config/supabaseStorage";
+import { deleteFileFromStorage, deleteFilesFromStorage } from "../config/supabaseStorage";
 import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import {
@@ -470,4 +470,75 @@ export class OrganizationController {
       return res.status(500).json({ message: "Failed to revoke access" });
     }
   }
+
+  // Shared by the four signature/stamp handlers below — same admin gate as update/remove,
+  // scoped to the caller's *current* organization (not a :id param) since these are
+  // letterhead assets for whichever organization the caller is currently in, same as the
+  // existing uploadOrganizationFile/"workspace/files" pattern.
+  private static async assertCanManageCurrentOrganization(req: AuthRequest, res: Response): Promise<boolean> {
+    if (!(await roleHasPermission(req.user!.role, "workspace.manage"))) {
+      res.status(403).json({ message: "Only an admin can edit this organization" });
+      return false;
+    }
+    return true;
+  }
+
+  private static async uploadImage(req: AuthRequest, res: Response, field: "signatureImagePath" | "stampImagePath") {
+    try {
+      if (!(await OrganizationController.assertCanManageCurrentOrganization(req, res))) return;
+
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) return res.status(400).json({ message: "An image file is required" });
+
+      const organizationId = req.organization!.id;
+      const existing = await prisma.organization.findUnique({ where: { id: organizationId } });
+      const previousPath = existing?.[field];
+
+      const filePath = file.path.replace(/\\/g, "/").replace(/^uploads\//, "");
+      const organization = await prisma.organization.update({
+        where: { id: organizationId },
+        data: { [field]: filePath },
+      });
+
+      if (previousPath) await deleteFileFromStorage(previousPath);
+
+      return res.status(200).json({ message: "Image uploaded", organization });
+    } catch (error) {
+      console.error(`Error uploading organization ${field}:`, error);
+      return res.status(500).json({ message: "Failed to upload image" });
+    }
+  }
+
+  private static async deleteImage(req: AuthRequest, res: Response, field: "signatureImagePath" | "stampImagePath") {
+    try {
+      if (!(await OrganizationController.assertCanManageCurrentOrganization(req, res))) return;
+
+      const organizationId = req.organization!.id;
+      const existing = await prisma.organization.findUnique({ where: { id: organizationId } });
+      const previousPath = existing?.[field];
+
+      const organization = await prisma.organization.update({
+        where: { id: organizationId },
+        data: { [field]: null },
+      });
+
+      if (previousPath) await deleteFileFromStorage(previousPath);
+
+      return res.status(200).json({ message: "Image removed", organization });
+    } catch (error) {
+      console.error(`Error deleting organization ${field}:`, error);
+      return res.status(500).json({ message: "Failed to delete image" });
+    }
+  }
+
+  // Letterhead signature/stamp images, used when generating Purchase Order PDFs (see
+  // purchaseOrderPdf.ts) — Settings > Organization tab.
+  static uploadSignature = (req: AuthRequest, res: Response) =>
+    OrganizationController.uploadImage(req, res, "signatureImagePath");
+  static deleteSignature = (req: AuthRequest, res: Response) =>
+    OrganizationController.deleteImage(req, res, "signatureImagePath");
+  static uploadStamp = (req: AuthRequest, res: Response) =>
+    OrganizationController.uploadImage(req, res, "stampImagePath");
+  static deleteStamp = (req: AuthRequest, res: Response) =>
+    OrganizationController.deleteImage(req, res, "stampImagePath");
 }

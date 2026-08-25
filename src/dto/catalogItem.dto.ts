@@ -3,3 +3,9 @@ export interface AddCatalogItemDto {
   name: string;
   code?: string;
 }
+
+/** Body shape for PUT /organization/items/:itemId. */
+export interface UpdateCatalogItemDto {
+  name?: string;
+  code?: string;
+}

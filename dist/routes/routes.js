@@ -7,15 +7,16 @@ const UserController_1 = require("../controllers/UserController");
 const InviteController_1 = require("../controllers/InviteController");
 const AnnouncementController_1 = require("../controllers/AnnouncementController");
 const PlantReportController_1 = require("../controllers/PlantReportController");
+const PlantReportFieldController_1 = require("../controllers/PlantReportFieldController");
 const NotificationController_1 = require("../controllers/NotificationController");
 const ProjectController_1 = require("../controllers/ProjectController");
 const ProjectFileController_1 = require("../controllers/ProjectFileController");
-const PurchaseRequestController_1 = require("../controllers/PurchaseRequestController");
 const PurchaseOrderController_1 = require("../controllers/PurchaseOrderController");
 const ProformaInvoiceController_1 = require("../controllers/ProformaInvoiceController");
 const ShipmentController_1 = require("../controllers/ShipmentController");
 const GoodsReceiptController_1 = require("../controllers/GoodsReceiptController");
 const MonthlyPerformanceController_1 = require("../controllers/MonthlyPerformanceController");
+const DailyGenerationController_1 = require("../controllers/DailyGenerationController");
 const InventoryController_1 = require("../controllers/InventoryController");
 const OrganizationFileController_1 = require("../controllers/OrganizationFileController");
 const MyTaskController_1 = require("../controllers/MyTaskController");
@@ -60,6 +61,12 @@ router.post("/workspaces/switch", auth_1.authMiddleware, OrganizationController_
 router.get("/workspaces/current", auth_1.authMiddleware, OrganizationController_1.OrganizationController.getCurrent);
 router.put("/workspaces/:id", auth_1.authMiddleware, OrganizationController_1.OrganizationController.update);
 router.delete("/workspaces/:id", auth_1.authMiddleware, OrganizationController_1.OrganizationController.remove);
+// Letterhead signature/stamp images (Settings > Organization tab), scoped to the caller's
+// current organization — used when generating Purchase Order PDFs.
+router.post("/workspace/signature", auth_1.authMiddleware, csrfHeader_1.requireCsrfHeader, ...upload_1.uploadOrganizationSignature, OrganizationController_1.OrganizationController.uploadSignature);
+router.delete("/workspace/signature", auth_1.authMiddleware, OrganizationController_1.OrganizationController.deleteSignature);
+router.post("/workspace/stamp", auth_1.authMiddleware, csrfHeader_1.requireCsrfHeader, ...upload_1.uploadOrganizationStamp, OrganizationController_1.OrganizationController.uploadStamp);
+router.delete("/workspace/stamp", auth_1.authMiddleware, OrganizationController_1.OrganizationController.deleteStamp);
 // Cross-organization member access matrix (Settings > Organization tab) — lets a
 // caller who belongs to more than one of their own organizations manage which
 // of those organizations each employee can access, from one place.
@@ -90,6 +97,13 @@ router.get("/plant-reports/prefill", auth_1.authMiddleware, PlantReportControlle
 router.post("/plant-reports", auth_1.authMiddleware, PlantReportController_1.PlantReportController.create);
 router.put("/plant-reports/:id", auth_1.authMiddleware, PlantReportController_1.PlantReportController.update);
 router.delete("/plant-reports/:id", auth_1.authMiddleware, PlantReportController_1.PlantReportController.remove);
+// Plant report custom fields — any org member can read them (needed to
+// render the daily entry form), but defining/renaming/removing a field is an
+// organization-wide schema change, so it's admin-gated.
+router.get("/plant-report-fields", auth_1.authMiddleware, PlantReportFieldController_1.PlantReportFieldController.list);
+router.post("/plant-report-fields", auth_1.authMiddleware, (0, auth_1.roleMiddleware)([enums_1.UserRole.ADMIN, enums_1.UserRole.SUPER_ADMIN]), PlantReportFieldController_1.PlantReportFieldController.create);
+router.put("/plant-report-fields/:id", auth_1.authMiddleware, (0, auth_1.roleMiddleware)([enums_1.UserRole.ADMIN, enums_1.UserRole.SUPER_ADMIN]), PlantReportFieldController_1.PlantReportFieldController.update);
+router.delete("/plant-report-fields/:id", auth_1.authMiddleware, (0, auth_1.roleMiddleware)([enums_1.UserRole.ADMIN, enums_1.UserRole.SUPER_ADMIN]), PlantReportFieldController_1.PlantReportFieldController.remove);
 // Notification routes — every authenticated user reads/manages only their own.
 router.get("/notifications", auth_1.authMiddleware, NotificationController_1.NotificationController.list);
 router.get("/notifications/unread-count", auth_1.authMiddleware, NotificationController_1.NotificationController.unreadCount);
@@ -117,9 +131,13 @@ router.get("/projects/:projectId/files", auth_1.authMiddleware, ProjectFileContr
 // folder. Root-level creation (no parentId to check a grant against) re-checks
 // projects.documents inline in the controller instead.
 router.post("/projects/:projectId/folders", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.addProjectFolder);
-router.post("/projects/:projectId/files", auth_1.authMiddleware, csrfHeader_1.requireCsrfHeader, upload_1.uploadProjectFile.single("file"), ProjectFileController_1.ProjectFileController.addProjectFile);
+router.post("/projects/:projectId/files", auth_1.authMiddleware, csrfHeader_1.requireCsrfHeader, ...upload_1.uploadProjectFile, ProjectFileController_1.ProjectFileController.addProjectFile);
 router.get("/projects/files/:fileId/download", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.downloadProjectFile);
 router.get("/projects/files/:fileId/view", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.viewProjectFile);
+// Issues a short-lived signed Supabase Storage URL for this file — used by
+// the Office-document preview flow (Microsoft's Office Online viewer fetches
+// that URL directly, so it needs no session cookie / no separate public route).
+router.get("/projects/files/:fileId/view-token", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.getFileViewToken);
 router.put("/projects/files/:fileId", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.renameProjectFile);
 router.delete("/projects/files/:fileId", auth_1.authMiddleware, ProjectFileController_1.ProjectFileController.deleteProjectFile);
 // File/folder access management — who can read/write a given node. Deliberately
@@ -128,55 +146,32 @@ router.delete("/projects/files/:fileId", auth_1.authMiddleware, ProjectFileContr
 // capability than just using Documents.
 router.get("/projects/files/:fileId/access", auth_1.authMiddleware, (0, auth_1.roleMiddleware)([enums_1.UserRole.ADMIN, enums_1.UserRole.SUPER_ADMIN]), ProjectFileController_1.ProjectFileController.getFileAccess);
 router.put("/projects/files/:fileId/access", auth_1.authMiddleware, (0, auth_1.roleMiddleware)([enums_1.UserRole.ADMIN, enums_1.UserRole.SUPER_ADMIN]), ProjectFileController_1.ProjectFileController.setFileAccess);
-// Procurement pipeline v2 (Purchase Request -> Vendor Selection -> Purchase Order ->
-// Proforma Invoice -> Shipment/Insurance/Customs -> Cost Sheet -> Goods Receipt -> Inventory).
+// Procurement pipeline v2 (Purchase Order -> Proforma Invoice ->
+// Shipment/Insurance/Customs -> Cost Sheet -> Goods Receipt -> Inventory).
 // Replaces the old flat "Procurement" routes below — ProcurementController's underlying data
 // (procurement_item/procurement_attachment/procurement_status_history) is intentionally kept
-// in the DB for historical integrity but is no longer routed to; see
-// src/utils/migrate-procurement-to-pr-po.ts for the one-off migration into the new tables.
-// View endpoints are open to any organization member with project access; mutations are gated
-// on the existing "projects.procurement" permission key (no new permission key was introduced),
-// except creating/editing/submitting a Purchase Request itself, which any authenticated member
-// can do (see the "Purchase Requests + Vendor Selection" section below) — raising a request is
-// meant to be self-service, only approving it and everything downstream is admin territory.
+// in the DB for historical integrity but is no longer routed to.
+// View endpoints are open to any organization member with project access; mutations (including
+// creating a Purchase Order) are gated on the existing "projects.procurement" permission key.
 // The Purchase Orders and Vendors *pages* are additionally hidden from non-admins in the
 // frontend (nav + route guard) since browsing PO/vendor pricing is admin-only by design; the
 // underlying read APIs stay open like every other view endpoint here.
-// Purchase Requests + Vendor Selection
-// Creating/editing/submitting a draft PR is open to any authenticated organization member
-// (any employee can raise a purchase request) — approving/rejecting it, and everything from
-// vendor selection onward, stays gated on "projects.procurement" (see changeStatus's inline
-// check and the vendor-quote/generate-po routes below).
-router.get("/workspace/purchase-requests", auth_1.authMiddleware, PurchaseRequestController_1.PurchaseRequestController.getOrganizationPurchaseRequests);
-router.get("/projects/:projectId/purchase-requests", auth_1.authMiddleware, PurchaseRequestController_1.PurchaseRequestController.getPurchaseRequests);
-router.post("/projects/:projectId/purchase-requests", auth_1.authMiddleware, PurchaseRequestController_1.PurchaseRequestController.addPurchaseRequest);
-router.put("/purchase-requests/:id", auth_1.authMiddleware, PurchaseRequestController_1.PurchaseRequestController.updatePurchaseRequest);
-router.delete("/purchase-requests/:id", auth_1.authMiddleware, PurchaseRequestController_1.PurchaseRequestController.deletePurchaseRequest);
-router.get("/purchase-requests/:id/detail", auth_1.authMiddleware, PurchaseRequestController_1.PurchaseRequestController.getPurchaseRequestDetail);
-router.post("/purchase-requests/:id/status", auth_1.authMiddleware, PurchaseRequestController_1.PurchaseRequestController.changeStatus);
-router.post("/purchase-requests/:id/vendor-quotes", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseRequestController_1.PurchaseRequestController.addVendorQuote);
-router.put("/purchase-requests/:id/vendor-quotes/:quoteId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseRequestController_1.PurchaseRequestController.updateVendorQuote);
-router.delete("/purchase-requests/:id/vendor-quotes/:quoteId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseRequestController_1.PurchaseRequestController.deleteVendorQuote);
-router.post("/purchase-requests/:id/vendor-quotes/:quoteId/select", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseRequestController_1.PurchaseRequestController.selectVendorQuote);
-router.post("/purchase-requests/:id/generate-po", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseRequestController_1.PurchaseRequestController.generatePurchaseOrder);
-router.post("/purchase-requests/:itemId/attachments", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), csrfHeader_1.requireCsrfHeader, upload_1.uploadPurchaseRequestFile.single("file"), PurchaseRequestController_1.PurchaseRequestController.addAttachment);
-router.delete("/purchase-requests/:itemId/attachments/:attachmentId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseRequestController_1.PurchaseRequestController.deleteAttachment);
 // Purchase Orders + Cost Sheet
 router.get("/workspace/purchase-orders", auth_1.authMiddleware, PurchaseOrderController_1.PurchaseOrderController.getOrganizationPurchaseOrders);
 router.get("/projects/:projectId/purchase-orders", auth_1.authMiddleware, PurchaseOrderController_1.PurchaseOrderController.getPurchaseOrders);
+router.post("/projects/:projectId/purchase-orders", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseOrderController_1.PurchaseOrderController.createPurchaseOrder);
 router.get("/purchase-orders/:id/detail", auth_1.authMiddleware, PurchaseOrderController_1.PurchaseOrderController.getPurchaseOrderDetail);
-router.put("/purchase-orders/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseOrderController_1.PurchaseOrderController.updatePurchaseOrder);
+router.put("/purchase-orders/:id", auth_1.authMiddleware, PurchaseOrderController_1.PurchaseOrderController.updatePurchaseOrder);
+router.post("/purchase-orders/:id/approval", auth_1.authMiddleware, PurchaseOrderController_1.PurchaseOrderController.decidePurchaseOrderApproval);
 router.get("/purchase-orders/:id/cost-sheet", auth_1.authMiddleware, PurchaseOrderController_1.PurchaseOrderController.getCostSheet);
 router.get("/purchase-orders/:id/pdf", auth_1.authMiddleware, PurchaseOrderController_1.PurchaseOrderController.downloadPdf);
-router.post("/purchase-orders/:itemId/attachments", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), csrfHeader_1.requireCsrfHeader, upload_1.uploadPurchaseOrderFile.single("file"), PurchaseOrderController_1.PurchaseOrderController.addAttachment);
-router.delete("/purchase-orders/:itemId/attachments/:attachmentId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), PurchaseOrderController_1.PurchaseOrderController.deleteAttachment);
 // Proforma Invoices
 router.get("/workspace/proforma-invoices", auth_1.authMiddleware, ProformaInvoiceController_1.ProformaInvoiceController.getAllProformaInvoices);
 router.post("/purchase-orders/:id/proforma-invoices", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ProformaInvoiceController_1.ProformaInvoiceController.addProformaInvoice);
 router.put("/proforma-invoices/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ProformaInvoiceController_1.ProformaInvoiceController.updateProformaInvoice);
 router.delete("/proforma-invoices/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ProformaInvoiceController_1.ProformaInvoiceController.deleteProformaInvoice);
 router.put("/proforma-invoices/:id/status", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ProformaInvoiceController_1.ProformaInvoiceController.changeStatus);
-router.post("/proforma-invoices/:itemId/attachment", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), csrfHeader_1.requireCsrfHeader, upload_1.uploadProformaInvoiceFile.single("file"), ProformaInvoiceController_1.ProformaInvoiceController.addAttachment);
+router.post("/proforma-invoices/:itemId/attachment", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), csrfHeader_1.requireCsrfHeader, ...upload_1.uploadProformaInvoiceFile, ProformaInvoiceController_1.ProformaInvoiceController.addAttachment);
 // Shipment (Local + International) + Insurance + Customs
 router.post("/purchase-orders/:id/shipment", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ShipmentController_1.ShipmentController.addShipment);
 router.put("/shipments/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ShipmentController_1.ShipmentController.updateShipment);
@@ -184,19 +179,23 @@ router.post("/shipments/:id/insurance", auth_1.authMiddleware, (0, auth_1.permis
 router.put("/insurance/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ShipmentController_1.ShipmentController.updateInsurance);
 router.post("/shipments/:id/customs", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ShipmentController_1.ShipmentController.addCustoms);
 router.put("/customs/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ShipmentController_1.ShipmentController.updateCustoms);
-router.post("/customs/:itemId/documents", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), csrfHeader_1.requireCsrfHeader, upload_1.uploadCustomsFile.single("file"), ShipmentController_1.ShipmentController.addCustomsDocument);
+router.post("/customs/:itemId/documents", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), csrfHeader_1.requireCsrfHeader, ...upload_1.uploadCustomsFile, ShipmentController_1.ShipmentController.addCustomsDocument);
 router.delete("/customs/:itemId/documents/:documentId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), ShipmentController_1.ShipmentController.deleteCustomsDocument);
 // Goods Receipt (GRN) — accepting/partially-accepting is the only action in this whole
 // pipeline that increments real Inventory stock (see GoodsReceiptController.updateStatus).
 router.get("/workspace/goods-receipts", auth_1.authMiddleware, GoodsReceiptController_1.GoodsReceiptController.getOrganizationGoodsReceipts);
 router.post("/purchase-orders/:id/goods-receipts", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), GoodsReceiptController_1.GoodsReceiptController.addGoodsReceipt);
 router.put("/goods-receipts/:id/status", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), GoodsReceiptController_1.GoodsReceiptController.updateStatus);
-router.post("/goods-receipts/:itemId/photos", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), csrfHeader_1.requireCsrfHeader, upload_1.uploadGoodsReceiptFile.single("file"), GoodsReceiptController_1.GoodsReceiptController.addPhoto);
+router.post("/goods-receipts/:itemId/photos", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), csrfHeader_1.requireCsrfHeader, ...upload_1.uploadGoodsReceiptFile, GoodsReceiptController_1.GoodsReceiptController.addPhoto);
 router.delete("/goods-receipts/:itemId/photos/:photoId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.procurement"), GoodsReceiptController_1.GoodsReceiptController.deletePhoto);
 // Project energy performance routes (Energy Performance tab) — view is open to
 // any organization member with project access; upsert is admin-gated.
 router.get("/projects/:projectId/performance", auth_1.authMiddleware, MonthlyPerformanceController_1.MonthlyPerformanceController.getMonthlyPerformance);
 router.put("/projects/:projectId/performance", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.performance"), MonthlyPerformanceController_1.MonthlyPerformanceController.upsertMonthlyPerformance);
+router.get("/projects/:projectId/performance/daily", auth_1.authMiddleware, DailyGenerationController_1.DailyGenerationController.getDaily);
+router.put("/projects/:projectId/performance/daily", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.performance"), DailyGenerationController_1.DailyGenerationController.upsertDaily);
+router.delete("/projects/:projectId/performance/daily", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.performance"), DailyGenerationController_1.DailyGenerationController.deleteDaily);
+router.post("/projects/:projectId/performance/summary", auth_1.authMiddleware, DailyGenerationController_1.DailyGenerationController.getSummary);
 // Project inventory routes (Inventory tab) — view is open to any organization
 // member with project access; add/edit/delete are admin-gated.
 router.get("/workspace/inventory", auth_1.authMiddleware, InventoryController_1.InventoryController.getOrganizationInventory);
@@ -212,7 +211,7 @@ router.post("/projects/inventory/:itemId/batches", auth_1.authMiddleware, (0, au
 router.delete("/projects/inventory/:itemId/batches/:batchId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.inventory"), InventoryController_1.InventoryController.deleteBatch);
 router.post("/projects/inventory/:itemId/serials", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.inventory"), InventoryController_1.InventoryController.addSerial);
 router.delete("/projects/inventory/:itemId/serials/:serialId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.inventory"), InventoryController_1.InventoryController.deleteSerial);
-router.post("/projects/inventory/:itemId/attachments", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.inventory"), csrfHeader_1.requireCsrfHeader, upload_1.uploadInventoryFile.single("file"), InventoryController_1.InventoryController.addAttachment);
+router.post("/projects/inventory/:itemId/attachments", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.inventory"), csrfHeader_1.requireCsrfHeader, ...upload_1.uploadInventoryFile, InventoryController_1.InventoryController.addAttachment);
 router.delete("/projects/inventory/:itemId/attachments/:attachmentId", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("projects.inventory"), InventoryController_1.InventoryController.deleteAttachment);
 router.get("/workspace/inventory/transfers", auth_1.authMiddleware, InventoryController_1.InventoryController.getOrganizationPendingTransfers);
 router.get("/workspace/inventory/transactions", auth_1.authMiddleware, InventoryController_1.InventoryController.getOrganizationInventoryTransactions);
@@ -238,7 +237,7 @@ router.post("/workspace/reports/comments", auth_1.authMiddleware, (0, auth_1.per
 // via whichever of project/organization is set on the row.
 router.get("/workspace/files", auth_1.authMiddleware, OrganizationFileController_1.OrganizationFileController.getOrganizationFiles);
 router.post("/workspace/folders", auth_1.authMiddleware, OrganizationFileController_1.OrganizationFileController.addOrganizationFolder);
-router.post("/workspace/files", auth_1.authMiddleware, csrfHeader_1.requireCsrfHeader, upload_1.uploadOrganizationFile.single("file"), OrganizationFileController_1.OrganizationFileController.addOrganizationFile);
+router.post("/workspace/files", auth_1.authMiddleware, csrfHeader_1.requireCsrfHeader, ...upload_1.uploadOrganizationFile, OrganizationFileController_1.OrganizationFileController.addOrganizationFile);
 // Personal task routes
 router.post("/mytasks", auth_1.authMiddleware, MyTaskController_1.MyTaskController.createMyTask);
 router.get("/mytasks", auth_1.authMiddleware, MyTaskController_1.MyTaskController.getMyTasks);
@@ -247,12 +246,12 @@ router.delete("/mytasks/:id", auth_1.authMiddleware, MyTaskController_1.MyTaskCo
 // Task routes
 router.post("/tasks", auth_1.authMiddleware, 
 // roleMiddleware([UserRole.ADMIN]),
-csrfHeader_1.requireCsrfHeader, upload_1.upload.array("files"), TaskController_1.TaskController.createTask);
+csrfHeader_1.requireCsrfHeader, ...upload_1.upload, TaskController_1.TaskController.createTask);
 router.get("/tasks", auth_1.authMiddleware, TaskController_1.TaskController.getAllTasks);
 router.get("/tasks/:id", auth_1.authMiddleware, TaskController_1.TaskController.getTaskById);
 router.get("/dashboard", auth_1.authMiddleware, DashboardController_1.DashboardController.getDashboard);
 router.put("/tasks/:id/progress", auth_1.authMiddleware, TaskController_1.TaskController.updateTaskProgress);
-router.put("/tasks/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("tasks.edit"), csrfHeader_1.requireCsrfHeader, upload_1.upload.array("files"), TaskController_1.TaskController.updateTask);
+router.put("/tasks/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("tasks.edit"), csrfHeader_1.requireCsrfHeader, ...upload_1.upload, TaskController_1.TaskController.updateTask);
 router.put("/tasks/:id/status", auth_1.authMiddleware, TaskController_1.TaskController.updateTaskStatus);
 router.delete("/tasks/:id", auth_1.authMiddleware, (0, auth_1.permissionMiddleware)("tasks.delete"), TaskController_1.TaskController.deleteTask);
 // Subtask routes

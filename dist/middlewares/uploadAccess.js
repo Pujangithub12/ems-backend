@@ -75,24 +75,6 @@ const verifyUploadAccess = async (req, res, next) => {
                         }));
                 break;
             }
-            case "purchase-requests": {
-                allowed =
-                    hasValidId &&
-                        !!(await prisma_1.prisma.purchaseRequest.findFirst({
-                            where: { id: idNum, organizationId },
-                            select: { id: true },
-                        }));
-                break;
-            }
-            case "purchase-orders": {
-                allowed =
-                    hasValidId &&
-                        !!(await prisma_1.prisma.purchaseOrder.findFirst({
-                            where: { id: idNum, organizationId },
-                            select: { id: true },
-                        }));
-                break;
-            }
             case "proforma-invoices": {
                 allowed =
                     hasValidId &&

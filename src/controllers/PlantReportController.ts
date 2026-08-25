@@ -2,14 +2,7 @@ import { Response } from "express";
 import { prisma } from "../config/prisma";
 import { UserRole } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
-import {
-  SavePlantReportDto,
-  PlantReportFieldDataType,
-  PlantReportItemEntryInput,
-} from "../dto/plant-report.dto";
-
-const toNum = (v: unknown): number | null =>
-  v === null || v === undefined ? null : Number(v);
+import { SavePlantReportDto, PlantReportFieldDataType } from "../dto/plant-report.dto";
 
 /** Parses a "YYYY-MM-DD" date string as a UTC midnight Date — matches how
  * the `date` column (Postgres `date`, no time component) round-trips
@@ -25,61 +18,16 @@ const REPORT_INCLUDE = {
   createdBy: { select: { id: true, fullName: true } },
   project: { select: { id: true, name: true } },
   staff: { include: { user: { select: { id: true, fullName: true } } } },
-  itemEntries: { include: { item: true } },
 } as const;
 
-/** Flattens the raw Decimal/join-row shape into plain numbers, and adds the
- * derived figures (steam ton, water flow, pellet stock closing) computed
- * from the raw readings rather than stored — see schema.prisma's comment on
- * PlantDailyReport for why. */
+/** Flattens the raw join-row shape into a plain response object. All plant
+ * metrics live in customValues now — there are no fixed reading columns or
+ * derived figures left to compute here. */
 const shapeReport = (report: any) => {
-  const steamInitial = toNum(report.steamInitial);
-  const steamFinal = toNum(report.steamFinal);
-  const waterInitial = toNum(report.waterInitial);
-  const waterFinal = toNum(report.waterFinal);
-  const pelletStockOpening = toNum(report.pelletStockOpening) ?? 0;
-  const pelletReceivedKg = toNum(report.pelletReceivedKg) ?? 0;
-  const pelletUsedKg = toNum(report.pelletUsedKg) ?? 0;
-
   return {
     id: report.id,
     date: report.date.toISOString().slice(0, 10),
-    steamInitial,
-    steamFinal,
-    steamTon: steamInitial != null && steamFinal != null ? steamFinal - steamInitial : null,
-    steamPressure: toNum(report.steamPressure),
-    steamTemp: toNum(report.steamTemp),
-    feedwaterTemp: toNum(report.feedwaterTemp),
-    pelletUsedKg: toNum(report.pelletUsedKg),
-    pelletsBag: toNum(report.pelletsBag),
-    pelletReceivedKg: toNum(report.pelletReceivedKg),
-    pelletStockOpening,
-    pelletStockClosing: pelletStockOpening + pelletReceivedKg - pelletUsedKg,
-    waterInitial,
-    waterFinal,
-    waterFlow: waterInitial != null && waterFinal != null ? waterFinal - waterInitial : null,
-    burnerStatus: report.burnerStatus,
-    burnerHours: toNum(report.burnerHours),
-    shutdownReason: report.shutdownReason,
     customValues: report.customValues ?? {},
-    items: Array.isArray(report.itemEntries)
-      ? report.itemEntries.map((e: any) => {
-          const opening = toNum(e.openingStock) ?? 0;
-          const received = toNum(e.receivedQty) ?? 0;
-          const used = toNum(e.usedQty) ?? 0;
-          return {
-            itemId: e.itemId,
-            name: e.item.name,
-            unit: e.item.unit,
-            trackStock: e.item.trackStock,
-            opening,
-            received,
-            used,
-            closing: opening + received - used,
-            note: e.note,
-          };
-        })
-      : [],
     staff: Array.isArray(report.staff) ? report.staff.map((s: any) => s.user) : [],
     staffCount: Array.isArray(report.staff) ? report.staff.length : 0,
     project: report.project,
@@ -88,87 +36,6 @@ const shapeReport = (report: any) => {
     updatedAt: report.updatedAt,
   };
 };
-
-/** The most recent report strictly before `date` for this organization+project
- * (pellet stock is tracked per plant, not shared across an organization's
- * projects) — its computed closing balance becomes the new entry's opening
- * balance. */
-async function previousClosingBalance(
-  organizationId: number,
-  projectId: number | null,
-  date: Date,
-): Promise<number> {
-  const prev = await prisma.plantDailyReport.findFirst({
-    where: { organizationId, projectId, date: { lt: date } },
-    orderBy: { date: "desc" },
-  });
-  if (!prev) return 0;
-  const opening = toNum(prev.pelletStockOpening) ?? 0;
-  const received = toNum(prev.pelletReceivedKg) ?? 0;
-  const used = toNum(prev.pelletUsedKg) ?? 0;
-  return opening + received - used;
-}
-
-/** The most recent entry strictly before `date` for this item on this
- * organization+project — its derived closing balance becomes the new
- * entry's opening balance. Generalized version of previousClosingBalance,
- * keyed by item instead of hardcoded to pellets. */
-async function previousItemClosingBalance(
-  organizationId: number,
-  projectId: number | null,
-  itemId: number,
-  date: Date,
-): Promise<number> {
-  const prevEntry = await prisma.plantReportItemEntry.findFirst({
-    where: {
-      itemId,
-      report: { organizationId, projectId, date: { lt: date } },
-    },
-    orderBy: { report: { date: "desc" } },
-  });
-  if (!prevEntry) return 0;
-  const opening = toNum(prevEntry.openingStock) ?? 0;
-  const received = toNum(prevEntry.receivedQty) ?? 0;
-  const used = toNum(prevEntry.usedQty) ?? 0;
-  return opening + received - used;
-}
-
-/** Validates the incoming item-entry payload against this organization's
- * defined items (dropping any itemId that isn't one of them — same
- * tolerance as coerceCustomValues), and snapshots each entry's opening
- * stock from the previous report's closing balance for that item. */
-async function resolveItemEntries(
-  organizationId: number,
-  projectId: number | null,
-  date: Date,
-  raw: PlantReportItemEntryInput[] | undefined,
-): Promise<
-  Array<{
-    itemId: number;
-    openingStock: number;
-    receivedQty: number | null;
-    usedQty: number | null;
-    note: string | null;
-  }>
-> {
-  if (!Array.isArray(raw) || raw.length === 0) return [];
-  const orgItems = await prisma.plantReportItem.findMany({ where: { organizationId } });
-  const validIds = new Set(orgItems.map((i) => i.id));
-
-  const result = [];
-  for (const entry of raw) {
-    if (!validIds.has(entry.itemId)) continue; // stale/tampered itemId — drop, same tolerance as customValues
-    const openingStock = await previousItemClosingBalance(organizationId, projectId, entry.itemId, date);
-    result.push({
-      itemId: entry.itemId,
-      openingStock,
-      receivedQty: entry.receivedQty ?? null,
-      usedQty: entry.usedQty ?? null,
-      note: entry.note?.trim() || null,
-    });
-  }
-  return result;
-}
 
 /** Parses+validates a projectId that must belong to this organization —
  * returns null for an absent/empty value (meaning "no project" / "all
@@ -282,39 +149,28 @@ export class PlantReportController {
         return present.length ? present.reduce((a, b) => a + b, 0) / present.length : null;
       };
 
-      // Per-item totals across the month (Pellets, Diesel, ...) — generalizes
-      // the old totalPelletUsedKg/totalPelletReceivedKg pair below (kept for
-      // backward compatibility with historical rows written before items
-      // existed) to any number of org-defined items.
-      const itemTotalsByItemId = new Map<
-        number,
-        { itemId: number; name: string; unit: string; totalUsed: number | null; totalReceived: number | null }
-      >();
-      for (const r of shaped) {
-        for (const it of r.items) {
-          const cur = itemTotalsByItemId.get(it.itemId) ?? {
-            itemId: it.itemId,
-            name: it.name,
-            unit: it.unit,
-            totalUsed: null,
-            totalReceived: null,
-          };
-          if (it.used != null) cur.totalUsed = (cur.totalUsed ?? 0) + it.used;
-          if (it.received != null) cur.totalReceived = (cur.totalReceived ?? 0) + it.received;
-          itemTotalsByItemId.set(it.itemId, cur);
-        }
-      }
+      // Per-numeric-custom-field totals across the month — org-defined
+      // fields are the only source of plant metrics now, so this is the
+      // whole summary beyond daysLogged.
+      const numberFields = await prisma.plantReportCustomField.findMany({
+        where: { organizationId, dataType: "number" },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      });
+      const customFieldTotals = numberFields.map((field) => {
+        const key = String(field.id);
+        const values = shaped
+          .map((r) => (r.customValues as Record<string, unknown>)[key])
+          .map((v) => (typeof v === "number" ? v : null));
+        return {
+          fieldId: field.id,
+          name: field.name,
+          sum: sum(values),
+          avg: avg(values),
+        };
+      });
 
       const summary = {
-        totalSteamTon: sum(shaped.map((r) => r.steamTon)),
-        avgSteamPressure: avg(shaped.map((r) => r.steamPressure)),
-        avgSteamTemp: avg(shaped.map((r) => r.steamTemp)),
-        totalPelletUsedKg: sum(shaped.map((r) => r.pelletUsedKg)),
-        totalPelletReceivedKg: sum(shaped.map((r) => r.pelletReceivedKg)),
-        itemTotals: Array.from(itemTotalsByItemId.values()),
-        totalWaterFlow: sum(shaped.map((r) => r.waterFlow)),
-        totalBurnerHours: sum(shaped.map((r) => r.burnerHours)),
-        shutdownDays: shaped.filter((r) => r.steamTon === 0 || r.burnerStatus === "stopped").length,
+        customFieldTotals,
         daysLogged: shaped.length,
       };
 
@@ -325,11 +181,9 @@ export class PlantReportController {
     }
   };
 
-  /** GET /plant-reports/prefill?date=YYYY-MM-DD&projectId= — what the entry
-   * form should show before the operator types anything: whether an entry
-   * for this project+date already exists (so the form can switch to edit
-   * mode) and, if not, the opening pellet balance carried over from that
-   * project's previous day. */
+  /** GET /plant-reports/prefill?date=YYYY-MM-DD&projectId= — whether an
+   * entry for this project+date already exists, so the form can switch to
+   * edit mode. */
   static getPrefill = async (req: AuthRequest, res: Response) => {
     try {
       const organizationId = req.organization!.id;
@@ -352,27 +206,7 @@ export class PlantReportController {
         return res.status(200).json({ exists: true, report: shapeReport(existing) });
       }
 
-      const openingBalance = await previousClosingBalance(organizationId, projectId, date);
-
-      // Each active tracked item's projected opening balance for this new
-      // entry — same purpose as `openingBalance` above (pellets), just
-      // generalized, so the form can show a correct opening figure per item
-      // before the operator has saved anything.
-      const items = await prisma.plantReportItem.findMany({
-        where: { organizationId, isActive: true },
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      });
-      const itemOpeningBalances: Record<string, number> = {};
-      for (const item of items) {
-        itemOpeningBalances[String(item.id)] = await previousItemClosingBalance(
-          organizationId,
-          projectId,
-          item.id,
-          date,
-        );
-      }
-
-      return res.status(200).json({ exists: false, openingBalance, itemOpeningBalances });
+      return res.status(200).json({ exists: false });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -384,32 +218,6 @@ export class PlantReportController {
     const date = parseDateOnly(body.date || "");
     if (!date) return res.status(400).json({ message: "A valid date (YYYY-MM-DD) is required" });
 
-    if (
-      body.steamInitial != null &&
-      body.steamFinal != null &&
-      Number(body.steamFinal) < Number(body.steamInitial)
-    ) {
-      return res.status(400).json({ message: "Steam final reading cannot be less than the initial reading" });
-    }
-    if (
-      body.waterInitial != null &&
-      body.waterFinal != null &&
-      Number(body.waterFinal) < Number(body.waterInitial)
-    ) {
-      return res.status(400).json({ message: "Water final reading cannot be less than the initial reading" });
-    }
-
-    const steamTon =
-      body.steamInitial != null && body.steamFinal != null
-        ? Number(body.steamFinal) - Number(body.steamInitial)
-        : null;
-    const shutdownRequired = steamTon === 0 || body.burnerStatus === "stopped";
-    if (shutdownRequired && !body.shutdownReason?.trim()) {
-      return res.status(400).json({
-        message: "A shutdown reason is required when steam ton is 0 or the burner is stopped",
-      });
-    }
-
     try {
       const organizationId = req.organization!.id;
       let projectId: number | null;
@@ -418,10 +226,8 @@ export class PlantReportController {
       } catch (err: any) {
         return res.status(400).json({ message: err.message });
       }
-      const pelletStockOpening = await previousClosingBalance(organizationId, projectId, date);
       const staffUserIds = Array.isArray(body.staffUserIds) ? [...new Set(body.staffUserIds)] : [];
       const customValues = await coerceCustomValues(organizationId, body.customValues);
-      const itemEntries = await resolveItemEntries(organizationId, projectId, date, body.itemEntries);
 
       const created = await prisma.$transaction(async (tx) => {
         const report = await tx.plantDailyReport.create({
@@ -429,20 +235,6 @@ export class PlantReportController {
             organizationId,
             projectId,
             date,
-            steamInitial: body.steamInitial ?? null,
-            steamFinal: body.steamFinal ?? null,
-            steamPressure: body.steamPressure ?? null,
-            steamTemp: body.steamTemp ?? null,
-            feedwaterTemp: body.feedwaterTemp ?? null,
-            pelletUsedKg: body.pelletUsedKg ?? null,
-            pelletsBag: body.pelletsBag ?? null,
-            pelletReceivedKg: body.pelletReceivedKg ?? null,
-            pelletStockOpening,
-            waterInitial: body.waterInitial ?? null,
-            waterFinal: body.waterFinal ?? null,
-            burnerStatus: body.burnerStatus ?? null,
-            burnerHours: body.burnerHours ?? null,
-            shutdownReason: body.shutdownReason?.trim() || null,
             customValues,
             createdById: req.user!.id,
           },
@@ -450,11 +242,6 @@ export class PlantReportController {
         if (staffUserIds.length > 0) {
           await tx.plantReportStaff.createMany({
             data: staffUserIds.map((userId) => ({ reportId: report.id, userId })),
-          });
-        }
-        if (itemEntries.length > 0) {
-          await tx.plantReportItemEntry.createMany({
-            data: itemEntries.map((e) => ({ ...e, reportId: report.id })),
           });
         }
         return tx.plantDailyReport.findUniqueOrThrow({
@@ -479,31 +266,6 @@ export class PlantReportController {
     const reportId = parseInt(id as string, 10);
     if (!Number.isInteger(reportId)) return res.status(400).json({ message: "Invalid report id" });
 
-    if (
-      body.steamInitial != null &&
-      body.steamFinal != null &&
-      Number(body.steamFinal) < Number(body.steamInitial)
-    ) {
-      return res.status(400).json({ message: "Steam final reading cannot be less than the initial reading" });
-    }
-    if (
-      body.waterInitial != null &&
-      body.waterFinal != null &&
-      Number(body.waterFinal) < Number(body.waterInitial)
-    ) {
-      return res.status(400).json({ message: "Water final reading cannot be less than the initial reading" });
-    }
-    const steamTon =
-      body.steamInitial != null && body.steamFinal != null
-        ? Number(body.steamFinal) - Number(body.steamInitial)
-        : null;
-    const shutdownRequired = steamTon === 0 || body.burnerStatus === "stopped";
-    if (shutdownRequired && !body.shutdownReason?.trim()) {
-      return res.status(400).json({
-        message: "A shutdown reason is required when steam ton is 0 or the burner is stopped",
-      });
-    }
-
     try {
       const organizationId = req.organization!.id;
       const existing = await prisma.plantDailyReport.findFirst({
@@ -518,43 +280,16 @@ export class PlantReportController {
 
       const staffUserIds = Array.isArray(body.staffUserIds) ? [...new Set(body.staffUserIds)] : [];
       const customValues = await coerceCustomValues(organizationId, body.customValues);
-      const itemEntries = await resolveItemEntries(
-        organizationId,
-        existing.projectId,
-        existing.date,
-        body.itemEntries,
-      );
 
       const updated = await prisma.$transaction(async (tx) => {
         await tx.plantDailyReport.update({
           where: { id: reportId },
-          data: {
-            steamInitial: body.steamInitial ?? null,
-            steamFinal: body.steamFinal ?? null,
-            steamPressure: body.steamPressure ?? null,
-            steamTemp: body.steamTemp ?? null,
-            feedwaterTemp: body.feedwaterTemp ?? null,
-            pelletUsedKg: body.pelletUsedKg ?? null,
-            pelletsBag: body.pelletsBag ?? null,
-            pelletReceivedKg: body.pelletReceivedKg ?? null,
-            waterInitial: body.waterInitial ?? null,
-            waterFinal: body.waterFinal ?? null,
-            burnerStatus: body.burnerStatus ?? null,
-            burnerHours: body.burnerHours ?? null,
-            shutdownReason: body.shutdownReason?.trim() || null,
-            customValues,
-          },
+          data: { customValues },
         });
         await tx.plantReportStaff.deleteMany({ where: { reportId } });
         if (staffUserIds.length > 0) {
           await tx.plantReportStaff.createMany({
             data: staffUserIds.map((userId) => ({ reportId, userId })),
-          });
-        }
-        await tx.plantReportItemEntry.deleteMany({ where: { reportId } });
-        if (itemEntries.length > 0) {
-          await tx.plantReportItemEntry.createMany({
-            data: itemEntries.map((e) => ({ ...e, reportId })),
           });
         }
         return tx.plantDailyReport.findUniqueOrThrow({
