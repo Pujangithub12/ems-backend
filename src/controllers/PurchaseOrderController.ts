@@ -13,7 +13,7 @@ import { buildPurchaseOrderPdf } from "../utils/purchaseOrderPdf";
 import { currentNepaliFiscalYearLabel } from "../utils/nepaliFiscalYear";
 import { downloadFileFromStorage } from "../config/supabaseStorage";
 
-const PDF_INCLUDE = { vendor: true, organization: true, items: true } as const;
+const PDF_INCLUDE = { vendor: true, organization: true, items: { include: { item: true } } } as const;
 
 const LIST_INCLUDE = {
   vendor: true,
@@ -222,12 +222,13 @@ export class PurchaseOrderController {
     const {
       poNumber,
       paymentTerms,
-      deliveryDate,
       incoterms,
       taxPercent,
       terms,
       deliveryPeriod,
       finalDestination,
+      customerContactPerson,
+      currency,
       purchaseType,
       status,
       items,
@@ -266,12 +267,13 @@ export class PurchaseOrderController {
         data.poNumber = trimmed;
       }
       if (paymentTerms !== undefined) data.paymentTerms = paymentTerms;
-      if (deliveryDate !== undefined) data.deliveryDate = deliveryDate ? new Date(deliveryDate) : null;
       if (incoterms !== undefined) data.incoterms = incoterms;
       if (taxPercent !== undefined) data.taxPercent = taxPercent;
       if (terms !== undefined) data.terms = terms;
       if (deliveryPeriod !== undefined) data.deliveryPeriod = deliveryPeriod;
       if (finalDestination !== undefined) data.finalDestination = finalDestination;
+      if (customerContactPerson !== undefined) data.customerContactPerson = customerContactPerson;
+      if (currency !== undefined) data.currency = currency;
       if (purchaseType !== undefined) data.purchaseType = purchaseType;
       if (status !== undefined) data.status = status;
 
@@ -399,12 +401,13 @@ export class PurchaseOrderController {
         poNumber: purchaseOrder.poNumber,
         createdAt: purchaseOrder.createdAt,
         paymentTerms: purchaseOrder.paymentTerms,
-        deliveryDate: purchaseOrder.deliveryDate,
         incoterms: purchaseOrder.incoterms,
         taxPercent: purchaseOrder.taxPercent,
         terms: purchaseOrder.terms,
         deliveryPeriod: purchaseOrder.deliveryPeriod,
         finalDestination: purchaseOrder.finalDestination,
+        customerContactPerson: purchaseOrder.customerContactPerson,
+        currency: purchaseOrder.currency,
         organizationName: purchaseOrder.organization?.name ?? null,
         organizationAddress: purchaseOrder.organization?.address ?? null,
         organizationContact: purchaseOrder.organization?.contact ?? null,
@@ -413,7 +416,7 @@ export class PurchaseOrderController {
         signatureImage,
         stampImage,
         vendor: purchaseOrder.vendor,
-        items: purchaseOrder.items,
+        items: purchaseOrder.items.map((item) => ({ ...item, description: item.item?.description ?? null })),
       });
 
       // poNumber can contain "/" (e.g. "1-83/84" — incremental number + Nepali fiscal year),

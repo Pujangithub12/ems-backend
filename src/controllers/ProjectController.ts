@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { prisma } from "../config/prisma";
-import { TaskPriority, TaskStatus } from "../types/enums";
+import { TaskPriority, TaskStatus, ProjectStatus } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import {
   CreateProjectDto,
@@ -132,9 +132,9 @@ export class ProjectController {
           name,
           ...(description !== undefined ? { description } : {}),
           status:
-            status && Object.values(TaskStatus).includes(status as TaskStatus)
+            status && Object.values(ProjectStatus).includes(status as ProjectStatus)
               ? status
-              : TaskStatus.PENDING,
+              : ProjectStatus.PENDING,
           priority:
             priority && Object.values(TaskPriority).includes(priority as TaskPriority)
               ? priority
@@ -513,8 +513,8 @@ export class ProjectController {
       if (dueDate) {
         data.dueDate = new Date(dueDate);
       }
-      if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
-        data.status = status as TaskStatus;
+      if (status && Object.values(ProjectStatus).includes(status as ProjectStatus)) {
+        data.status = status as ProjectStatus;
       }
       if (priority && Object.values(TaskPriority).includes(priority as TaskPriority)) {
         data.priority = priority as TaskPriority;

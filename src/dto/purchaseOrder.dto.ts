@@ -27,12 +27,13 @@ export interface UpdatePurchaseOrderDto {
   /** Auto-assigned at creation time (see PurchaseOrderController.createPurchaseOrder) but user-editable afterward — see the uniqueness check in PurchaseOrderController.updatePurchaseOrder. */
   poNumber?: string;
   paymentTerms?: string;
-  deliveryDate?: string | null;
   incoterms?: string;
   taxPercent?: number | null;
   terms?: string;
   deliveryPeriod?: string;
   finalDestination?: string;
+  customerContactPerson?: string;
+  currency?: string;
   purchaseType?: PurchaseType;
   status?: PurchaseOrderStatus;
   items?: UpdatePurchaseOrderItemDto[];
