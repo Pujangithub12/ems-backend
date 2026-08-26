@@ -16,6 +16,8 @@ export interface PurchaseOrderPdfItem {
   unit?: string | null;
   unitPrice?: { toNumber(): number } | number | string | null;
   hsnCode?: string | null;
+  /** The linked catalog item's description (Items page) — shown under the item name in the Product Description cell. */
+  description?: string | null;
 }
 
 export interface PurchaseOrderPdfVendor {
@@ -31,13 +33,16 @@ export interface PurchaseOrderPdfData {
   poNumber?: string | null;
   createdAt: Date;
   paymentTerms?: string | null;
-  deliveryDate?: Date | null;
   /** Also displayed in the PDF's "SHIPPING TERMS" box (see triValues below) — there's no separate shippingTerms field. */
   incoterms?: string | null;
   taxPercent?: { toNumber(): number } | number | string | null;
   terms?: string | null;
   deliveryPeriod?: string | null;
   finalDestination?: string | null;
+  /** Contact person name for the PDF's CUSTOMER box — the buying organization's own contact, distinct from the vendor's contactPerson. */
+  customerContactPerson?: string | null;
+  /** Currency label for the "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset. */
+  currency?: string | null;
   organizationName?: string | null;
   /** The buying organization's own letterhead details ("CUSTOMER" box + header subtitle) — from Organization.address/contact/email/website. */
   organizationAddress?: string | null;
@@ -208,7 +213,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     ["EMAIL ADDRESS", vendor?.email || "--"],
   ];
   const customerFields: [string, string][] = [
-    ["NAME OF CONTACT PERSON", "--"],
+    ["NAME OF CONTACT PERSON", po.customerContactPerson || "--"],
     ["COMPANY NAME", companyName],
     ["ADDRESS", po.organizationAddress || "--"],
     ["PHONE", po.organizationContact || "--"],
@@ -327,11 +332,18 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
         ? `${item.quantity} ${rowUnit}`
         : String(item.quantity);
     const rowValues = [item.hsnCode || "", item.itemName, rowQuantity, fmtAmount(unitPrice), fmtAmount(amount)];
+    const description = (item.description || "").trim();
+    const descColWidth = cols[1]!.width - 10;
+    const nameHeight = doc.font(FONT_BODY_BOLD).fontSize(8.5).heightOfString(item.itemName, { width: descColWidth });
+    const descriptionHeight = description
+      ? doc.font(FONT_BODY).fontSize(8.5).heightOfString(description, { width: descColWidth }) + 2
+      : 0;
     const rowHeight = Math.max(
       18,
-      ...cols.map((col, i) => {
-        const bold = i === 1;
-        return doc.font(bold ? FONT_BODY_BOLD : FONT_BODY).fontSize(8.5).heightOfString(rowValues[i]!, { width: col.width - 10 }) + 8;
+      nameHeight + descriptionHeight + 8,
+      ...cols.slice(0, 1).concat(cols.slice(2)).map((col, i) => {
+        const value = i === 0 ? rowValues[0]! : rowValues[i + 1]!;
+        return doc.font(FONT_BODY).fontSize(8.5).heightOfString(value, { width: col.width - 10 }) + 8;
       }),
     );
 
@@ -340,11 +352,18 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       const col = cols[i]!;
       doc.rect(colX, y, col.width, rowHeight).fill(LIGHT_BG);
       doc.rect(colX, y, col.width, rowHeight).stroke("#ffffff");
-      doc
-        .fillColor(BLACK)
-        .font(i === 1 ? FONT_BODY_BOLD : FONT_BODY)
-        .fontSize(8.5)
-        .text(rowValues[i]!, colX + 5, y + 5, { width: col.width - 10, align: col.align || "left" });
+      if (i === 1) {
+        doc.fillColor(BLACK).font(FONT_BODY_BOLD).fontSize(8.5).text(item.itemName, colX + 5, y + 5, { width: descColWidth });
+        if (description) {
+          doc.fillColor(BLACK).font(FONT_BODY).fontSize(8.5).text(description, colX + 5, y + 5 + nameHeight + 2, { width: descColWidth });
+        }
+      } else {
+        doc
+          .fillColor(BLACK)
+          .font(FONT_BODY)
+          .fontSize(8.5)
+          .text(rowValues[i]!, colX + 5, y + 5, { width: col.width - 10, align: col.align || "left" });
+      }
       colX += col.width;
     }
     y += rowHeight;
@@ -377,7 +396,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // ---- Amount in Words (navy, bold italic white) + Grand Total (light bg, left-aligned) —
   // merged HSN+Description+Qty for the words, then Unit-Price-width label cell, then
   // Amount-width value cell, matching the reference exactly. ----
-  const amountWordsText = `Amount in Words: ${amountToWords(grandTotal)}.`;
+  const amountWordsText = `Amount in Words: ${amountToWords(grandTotal, po.currency?.trim() || "Rupees")}.`;
   const totalRowH = Math.max(30, doc.font(FONT_BODY_BOLD_ITALIC).fontSize(8.5).heightOfString(amountWordsText, { width: hsnDescQtyW - 16 }) + 12);
 
   doc.rect(MARGIN_LEFT, y, hsnDescQtyW, totalRowH).fill(NAVY);
@@ -425,10 +444,10 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // otherwise it's left blank; the label is always the generic "Authorized Signatory"
   // (never a specific person's name), and the org's stamp sits alongside if set. ----
   const sigY = Math.max(y + 20, doc.page.height - 50);
-  const sigW = 74.5;
+  const sigW = 100;
   if (po.signatureImage) {
     try {
-      doc.image(po.signatureImage, MARGIN_LEFT, sigY - 28, { fit: [sigW, 26], valign: "bottom" });
+      doc.image(po.signatureImage, MARGIN_LEFT, sigY - 35, { fit: [sigW, 35], valign: "bottom" });
     } catch (err) {
       console.error("Failed to embed organization signature image:", err);
     }
@@ -437,7 +456,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   doc.fillColor(SIGNATURE_GRAY).font(FONT_BODY_BOLD).fontSize(8).text("Authorized Signatory", MARGIN_LEFT, sigY + 5, { width: 160 });
   if (po.stampImage) {
     try {
-      doc.image(po.stampImage, MARGIN_LEFT + sigW + 24, sigY - 44, { fit: [60, 60] });
+      doc.image(po.stampImage, MARGIN_LEFT + sigW + 24, sigY - 66, { fit: [82, 82] });
     } catch (err) {
       console.error("Failed to embed organization stamp image:", err);
     }

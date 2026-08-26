@@ -396,29 +396,6 @@ export class ReportsController {
 
       // ---- Alerts ----
       const now = new Date();
-      const delayedPOs = purchaseOrders
-        .filter((p) => p.status !== "completed" && p.deliveryDate && new Date(p.deliveryDate) < now)
-        .map((p) => ({
-          id: p.id,
-          itemName: p.items.map((i) => i.itemName).join(", ") || p.poNumber || `PO #${p.id}`,
-          neededByDate: formatDate(p.deliveryDate),
-          vendorName: p.vendor?.name || null,
-        }));
-
-      const vendorDelays: { itemName: string; vendorName: string; neededByDate: string | null; deliveredAt: Date }[] = [];
-      purchaseOrders.forEach((p) => {
-        if (!p.deliveryDate) return;
-        const completed = statusHistory.find((h) => h.purchaseOrderId === p.id && h.toStatus === "completed");
-        if (completed && completed.createdAt > new Date(p.deliveryDate)) {
-          vendorDelays.push({
-            itemName: p.items.map((i) => i.itemName).join(", ") || p.poNumber || `PO #${p.id}`,
-            vendorName: p.vendor?.name || "Unknown vendor",
-            neededByDate: formatDate(p.deliveryDate),
-            deliveredAt: completed.createdAt,
-          });
-        }
-      });
-
       const soon = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
       const contractsExpiring = vendors
         .filter((v) => v.contractExpiryDate && new Date(v.contractExpiryDate) <= soon)
@@ -452,8 +429,6 @@ export class ReportsController {
         vendorPerformance,
         deadStock,
         alerts: {
-          delayedPOs,
-          vendorDelays,
           contractsExpiring,
           pendingAudits: [],
         },

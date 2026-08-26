@@ -8,8 +8,6 @@ datasource db {
   provider = "postgresql"
 }
 
-
-
 model User {
   id                 Int      @id(map: "PK_cace4a159ff9f2512dd42373760") @default(autoincrement())
   fullName           String   @db.VarChar
@@ -194,6 +192,7 @@ model CatalogItem {
   id                   Int                   @id(map: "PK_8996a1f608499554f35bec8601e") @default(autoincrement())
   name                 String                @db.VarChar
   code                 String?               @db.VarChar
+  description          String?
   createdAt            DateTime              @default(now()) @db.Timestamp(6)
   organizationId       Int?                  @map("workspaceId")
   organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_805c3806878350a0875a5032d2c")
@@ -632,32 +631,35 @@ model ProcurementStatusHistory {
 // ---------------------------------------------------------------------------
 
 model PurchaseOrder {
-  id               Int       @id @default(autoincrement())
-  poNumber         String?   @db.VarChar
-  paymentTerms     String?   @db.VarChar
-  deliveryDate     DateTime? @db.Date
-  incoterms        String?   @db.VarChar
-  taxPercent       Decimal?  @db.Decimal
-  terms            String?
-  /// Free-text delivery period for the PO PDF (e.g. "Within 6 weeks of submission of PO.") — distinct from `deliveryDate`, which is a specific date.
-  deliveryPeriod   String?
-  finalDestination String?
+  id                    Int       @id @default(autoincrement())
+  poNumber              String?   @db.VarChar
+  paymentTerms          String?   @db.VarChar
+  incoterms             String?   @db.VarChar
+  taxPercent            Decimal?  @db.Decimal
+  terms                 String?
+  /// Free-text delivery period for the PO PDF (e.g. "Within 6 weeks of submission of PO.").
+  deliveryPeriod        String?
+  finalDestination      String?
+  /// Contact person name for the PDF's CUSTOMER box ("NAME OF CONTACT PERSON") — the buying organization's own contact, distinct from the vendor's contactPerson on the Vendor record.
+  customerContactPerson String?
+  /// Free-text currency label for the PDF's "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset, see purchaseOrderPdf.ts.
+  currency              String?   @db.VarChar
   /// "local" | "international" — drives whether Insurance/Customs apply, see PurchaseType in types/domain.ts
-  purchaseType     String    @default("local") @db.VarChar
-  status           String    @default("created") @db.VarChar
+  purchaseType          String    @default("local") @db.VarChar
+  status                String    @default("created") @db.VarChar
   /// "pending_approval" | "approved" | "rejected" — finance/super_admin gate; `status` can't
   /// progress past "created" until this is "approved" (see PurchaseOrderController.updatePurchaseOrder).
-  approvalStatus   String    @default("pending_approval") @db.VarChar
-  approvedById     Int?
-  approvedAt       DateTime?
+  approvalStatus        String    @default("pending_approval") @db.VarChar
+  approvedById          Int?
+  approvedAt            DateTime?
   /// Whoever created this PO — plain admins only see/edit POs they created themselves (see
   /// PurchaseOrderController); finance/super_admin see everything for review purposes.
-  createdById      Int?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @default(now()) @updatedAt
-  vendorId         Int?
-  projectId        Int?
-  organizationId   Int?
+  createdById           Int?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @default(now()) @updatedAt
+  vendorId              Int?
+  projectId             Int?
+  organizationId        Int?
 
   vendor           Vendor?                      @relation(fields: [vendorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   approvedBy       User?                        @relation("PurchaseOrderApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull, onUpdate: NoAction)

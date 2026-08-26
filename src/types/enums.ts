@@ -30,3 +30,14 @@ export enum MyTaskStatus {
   PENDING = "pending",
   COMPLETED = "completed",
 }
+
+/** Project.status — a separate set of literal values from TaskStatus (a project uses
+ * "pending", not TaskStatus.PENDING's "to_do"); mixing the two up let a project's status
+ * silently fail to save back to "pending" once changed away from it (ProjectController
+ * validated against TaskStatus's values instead of these). */
+export enum ProjectStatus {
+  PENDING = "pending",
+  IN_PROGRESS = "in_progress",
+  COMPLETED = "completed",
+  ON_HOLD = "on_hold",
+}
