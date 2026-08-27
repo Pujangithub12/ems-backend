@@ -348,11 +348,12 @@ router.put(
 // Replaces the old flat "Procurement" routes below — ProcurementController's underlying data
 // (procurement_item/procurement_attachment/procurement_status_history) is intentionally kept
 // in the DB for historical integrity but is no longer routed to.
-// View endpoints are open to any organization member with project access; mutations (including
-// creating a Purchase Order) are gated on the existing "projects.procurement" permission key.
-// The Purchase Orders and Vendors *pages* are additionally hidden from non-admins in the
-// frontend (nav + route guard) since browsing PO/vendor pricing is admin-only by design; the
-// underlying read APIs stay open like every other view endpoint here.
+// View endpoints are open to any organization member with project access; creating a Purchase
+// Order is hard-restricted to admin/finance/super_admin (roleMiddleware, not the dynamic
+// "projects.procurement" permission matrix — this list is deliberately not super-admin-editable).
+// The Purchase Orders/Proforma Invoices/Vendors/Items *pages* are additionally hidden from
+// everyone else in the frontend (nav + route guard); the underlying read APIs stay open like
+// every other view endpoint here.
 
 // Purchase Orders + Cost Sheet
 router.get("/workspace/purchase-orders", authMiddleware, PurchaseOrderController.getOrganizationPurchaseOrders);
@@ -360,7 +361,7 @@ router.get("/projects/:projectId/purchase-orders", authMiddleware, PurchaseOrder
 router.post(
   "/projects/:projectId/purchase-orders",
   authMiddleware,
-  permissionMiddleware("projects.procurement"),
+  roleMiddleware([UserRole.ADMIN, UserRole.FINANCE, UserRole.SUPER_ADMIN]),
   PurchaseOrderController.createPurchaseOrder,
 );
 router.get("/purchase-orders/:id/detail", authMiddleware, PurchaseOrderController.getPurchaseOrderDetail);
@@ -370,9 +371,19 @@ router.put(
   PurchaseOrderController.updatePurchaseOrder,
 );
 router.post(
-  "/purchase-orders/:id/approval",
+  "/purchase-orders/:id/items",
   authMiddleware,
-  PurchaseOrderController.decidePurchaseOrderApproval,
+  PurchaseOrderController.addPurchaseOrderItem,
+);
+router.put(
+  "/purchase-orders/:id/items/:itemId",
+  authMiddleware,
+  PurchaseOrderController.editPurchaseOrderItem,
+);
+router.delete(
+  "/purchase-orders/:id/items/:itemId",
+  authMiddleware,
+  PurchaseOrderController.deletePurchaseOrderItem,
 );
 router.get("/purchase-orders/:id/cost-sheet", authMiddleware, PurchaseOrderController.getCostSheet);
 router.get("/purchase-orders/:id/pdf", authMiddleware, PurchaseOrderController.downloadPdf);

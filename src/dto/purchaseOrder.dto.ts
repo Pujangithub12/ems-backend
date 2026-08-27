@@ -7,13 +7,36 @@ export interface CreatePurchaseOrderItemDto {
   quantity: number;
   unit?: string | null;
   unitPrice?: number | null;
-  notes?: string | null;
+  description?: string | null;
 }
 
-/** Body shape for POST /projects/:projectId/purchase-orders. */
+/** Body shape for POST /projects/:projectId/purchase-orders. Items are no longer required up
+ * front — they're added one at a time afterward from the Overview tab (see AddPurchaseOrderItemDto). */
 export interface CreatePurchaseOrderDto {
   vendorId?: number | null;
-  items: CreatePurchaseOrderItemDto[];
+  items?: CreatePurchaseOrderItemDto[];
+}
+
+/** Body shape for POST /purchase-orders/:id/items — adding one line item to an existing PO. */
+export interface AddPurchaseOrderItemDto {
+  itemName: string;
+  itemId?: number | null;
+  quantity: number;
+  unit?: string | null;
+  unitPrice?: number | null;
+  description?: string | null;
+}
+
+/** Body shape for PUT /purchase-orders/:id/items/:itemId — full edit of one existing line item
+ * (distinct from UpdatePurchaseOrderItemDto below, which only patches hsnCode inline with the
+ * header form). */
+export interface EditPurchaseOrderItemDto {
+  itemName: string;
+  itemId?: number | null;
+  quantity: number;
+  unit?: string | null;
+  unitPrice?: number | null;
+  description?: string | null;
 }
 
 /** Per-item patch accepted alongside the header fields below — the only editable field on an existing PurchaseOrderItem (everything else is a snapshot fixed at creation time). */
@@ -37,9 +60,4 @@ export interface UpdatePurchaseOrderDto {
   purchaseType?: PurchaseType;
   status?: PurchaseOrderStatus;
   items?: UpdatePurchaseOrderItemDto[];
-}
-
-/** Body shape for POST /purchase-orders/:id/approval. */
-export interface DecidePurchaseOrderApprovalDto {
-  decision: "approved" | "rejected";
 }

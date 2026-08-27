@@ -44,7 +44,6 @@ model User {
   procurementItemsRequested         ProcurementItem[]
   procurementStatusHistoryChanges   ProcurementStatusHistory[]
   purchaseOrderStatusHistoryChanges PurchaseOrderStatusHistory[]
-  purchaseOrdersApproved            PurchaseOrder[]              @relation("PurchaseOrderApprovedBy")
   purchaseOrdersCreated             PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
   goodsReceiptsReceived             GoodsReceipt[]
   projectAssignments                ProjectAssignee[]
@@ -192,7 +191,6 @@ model CatalogItem {
   id                   Int                   @id(map: "PK_8996a1f608499554f35bec8601e") @default(autoincrement())
   name                 String                @db.VarChar
   code                 String?               @db.VarChar
-  description          String?
   createdAt            DateTime              @default(now()) @db.Timestamp(6)
   organizationId       Int?                  @map("workspaceId")
   organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_805c3806878350a0875a5032d2c")
@@ -631,11 +629,11 @@ model ProcurementStatusHistory {
 // ---------------------------------------------------------------------------
 
 model PurchaseOrder {
-  id                    Int       @id @default(autoincrement())
-  poNumber              String?   @db.VarChar
-  paymentTerms          String?   @db.VarChar
-  incoterms             String?   @db.VarChar
-  taxPercent            Decimal?  @db.Decimal
+  id                    Int      @id @default(autoincrement())
+  poNumber              String?  @db.VarChar
+  paymentTerms          String?  @db.VarChar
+  incoterms             String?  @db.VarChar
+  taxPercent            Decimal? @db.Decimal
   terms                 String?
   /// Free-text delivery period for the PO PDF (e.g. "Within 6 weeks of submission of PO.").
   deliveryPeriod        String?
@@ -643,26 +641,20 @@ model PurchaseOrder {
   /// Contact person name for the PDF's CUSTOMER box ("NAME OF CONTACT PERSON") — the buying organization's own contact, distinct from the vendor's contactPerson on the Vendor record.
   customerContactPerson String?
   /// Free-text currency label for the PDF's "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset, see purchaseOrderPdf.ts.
-  currency              String?   @db.VarChar
+  currency              String?  @db.VarChar
   /// "local" | "international" — drives whether Insurance/Customs apply, see PurchaseType in types/domain.ts
-  purchaseType          String    @default("local") @db.VarChar
-  status                String    @default("created") @db.VarChar
-  /// "pending_approval" | "approved" | "rejected" — finance/super_admin gate; `status` can't
-  /// progress past "created" until this is "approved" (see PurchaseOrderController.updatePurchaseOrder).
-  approvalStatus        String    @default("pending_approval") @db.VarChar
-  approvedById          Int?
-  approvedAt            DateTime?
+  purchaseType          String   @default("local") @db.VarChar
+  status                String   @default("created") @db.VarChar
   /// Whoever created this PO — plain admins only see/edit POs they created themselves (see
-  /// PurchaseOrderController); finance/super_admin see everything for review purposes.
+  /// PurchaseOrderController); finance/super_admin see everything.
   createdById           Int?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @default(now()) @updatedAt
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @default(now()) @updatedAt
   vendorId              Int?
   projectId             Int?
   organizationId        Int?
 
   vendor           Vendor?                      @relation(fields: [vendorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  approvedBy       User?                        @relation("PurchaseOrderApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull, onUpdate: NoAction)
   createdBy        User?                        @relation("PurchaseOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
   project          Project?                     @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   organization     Organization?                @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -682,7 +674,8 @@ model PurchaseOrderItem {
   quantity        Float    @default(1)
   unit            String?  @db.VarChar
   unitPrice       Decimal? @db.Decimal
-  notes           String?
+  /// Entered on the Overview tab's "Add Item" form — shown under the item name in the PDF's Product Description cell.
+  description     String?
   /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
   hsnCode         String?  @db.VarChar
   createdAt       DateTime @default(now())

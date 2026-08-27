@@ -18,9 +18,9 @@ export class CatalogItemController {
     }
   };
 
-  /** POST /organization/items — add a new item (name + code + description) to the shared catalog. */
+  /** POST /organization/items — add a new item (name + code) to the shared catalog. */
   static createItem = async (req: AuthRequest, res: Response) => {
-    const { name, code, description }: AddCatalogItemDto = req.body;
+    const { name, code }: AddCatalogItemDto = req.body;
     const trimmedName = name?.trim();
     if (!trimmedName) {
       return res.status(400).json({ message: "Item name is required" });
@@ -40,7 +40,6 @@ export class CatalogItemController {
           name: trimmedName,
           organizationId: req.organization!.id,
           ...(code?.trim() ? { code: code.trim() } : {}),
-          ...(description?.trim() ? { description: description.trim() } : {}),
         },
       });
       return res.status(201).json({ message: "Item created", item });
@@ -50,10 +49,10 @@ export class CatalogItemController {
     }
   };
 
-  /** PUT /organization/items/:itemId — rename/re-code/re-describe a catalog item. */
+  /** PUT /organization/items/:itemId — rename/re-code a catalog item. */
   static updateItem = async (req: AuthRequest, res: Response) => {
     const { itemId } = req.params;
-    const { name, code, description }: UpdateCatalogItemDto = req.body;
+    const { name, code }: UpdateCatalogItemDto = req.body;
     try {
       const item = await prisma.catalogItem.findFirst({
         where: { id: parseInt(itemId as string), organizationId: req.organization!.id },
@@ -75,7 +74,6 @@ export class CatalogItemController {
         data.name = trimmedName;
       }
       if (code !== undefined) data.code = code.trim() || null;
-      if (description !== undefined) data.description = description.trim() || null;
 
       const updatedItem = await prisma.catalogItem.update({ where: { id: item.id }, data });
       return res.status(200).json({ message: "Item updated", item: updatedItem });
