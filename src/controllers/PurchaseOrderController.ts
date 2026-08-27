@@ -104,15 +104,17 @@ export class PurchaseOrderController {
     return `${maxNumber + 1}-${fiscalYear}`;
   }
 
-  /** POST /projects/:projectId/purchase-orders — creates a PO directly (vendor picked up front,
-   * no Purchase Request involved). Items are optional at creation time — they're added one at a
-   * time afterward from the Overview tab's Line Items section (see addPurchaseOrderItem).
-   * poNumber is auto-generated as "{number}-{nepali fiscal year}" (e.g. "1-83/84"), incrementing
-   * per organization per fiscal year — still editable afterward via updatePurchaseOrder, which
-   * enforces uniqueness on manual edits. */
+  /** POST /projects/:projectId/purchase-orders (project-scoped) or POST /purchase-orders
+   * (org-wide — project is optional, e.g. for a PO not yet tied to a specific project) —
+   * creates a PO directly (vendor picked up front, no Purchase Request involved). Items are
+   * optional at creation time — they're added one at a time afterward from the Overview tab's
+   * Line Items section (see addPurchaseOrderItem). poNumber is auto-generated as "{number}-{nepali
+   * fiscal year}" (e.g. "1-83/84"), incrementing per organization per fiscal year — still
+   * editable afterward via updatePurchaseOrder, which enforces uniqueness on manual edits. */
   static createPurchaseOrder = async (req: AuthRequest, res: Response) => {
-    const { projectId } = req.params;
-    const { vendorId, items }: CreatePurchaseOrderDto = req.body;
+    const { vendorId, items, projectId: bodyProjectId }: CreatePurchaseOrderDto = req.body;
+    const projectIdRaw =
+      (req.params.projectId as string | undefined) ?? (bodyProjectId != null ? String(bodyProjectId) : undefined);
 
     if (items !== undefined) {
       if (!Array.isArray(items)) {
@@ -127,17 +129,20 @@ export class PurchaseOrderController {
 
     try {
       const organizationId = req.organization!.id;
-      const project = await prisma.project.findFirst({
-        where: { id: parseInt(projectId as string), organizationId },
-      });
-      if (!project) return res.status(404).json({ message: "Project not found" });
+      let project: { id: number } | null = null;
+      if (projectIdRaw) {
+        project = await prisma.project.findFirst({
+          where: { id: parseInt(projectIdRaw), organizationId },
+        });
+        if (!project) return res.status(404).json({ message: "Project not found" });
+      }
 
       const poNumber = await PurchaseOrderController.nextPoNumber(organizationId);
 
       const createdPo = await prisma.purchaseOrder.create({
         data: {
           organizationId,
-          projectId: project.id,
+          projectId: project?.id ?? null,
           vendorId: vendorId ?? null,
           createdById: req.user!.id,
           poNumber,
