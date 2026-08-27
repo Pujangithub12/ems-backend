@@ -36,7 +36,6 @@ export type StockTransferStatus = "pending" | "in_transit" | "completed" | "canc
 // Procurement pipeline v2: Purchase Order -> Proforma Invoice ->
 // Shipment/Insurance/Customs -> Goods Receipt.
 export type PurchaseOrderStatus = "created" | "sent" | "accepted" | "cancelled" | "completed";
-export type PurchaseOrderApprovalStatus = "pending_approval" | "approved" | "rejected";
 export type PurchaseType = "local" | "international";
 
 export type ProformaInvoiceStatus = "waiting" | "approved" | "rejected";

@@ -16,7 +16,7 @@ export interface PurchaseOrderPdfItem {
   unit?: string | null;
   unitPrice?: { toNumber(): number } | number | string | null;
   hsnCode?: string | null;
-  /** The linked catalog item's description (Items page) — shown under the item name in the Product Description cell. */
+  /** Entered on the Overview tab's "Add Item" form — shown under the item name in the Product Description cell. */
   description?: string | null;
 }
 
