@@ -364,6 +364,14 @@ router.post(
   roleMiddleware([UserRole.ADMIN, UserRole.FINANCE, UserRole.SUPER_ADMIN]),
   PurchaseOrderController.createPurchaseOrder,
 );
+// Project-less variant for the org-wide Purchase Orders page's "New Purchase Order" form —
+// a PO can be created without picking a project at all.
+router.post(
+  "/purchase-orders",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.FINANCE, UserRole.SUPER_ADMIN]),
+  PurchaseOrderController.createPurchaseOrder,
+);
 router.get("/purchase-orders/:id/detail", authMiddleware, PurchaseOrderController.getPurchaseOrderDetail);
 router.put(
   "/purchase-orders/:id",

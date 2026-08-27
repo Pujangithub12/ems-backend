@@ -10,10 +10,14 @@ export interface CreatePurchaseOrderItemDto {
   description?: string | null;
 }
 
-/** Body shape for POST /projects/:projectId/purchase-orders. Items are no longer required up
- * front — they're added one at a time afterward from the Overview tab (see AddPurchaseOrderItemDto). */
+/** Body shape for POST /projects/:projectId/purchase-orders and POST /purchase-orders. Items
+ * are no longer required up front — they're added one at a time afterward from the Overview tab
+ * (see AddPurchaseOrderItemDto). `projectId` is only read on the project-less /purchase-orders
+ * route (the project-scoped route takes it from the URL instead) — a PO can be created without
+ * a project at all. */
 export interface CreatePurchaseOrderDto {
   vendorId?: number | null;
+  projectId?: number | null;
   items?: CreatePurchaseOrderItemDto[];
 }
 
