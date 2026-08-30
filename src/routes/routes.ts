@@ -516,6 +516,7 @@ router.delete(
   permissionMiddleware("projects.procurement"),
   GoodsReceiptController.deletePhoto,
 );
+router.get("/goods-receipts/:id/pdf", authMiddleware, GoodsReceiptController.downloadPdf);
 
 // Project energy performance routes (Energy Performance tab) — view is open to
 // any organization member with project access; upsert is admin-gated.

@@ -4,6 +4,7 @@ import { InventoryController } from "./InventoryController";
 import { AuthRequest } from "../middlewares/auth";
 import { AddGoodsReceiptDto, UpdateGoodsReceiptStatusDto } from "../dto/goodsReceipt.dto";
 import { computeCostSheet } from "../utils/costSheet";
+import { buildGoodsReceiptPdf } from "../utils/goodsReceiptPdf";
 
 /** Include shape used when returning a goods receipt to the client after create/status-update. */
 const DETAIL_INCLUDE = {
@@ -201,6 +202,55 @@ export class GoodsReceiptController {
       });
 
       return res.status(201).json({ message: "Photo uploaded", photo });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** GET /goods-receipts/:id/pdf — renders the GRN on demand and streams it back as an
+   * attachment, matching the classic Goods Received Note template shape. */
+  static downloadPdf = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    try {
+      const existing = await GoodsReceiptController.loadOwnedGoodsReceipt(id as string, req.organization!.id);
+      if (!existing) return res.status(404).json({ message: "Goods receipt not found" });
+
+      const goodsReceipt = await prisma.goodsReceipt.findUnique({
+        where: { id: existing.id },
+        include: {
+          warehouse: true,
+          receivedBy: true,
+          items: { include: { purchaseOrderItem: true } },
+          purchaseOrder: { include: { vendor: true, project: true, organization: true } },
+        },
+      });
+      if (!goodsReceipt) return res.status(404).json({ message: "Goods receipt not found" });
+
+      const doc = buildGoodsReceiptPdf({
+        grnNumber: goodsReceipt.grnNumber,
+        createdAt: goodsReceipt.createdAt,
+        organizationName: goodsReceipt.purchaseOrder?.organization?.name ?? null,
+        supplierName: goodsReceipt.purchaseOrder?.vendor?.name ?? null,
+        poNumber: goodsReceipt.purchaseOrder?.poNumber ?? null,
+        deliveryLocation: goodsReceipt.warehouse?.name ?? null,
+        costCentre: goodsReceipt.purchaseOrder?.project?.name ?? null,
+        receivedBy: goodsReceipt.receivedBy?.fullName ?? null,
+        items: goodsReceipt.items.map((item) => ({
+          itemName: item.purchaseOrderItem?.itemName ?? "Unknown item",
+          unit: item.purchaseOrderItem?.unit ?? null,
+          unitPrice: item.purchaseOrderItem?.unitPrice ?? null,
+          orderQuantity: item.purchaseOrderItem?.quantity ?? null,
+          deliveredQuantity: item.receivedQuantity,
+          damagedQuantity: item.damagedQuantity,
+        })),
+      });
+
+      const downloadName = (goodsReceipt.grnNumber || `GRN-${goodsReceipt.id}`).replace(/\//g, "-");
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${downloadName}.pdf"`);
+      doc.pipe(res);
+      doc.end();
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
