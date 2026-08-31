@@ -27,6 +27,8 @@ export interface CostSheetBreakdown {
   customsInspection: number;
   customsWarehouse: number;
   customsMiscellaneous: number;
+  lcCharge: number;
+  lcCommission: number;
   grandTotal: number;
   totalQuantity: number;
   landedCostPerUnit: number;
@@ -43,8 +45,9 @@ export interface CostSheetBreakdown {
  * ProcurementItem migration script, which never got a PI.
  *
  * Grand Total = PI Value + Shipment costs (freight/loading/unloading/fuel/
- * misc/localTax) + Insurance premium + Customs cost fields (duty/vat/
- * excise/serviceCharge/documentation/inspection/warehouse/misc).
+ * misc/localTax) + Insurance premium + Letter of Credit charge/commission +
+ * Customs cost fields (duty/vat/excise/serviceCharge/documentation/
+ * inspection/warehouse/misc).
  * Landed Cost Per Unit = Grand Total / total PO item quantity — this is the
  * figure GoodsReceiptController writes onto InventoryItem.averageCost when a
  * GRN is accepted.
@@ -54,7 +57,7 @@ export async function computeCostSheet(purchaseOrderId: number): Promise<CostShe
     where: { id: purchaseOrderId },
     include: {
       items: true,
-      shipment: { include: { insurance: true, customs: true } },
+      shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
       proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" } },
     },
   });
@@ -80,6 +83,8 @@ export async function computeCostSheet(purchaseOrderId: number): Promise<CostShe
   const shipmentMiscellaneous = num(shipment?.miscellaneousCost);
   const localTax = num(shipment?.localTaxCost);
   const insurancePremium = num(shipment?.insurance?.premium);
+  const lcCharge = num(shipment?.letterOfCredit?.lcCharge);
+  const lcCommission = num(shipment?.letterOfCredit?.lcCommission);
 
   const customs = shipment?.customs;
   const customsDuty = num(customs?.importDuty);
@@ -100,6 +105,8 @@ export async function computeCostSheet(purchaseOrderId: number): Promise<CostShe
     shipmentMiscellaneous +
     localTax +
     insurancePremium +
+    lcCharge +
+    lcCommission +
     customsDuty +
     customsVat +
     customsExcise +
@@ -129,6 +136,8 @@ export async function computeCostSheet(purchaseOrderId: number): Promise<CostShe
     customsInspection,
     customsWarehouse,
     customsMiscellaneous,
+    lcCharge,
+    lcCommission,
     grandTotal,
     totalQuantity,
     landedCostPerUnit: grandTotal / totalQuantity,

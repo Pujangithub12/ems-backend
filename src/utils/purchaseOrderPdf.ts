@@ -417,7 +417,9 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     .text("GRAND TOTAL", MARGIN_LEFT + hsnDescQtyW + 8, y + (totalRowH - 9) / 2, { width: unitPriceW - 16 });
   doc
     .fontSize(9.5)
-    .text(fmtAmount(grandTotal), MARGIN_LEFT + hsnDescQtyW + unitPriceW + 8, y + (totalRowH - 10) / 2, { width: amountW - 16 });
+    .text(`${po.currency?.trim() || "Rupees"} ${fmtAmount(grandTotal)}`, MARGIN_LEFT + hsnDescQtyW + unitPriceW + 8, y + (totalRowH - 10) / 2, {
+      width: amountW - 16,
+    });
 
   y += totalRowH + 14;
 

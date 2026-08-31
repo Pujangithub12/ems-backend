@@ -10,6 +10,7 @@ import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
 import { PurchaseOrderController } from "../controllers/PurchaseOrderController";
+import { FinanceController } from "../controllers/FinanceController";
 import { ProformaInvoiceController } from "../controllers/ProformaInvoiceController";
 import { ShipmentController } from "../controllers/ShipmentController";
 import { GoodsReceiptController } from "../controllers/GoodsReceiptController";
@@ -393,8 +394,33 @@ router.delete(
   authMiddleware,
   PurchaseOrderController.deletePurchaseOrderItem,
 );
+router.post(
+  "/purchase-orders/:id/payments",
+  authMiddleware,
+  PurchaseOrderController.addPurchaseOrderPayment,
+);
+router.delete(
+  "/purchase-orders/:id/payments/:paymentId",
+  authMiddleware,
+  PurchaseOrderController.deletePurchaseOrderPayment,
+);
 router.get("/purchase-orders/:id/cost-sheet", authMiddleware, PurchaseOrderController.getCostSheet);
 router.get("/purchase-orders/:id/pdf", authMiddleware, PurchaseOrderController.downloadPdf);
+
+// Finance — payment ledger layered on top of the Cost Sheet above (role-gated inline in
+// FinanceController, not via permissionMiddleware, since it must include finance).
+router.get("/workspace/finance/purchase-orders", authMiddleware, FinanceController.getFinanceOverview);
+router.get("/workspace/finance/vendors/:vendorId", authMiddleware, FinanceController.getVendorFinanceSummary);
+router.get("/workspace/finance/items", authMiddleware, FinanceController.getItemCostReport);
+router.post("/workspace/finance/manual-records", authMiddleware, FinanceController.createManualRecord);
+router.put("/workspace/finance/manual-records/:id", authMiddleware, FinanceController.updateManualRecord);
+router.delete("/workspace/finance/manual-records/:id", authMiddleware, FinanceController.deleteManualRecord);
+router.post("/workspace/finance/manual-records/:id/payments", authMiddleware, FinanceController.addManualRecordPayment);
+router.delete("/workspace/finance/manual-records/:id/payments/:paymentId", authMiddleware, FinanceController.deleteManualRecordPayment);
+router.get("/workspace/finance/purchase-orders/:id/cost-breakdown", authMiddleware, FinanceController.getPurchaseOrderCostBreakdown);
+router.get("/workspace/finance/manual-records/:id/cost-breakdown", authMiddleware, FinanceController.getManualRecordCostBreakdown);
+router.put("/workspace/finance/purchase-orders/:poId/items/:itemId", authMiddleware, FinanceController.updatePurchaseOrderItemBreakdownRow);
+router.put("/workspace/finance/manual-records/:id/breakdown", authMiddleware, FinanceController.updateManualRecordBreakdownRow);
 
 // Proforma Invoices
 router.get("/workspace/proforma-invoices", authMiddleware, ProformaInvoiceController.getAllProformaInvoices);
@@ -455,6 +481,12 @@ router.put(
   authMiddleware,
   permissionMiddleware("projects.procurement"),
   ShipmentController.updateInsurance,
+);
+router.put(
+  "/shipments/:id/letter-of-credit",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ShipmentController.saveLetterOfCredit,
 );
 router.post(
   "/shipments/:id/customs",

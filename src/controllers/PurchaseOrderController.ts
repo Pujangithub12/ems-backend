@@ -9,6 +9,7 @@ import {
   AddPurchaseOrderItemDto,
   EditPurchaseOrderItemDto,
 } from "../dto/purchaseOrder.dto";
+import { AddPurchaseOrderPaymentDto } from "../dto/purchaseOrderPayment.dto";
 import { computeCostSheet } from "../utils/costSheet";
 import { buildPurchaseOrderPdf } from "../utils/purchaseOrderPdf";
 import { currentNepaliFiscalYearLabel } from "../utils/nepaliFiscalYear";
@@ -31,7 +32,7 @@ const DETAIL_INCLUDE = {
   items: { include: { item: true } },
   statusHistory: { include: { changedBy: true }, orderBy: { createdAt: "desc" as const } },
   proformaInvoices: { include: { items: true }, orderBy: { createdAt: "desc" as const } },
-  shipment: { include: { insurance: true, customs: { include: { documents: true } } } },
+  shipment: { include: { insurance: true, customs: { include: { documents: true } }, letterOfCredit: true } },
   goodsReceipts: {
     include: { items: true, photos: true, warehouse: true, receivedBy: true },
     orderBy: { createdAt: "desc" as const },
@@ -459,6 +460,102 @@ export class PurchaseOrderController {
       });
 
       return res.status(200).json({ message: "Item deleted", purchaseOrder });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  private static async loadOwnedPurchaseOrderPayment(poId: string, paymentId: string, organizationId: number) {
+    const po = await PurchaseOrderController.loadOwnedPurchaseOrder(poId, organizationId);
+    if (!po) return null;
+    const payment = await prisma.purchaseOrderPayment.findFirst({
+      where: { id: parseInt(paymentId), purchaseOrderId: po.id },
+    });
+    if (!payment) return null;
+    return { po, payment };
+  }
+
+  /** POST /purchase-orders/:id/payments — logs one installment paid against a PO (Finance
+   * page). A PO can be paid in several installments, so this is additive, not a single-field
+   * update. Same edit permission as addPurchaseOrderItem — finance must be able to log
+   * payments even though finance doesn't hold "projects.procurement" by default. */
+  static addPurchaseOrderPayment = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const { amount, paidDate, reference, notes }: AddPurchaseOrderPaymentDto = req.body;
+
+    if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ message: "A valid amount is required" });
+    }
+    const parsedDate = paidDate ? new Date(paidDate) : null;
+    if (!parsedDate || Number.isNaN(parsedDate.getTime())) {
+      return res.status(400).json({ message: "A valid paid date is required" });
+    }
+
+    try {
+      const canEdit =
+        (await roleHasPermission(req.user!.role, "projects.procurement")) ||
+        req.user!.role === UserRole.FINANCE ||
+        req.user!.role === UserRole.SUPER_ADMIN;
+      if (!canEdit) return res.status(403).json({ message: "Forbidden" });
+
+      const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id as string, req.organization!.id);
+      if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
+        return res.status(404).json({ message: "Purchase order not found" });
+      }
+
+      await prisma.purchaseOrderPayment.create({
+        data: {
+          purchaseOrderId: existing.id,
+          amount,
+          paidDate: parsedDate,
+          reference: reference?.trim() || null,
+          notes: notes?.trim() || null,
+          createdById: req.user!.id,
+        },
+      });
+
+      const purchaseOrder = await prisma.purchaseOrder.findUnique({
+        where: { id: existing.id },
+        include: DETAIL_INCLUDE,
+      });
+
+      return res.status(201).json({ message: "Payment logged", purchaseOrder });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** DELETE /purchase-orders/:id/payments/:paymentId — removes one logged payment. Same edit
+   * permission as addPurchaseOrderPayment. */
+  static deletePurchaseOrderPayment = async (req: AuthRequest, res: Response) => {
+    const { id, paymentId } = req.params;
+
+    try {
+      const canEdit =
+        (await roleHasPermission(req.user!.role, "projects.procurement")) ||
+        req.user!.role === UserRole.FINANCE ||
+        req.user!.role === UserRole.SUPER_ADMIN;
+      if (!canEdit) return res.status(403).json({ message: "Forbidden" });
+
+      const loaded = await PurchaseOrderController.loadOwnedPurchaseOrderPayment(
+        id as string,
+        paymentId as string,
+        req.organization!.id,
+      );
+      if (!loaded || !PurchaseOrderController.isVisibleTo(loaded.po, req)) {
+        return res.status(404).json({ message: "Payment not found" });
+      }
+
+      await prisma.purchaseOrderPayment.delete({ where: { id: loaded.payment.id } });
+
+      const purchaseOrder = await prisma.purchaseOrder.findUnique({
+        where: { id: loaded.po.id },
+        include: DETAIL_INCLUDE,
+      });
+
+      return res.status(200).json({ message: "Payment deleted", purchaseOrder });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });

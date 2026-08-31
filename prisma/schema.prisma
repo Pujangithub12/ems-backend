@@ -45,6 +45,8 @@ model User {
   procurementStatusHistoryChanges   ProcurementStatusHistory[]
   purchaseOrderStatusHistoryChanges PurchaseOrderStatusHistory[]
   purchaseOrdersCreated             PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
+  purchaseOrderPaymentsLogged       PurchaseOrderPayment[]
+  financeManualRecordsCreated       FinanceManualRecord[]
   goodsReceiptsReceived             GoodsReceipt[]
   projectAssignments                ProjectAssignee[]
   projectFilesUploaded              ProjectFile[]
@@ -102,6 +104,7 @@ model Organization {
   tasks                   Task[]
   vendors                 Vendor[]
   warehouses              Warehouse[]
+  financeManualRecords    FinanceManualRecord[]
   memberships             OrganizationMembership[]
   notifications           Notification[]
   plantDailyReports       PlantDailyReport[]
@@ -663,24 +666,104 @@ model PurchaseOrder {
   proformaInvoices ProformaInvoice[]
   shipment         Shipment?
   goodsReceipts    GoodsReceipt[]
+  payments         PurchaseOrderPayment[]
 
   @@map("purchase_order")
 }
 
-/// Snapshot copy of the selected PurchaseRequestItem rows at PO-generation time — not a live reference, so the PO stays stable if the PR is later edited.
-model PurchaseOrderItem {
+/// Finance's payment log against a PO or a manual finance record — a PO/record can be paid in
+/// installments, so this is a one-to-many history rather than a single amount-paid field.
+/// Exactly one of purchaseOrderId/manualRecordId is set per row.
+model PurchaseOrderPayment {
   id              Int      @id @default(autoincrement())
-  itemName        String   @db.VarChar
-  quantity        Float    @default(1)
-  unit            String?  @db.VarChar
-  unitPrice       Decimal? @db.Decimal
-  /// Entered on the Overview tab's "Add Item" form — shown under the item name in the PDF's Product Description cell.
-  description     String?
-  /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
-  hsnCode         String?  @db.VarChar
+  amount          Decimal  @db.Decimal
+  paidDate        DateTime @db.Date
+  /// e.g. bank transfer reference / cheque number.
+  reference       String?  @db.VarChar
+  notes           String?
   createdAt       DateTime @default(now())
   purchaseOrderId Int?
-  itemId          Int?
+  manualRecordId  Int?
+  createdById     Int?
+
+  purchaseOrder PurchaseOrder?       @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  manualRecord  FinanceManualRecord? @relation(fields: [manualRecordId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdBy     User?                @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("purchase_order_payment")
+}
+
+/// A Finance ledger row entered directly on the Finance page, not derived from a real
+/// PurchaseOrder — for tracking payments/balances that don't have (or don't yet have) a PO
+/// behind them. Shares the PurchaseOrderPayment log for its payment history.
+model FinanceManualRecord {
+  id                      Int      @id @default(autoincrement())
+  vendorName              String   @db.VarChar
+  itemName                String   @db.VarChar
+  /// Free-text procurement/reference identifier — the manual-record equivalent of PurchaseOrder.poNumber.
+  referenceNumber         String?  @db.VarChar
+  itemValue               Decimal  @db.Decimal
+  paymentTerms            String?  @db.VarChar
+  /// The following mirror the Finance cost-breakdown page's columns for a PO row — plain stored
+  /// fields here (no shipment/proration behind a manual record, unlike PurchaseOrderItem's
+  /// override columns below).
+  freight                 Decimal? @db.Decimal
+  lcNumber                String?  @db.VarChar
+  lcCharge                Decimal? @db.Decimal
+  lcCommission            Decimal? @db.Decimal
+  vat                     Decimal? @db.Decimal
+  /// VAT-refund tracking (Finance cost-breakdown page): refundableMarginPercent is the % of VAT
+  /// that's refundable; refundableAmount = vat * refundableMarginPercent / 100 (computed, not
+  /// stored); refundedAmount is how much has actually been refunded so far; toBeRefunded =
+  /// refundableAmount - refundedAmount (computed, not stored).
+  refundableMarginPercent Decimal? @db.Decimal
+  refundedAmount          Decimal? @db.Decimal
+  /// Freeform note shown on the record's Finance cost-breakdown page.
+  remarks                 String?
+  createdAt               DateTime @default(now())
+  organizationId          Int?
+  /// Optional link to a real Vendor so this record's totals fold into that vendor's Finance drilldown page.
+  vendorId                Int?
+  createdById             Int?
+
+  organization Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vendor       Vendor?                @relation(fields: [vendorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  createdBy    User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  payments     PurchaseOrderPayment[]
+
+  @@map("finance_manual_record")
+}
+
+/// Snapshot copy of the selected PurchaseRequestItem rows at PO-generation time — not a live reference, so the PO stays stable if the PR is later edited.
+model PurchaseOrderItem {
+  id                      Int      @id @default(autoincrement())
+  itemName                String   @db.VarChar
+  quantity                Float    @default(1)
+  unit                    String?  @db.VarChar
+  unitPrice               Decimal? @db.Decimal
+  /// Entered on the Overview tab's "Add Item" form — shown under the item name in the PDF's Product Description cell.
+  description             String?
+  /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
+  hsnCode                 String?  @db.VarChar
+  /// The following let the Finance cost-breakdown page override this item's computed share of
+  /// the PO's freight/LC charge/LC commission/VAT (normally prorated from Shipment/Customs/
+  /// LetterOfCredit by this item's value share — see computeCostSheet/buildPoCostBreakdownRows).
+  /// Null means "use the computed proration"; a non-null value here wins.
+  freightOverride         Decimal? @db.Decimal
+  lcChargeOverride        Decimal? @db.Decimal
+  lcCommissionOverride    Decimal? @db.Decimal
+  vatOverride             Decimal? @db.Decimal
+  /// VAT-refund tracking (Finance cost-breakdown page): refundableMarginPercent is the % of this
+  /// item's VAT (see vatOverride above) that's refundable; refundableAmount = vat *
+  /// refundableMarginPercent / 100 (computed, not stored); refundedAmount is how much has
+  /// actually been refunded so far; toBeRefunded = refundableAmount - refundedAmount (computed).
+  refundableMarginPercent Decimal? @db.Decimal
+  refundedAmount          Decimal? @db.Decimal
+  /// Freeform note shown on the PO's Finance cost-breakdown page (not printed on the PO PDF).
+  remarks                 String?
+  createdAt               DateTime @default(now())
+  purchaseOrderId         Int?
+  itemId                  Int?
 
   purchaseOrder     PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   item              CatalogItem?       @relation(fields: [itemId], references: [id], onDelete: SetNull, onUpdate: NoAction)
@@ -766,9 +849,10 @@ model Shipment {
   updatedAt         DateTime  @default(now()) @updatedAt
   purchaseOrderId   Int?      @unique
 
-  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  insurance     Insurance?
-  customs       Customs?
+  purchaseOrder  PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  insurance      Insurance?
+  customs        Customs?
+  letterOfCredit LetterOfCredit?
 
   @@map("shipment")
 }
@@ -789,6 +873,20 @@ model Insurance {
   shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("insurance")
+}
+
+/// International purchases only — optional, mirrors Insurance's shape (per spec: "Only if applicable").
+model LetterOfCredit {
+  id           Int      @id @default(autoincrement())
+  lcNumber     String?  @db.VarChar
+  lcCharge     Decimal? @db.Decimal
+  lcCommission Decimal? @db.Decimal
+  createdAt    DateTime @default(now())
+  shipmentId   Int?     @unique
+
+  shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("letter_of_credit")
 }
 
 /// International purchases only.
@@ -1218,23 +1316,24 @@ model TaskComment {
 }
 
 model Vendor {
-  id                 Int               @id(map: "PK_931a23f6231a57604f5a0e32780") @default(autoincrement())
-  name               String            @db.VarChar
-  code               String?           @db.VarChar
-  location           String?           @db.VarChar
-  createdAt          DateTime          @default(now()) @db.Timestamp(6)
-  organizationId     Int?              @map("workspaceId")
-  contractExpiryDate DateTime?         @db.Date
-  contact            String?           @db.VarChar
+  id                   Int                   @id(map: "PK_931a23f6231a57604f5a0e32780") @default(autoincrement())
+  name                 String                @db.VarChar
+  code                 String?               @db.VarChar
+  location             String?               @db.VarChar
+  createdAt            DateTime              @default(now()) @db.Timestamp(6)
+  organizationId       Int?                  @map("workspaceId")
+  contractExpiryDate   DateTime?             @db.Date
+  contact              String?               @db.VarChar
   /// Contact person's name at the vendor (e.g. "Anshuman Pani") — distinct from Vendor.name, which is the company name. Used on generated Purchase Order PDFs.
-  contactPerson      String?           @db.VarChar
+  contactPerson        String?               @db.VarChar
   /// Full postal address, for the generated Purchase Order PDF's "VENDOR" box — distinct from the shorter free-text `location`.
-  address            String?
-  email              String?           @db.VarChar
-  inventoryItems     InventoryItem[]
-  procurementItems   ProcurementItem[]
-  purchaseOrders     PurchaseOrder[]
-  organization       Organization?     @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_fb0f972eb0ca9c48c227968fd96")
+  address              String?
+  email                String?               @db.VarChar
+  inventoryItems       InventoryItem[]
+  procurementItems     ProcurementItem[]
+  purchaseOrders       PurchaseOrder[]
+  financeManualRecords FinanceManualRecord[]
+  organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_fb0f972eb0ca9c48c227968fd96")
 
   @@map("vendor")
 }
