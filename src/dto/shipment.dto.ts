@@ -35,3 +35,10 @@ export interface AddInsuranceDto {
 
 /** Body shape for PUT /insurance/:id. */
 export type UpdateInsuranceDto = Partial<AddInsuranceDto>;
+
+/** Body shape for PUT /shipments/:id/letter-of-credit — create-or-update, international purchases only, "only if applicable". */
+export interface AddLetterOfCreditDto {
+  lcNumber?: string;
+  lcCharge?: number;
+  lcCommission?: number;
+}
