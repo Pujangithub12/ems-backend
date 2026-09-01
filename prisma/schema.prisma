@@ -50,8 +50,7 @@ model User {
   goodsReceiptsReceived             GoodsReceipt[]
   projectAssignments                ProjectAssignee[]
   projectFilesUploaded              ProjectFile[]
-  reportActivities                  ReportActivity[]
-  reportComments                    ReportComment[]
+  siteActivityReportsCreated        SiteActivityReport[]
   siteVisitRequests                 SiteVisitRequest[]
   stockTransfersRequested           StockTransfer[]
   subTaskComments                   SubTaskComment[]
@@ -96,8 +95,6 @@ model Organization {
   projects              Project[]
   projectFiles          ProjectFile[]
   projectHeadings       ProjectHeading[]
-  reportActivities      ReportActivity[]
-  reportComments        ReportComment[]
   siteVisitRequests     SiteVisitRequest[]
   tasks                 Task[]
   vendors               Vendor[]
@@ -106,6 +103,7 @@ model Organization {
   memberships           OrganizationMembership[]
   notifications         Notification[]
   plantReportTables     PlantReportTable[]
+  siteActivityReports   SiteActivityReport[]
 
   @@map("workspace")
 }
@@ -552,6 +550,176 @@ model PlantReportRow {
   @@map("plant_report_row")
 }
 
+/// One project's daily site report ("Site Activities" page/sidebar link) —
+/// one per (project, reportDate). Distinct from PlantReportTable's generic
+/// spreadsheet tabs: this is a fixed-shape daily log (work activities,
+/// equipment, manpower, photos) matching the paper DPR form, not a
+/// user-defined table.
+model SiteActivityReport {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  projectId      Int
+  reportDate     DateTime @db.Date
+  location       String?  @db.VarChar
+  /// "draft" | "submitted"
+  status         String   @default("submitted") @db.VarChar
+  createdById    Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy    User?                     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  activities   SiteActivityItem[]
+  equipment    SiteActivityEquipment[]
+  manpower     SiteActivityManpower[]
+  photos       SiteActivityPhoto[]
+  weather      SiteActivityWeather[]
+  materials    SiteActivityMaterial[]
+  safety       SiteActivitySafety[]
+  instructions SiteActivityInstruction[]
+
+  @@unique([projectId, reportDate])
+  @@map("site_activity_report")
+}
+
+/// One "Work Activities Progress" row on a SiteActivityReport.
+model SiteActivityItem {
+  id          Int     @id @default(autoincrement())
+  reportId    Int
+  sortOrder   Int     @default(0)
+  description String  @db.VarChar
+  chainage    String? @db.VarChar
+  todayQty    Float?
+  unit        String? @db.VarChar
+  /// "ongoing" | "completed"
+  status      String  @default("ongoing") @db.VarChar
+  remarks     String? @db.VarChar
+
+  report SiteActivityReport  @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  photos SiteActivityPhoto[]
+
+  @@map("site_activity_item")
+}
+
+/// One "Equipment & Machinery Log" row on a SiteActivityReport.
+model SiteActivityEquipment {
+  id            Int    @id @default(autoincrement())
+  reportId      Int
+  sortOrder     Int    @default(0)
+  equipmentName String @db.VarChar
+  quantity      Int    @default(1)
+  workingHours  Float?
+  /// "working" | "idle" | "breakdown"
+  condition     String @default("working") @db.VarChar
+
+  report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@map("site_activity_equipment")
+}
+
+/// One "Manpower Breakdown" row on a SiteActivityReport — a free-text role
+/// label (e.g. "Site Engineer") rather than an enum, so an org can use
+/// whatever role names their site actually has.
+model SiteActivityManpower {
+  id        Int    @id @default(autoincrement())
+  reportId  Int
+  sortOrder Int    @default(0)
+  role      String @db.VarChar
+  headcount Int    @default(0)
+
+  report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@map("site_activity_manpower")
+}
+
+/// One "Site Photographs" entry — optionally tied to a specific work
+/// activity row (itemId), otherwise just attached to the report generally.
+model SiteActivityPhoto {
+  id         Int      @id @default(autoincrement())
+  reportId   Int
+  itemId     Int?
+  filePath   String   @db.VarChar
+  fileName   String   @db.VarChar
+  caption    String?  @db.VarChar
+  uploadedAt DateTime @default(now())
+
+  report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  item   SiteActivityItem?  @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@map("site_activity_photo")
+}
+
+/// One "Weather Status" row on a SiteActivityReport — exactly one per slot
+/// ("morning" | "afternoon" | "evening"), matching the paper DPR form's
+/// fixed 3-row weather block.
+model SiteActivityWeather {
+  id        Int     @id @default(autoincrement())
+  reportId  Int
+  /// "morning" | "afternoon" | "evening"
+  slot      String  @db.VarChar
+  condition String? @db.VarChar
+  tempC     Float?
+  /// "no_rainfall" | "light" | "moderate" | "heavy"
+  rainfall  String? @db.VarChar
+  remarks   String? @db.VarChar
+
+  report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@unique([reportId, slot])
+  @@map("site_activity_weather")
+}
+
+/// One "Materials" row on a SiteActivityReport — separate quantity/unit
+/// pairs for "Received at site" vs "Used at site" (e.g. 1000 CFT received,
+/// 0 CFT used yet), rather than a single quantity with two booleans.
+model SiteActivityMaterial {
+  id               Int     @id @default(autoincrement())
+  reportId         Int
+  sortOrder        Int     @default(0)
+  materialType     String  @db.VarChar
+  receivedQuantity Float?
+  receivedUnit     String? @db.VarChar
+  usedQuantity     Float?
+  usedUnit         String? @db.VarChar
+  remarks          String? @db.VarChar
+
+  report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@map("site_activity_material")
+}
+
+/// One "Safety" row (observation or incident) on a SiteActivityReport.
+model SiteActivitySafety {
+  id          Int     @id @default(autoincrement())
+  reportId    Int
+  sortOrder   Int     @default(0)
+  /// "observation" | "incident"
+  type        String  @db.VarChar
+  description String? @db.VarChar
+  actionTaken String? @db.VarChar
+
+  report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@map("site_activity_safety")
+}
+
+/// One "Instructions" row on a SiteActivityReport.
+model SiteActivityInstruction {
+  id          Int     @id @default(autoincrement())
+  reportId    Int
+  sortOrder   Int     @default(0)
+  description String? @db.VarChar
+  byWhom      String? @db.VarChar
+  toWhom      String? @db.VarChar
+  time        String? @db.VarChar
+  signatureOf String? @db.VarChar
+
+  report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@map("site_activity_instruction")
+}
+
 model ProcurementAttachment {
   id                Int              @id(map: "PK_7daf4aef8c39d882b308044813f") @default(autoincrement())
   fileName          String           @db.VarChar
@@ -984,20 +1152,21 @@ model Project {
   estimatedTotalCost Decimal?  @db.Decimal
   sellingPrice       Decimal?  @db.Decimal
 
-  dailyGeneration    DailyGeneration[]
-  inventoryItems     InventoryItem[]
-  monthlyPerformance MonthlyPerformance[]
-  plantReportTables  PlantReportTable[]
-  procurementItems   ProcurementItem[]
-  purchaseOrders     PurchaseOrder[]
-  organization       Organization?        @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_c224ab17df530651e53a398ed92")
-  assignees          ProjectAssignee[]
-  files              ProjectFile[]
-  headings           ProjectHeading[]
-  scheduleTasks      ScheduleTask[]
-  scheduleTaskLinks  ScheduleTaskLink[]
-  projectTasks       Task[]
-  taskLinks          TaskLink[]
+  dailyGeneration     DailyGeneration[]
+  inventoryItems      InventoryItem[]
+  monthlyPerformance  MonthlyPerformance[]
+  plantReportTables   PlantReportTable[]
+  procurementItems    ProcurementItem[]
+  purchaseOrders      PurchaseOrder[]
+  siteActivityReports SiteActivityReport[]
+  organization        Organization?        @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_c224ab17df530651e53a398ed92")
+  assignees           ProjectAssignee[]
+  files               ProjectFile[]
+  headings            ProjectHeading[]
+  scheduleTasks       ScheduleTask[]
+  scheduleTaskLinks   ScheduleTaskLink[]
+  projectTasks        Task[]
+  taskLinks           TaskLink[]
 
   @@map("project")
 }
@@ -1050,33 +1219,6 @@ model ProjectHeading {
   tasks           Task[]
 
   @@map("project_heading")
-}
-
-model ReportActivity {
-  id             Int           @id(map: "PK_2344b3ce49e1e7833c7eb79a679") @default(autoincrement())
-  reportType     String        @db.VarChar
-  action         String        @db.VarChar
-  format         String?       @db.VarChar
-  createdAt      DateTime      @default(now()) @db.Timestamp(6)
-  performedById  Int?
-  organizationId Int?          @map("workspaceId")
-  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_074a26e93f27863800f8ce9fa34")
-  performedBy    User?         @relation(fields: [performedById], references: [id], onUpdate: NoAction, map: "FK_2bf2938d0954fbf9e93c856b42a")
-
-  @@map("report_activity")
-}
-
-model ReportComment {
-  id             Int           @id(map: "PK_8bb2bc4a3d9c55e031bc5d015c5") @default(autoincrement())
-  reportKey      String        @db.VarChar
-  body           String
-  createdAt      DateTime      @default(now()) @db.Timestamp(6)
-  createdById    Int?
-  organizationId Int?          @map("workspaceId")
-  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_2097fe196bdac816d6ee6244982")
-  createdBy      User?         @relation(fields: [createdById], references: [id], onUpdate: NoAction, map: "FK_69a91a4269c5563e91aca8059a6")
-
-  @@map("report_comment")
 }
 
 model RolePermission {

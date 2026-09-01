@@ -27,10 +27,12 @@ export interface SavePlantReportRowDto {
 }
 
 /** Body shape for POST /plant-report-tables/:id/import — a spreadsheet
- * (CSV/Excel) parsed client-side into a header list + row objects keyed by
- * header name (not column id, since a new header may not have a column yet). */
+ * (CSV/Excel) parsed and matched to this table's *existing* columns
+ * client-side (by header name), then keyed by column id exactly like
+ * `SavePlantReportRowDto.values` — import never creates columns, so there's
+ * nothing here but rows to bulk-insert via the same `coerceRowValues` path
+ * a single manual row create/update already uses. */
 export interface SaveImportSheetDto {
-  columns: { name: string; dataType: PlantReportColumnDataType }[];
   rows: Record<string, unknown>[];
 }
 
