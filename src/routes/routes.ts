@@ -4,8 +4,7 @@ import { OrganizationController } from "../controllers/OrganizationController";
 import { UserController } from "../controllers/UserController";
 import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
-import { PlantReportController } from "../controllers/PlantReportController";
-import { PlantReportFieldController } from "../controllers/PlantReportFieldController";
+import { PlantReportTableController } from "../controllers/PlantReportTableController";
 import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
@@ -170,37 +169,52 @@ router.delete(
   AnnouncementController.deleteAnnouncement,
 );
 
-// Plant daily report routes — any org member can log/view entries; editing
-// or deleting someone else's entry is gated inside the controller (creator
-// or admin/super_admin only), not by role, since it's per-resource.
-router.get("/plant-reports", authMiddleware, PlantReportController.getMonth);
-router.get("/plant-reports/prefill", authMiddleware, PlantReportController.getPrefill);
-router.post("/plant-reports", authMiddleware, PlantReportController.create);
-router.put("/plant-reports/:id", authMiddleware, PlantReportController.update);
-router.delete("/plant-reports/:id", authMiddleware, PlantReportController.remove);
-
-// Plant report custom fields — any org member can read them (needed to
-// render the daily entry form), but defining/renaming/removing a field is an
-// organization-wide schema change, so it's admin-gated.
-router.get("/plant-report-fields", authMiddleware, PlantReportFieldController.list);
+// Plant Report page — a project-scoped set of user-defined spreadsheet tabs
+// ("tables"). Any org member can read tables/rows and add/edit/delete rows
+// (data entry); creating/renaming/deleting a table or its columns is a
+// structural schema change, so it's admin-gated.
+router.get("/plant-report-tables", authMiddleware, PlantReportTableController.list);
+router.get("/plant-report-tables/:id", authMiddleware, PlantReportTableController.getById);
 router.post(
-  "/plant-report-fields",
+  "/plant-report-tables",
   authMiddleware,
   roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  PlantReportFieldController.create,
+  PlantReportTableController.create,
 );
 router.put(
-  "/plant-report-fields/:id",
+  "/plant-report-tables/:id",
   authMiddleware,
   roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  PlantReportFieldController.update,
+  PlantReportTableController.update,
 );
 router.delete(
-  "/plant-report-fields/:id",
+  "/plant-report-tables/:id",
   authMiddleware,
   roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  PlantReportFieldController.remove,
+  PlantReportTableController.remove,
 );
+router.post(
+  "/plant-report-tables/:id/columns",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportTableController.createColumn,
+);
+router.put(
+  "/plant-report-columns/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportTableController.updateColumn,
+);
+router.delete(
+  "/plant-report-columns/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  PlantReportTableController.removeColumn,
+);
+router.post("/plant-report-tables/:id/rows", authMiddleware, PlantReportTableController.createRow);
+router.put("/plant-report-rows/:id", authMiddleware, PlantReportTableController.updateRow);
+router.delete("/plant-report-rows/:id", authMiddleware, PlantReportTableController.removeRow);
+router.post("/plant-report-tables/:id/import", authMiddleware, PlantReportTableController.importSheet);
 
 // Notification routes — every authenticated user reads/manages only their own.
 router.get("/notifications", authMiddleware, NotificationController.list);
