@@ -5,6 +5,7 @@ import { UserController } from "../controllers/UserController";
 import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { PlantReportTableController } from "../controllers/PlantReportTableController";
+import { SiteActivityController } from "../controllers/SiteActivityController";
 import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
@@ -30,7 +31,6 @@ import { HierarchyController } from "../controllers/HierarchyController";
 import { ScheduleController } from "../controllers/ScheduleController";
 import { ScheduleService } from "../services/schedule.service";
 import { PermissionController } from "../controllers/PermissionController";
-import { ReportsController } from "../controllers/ReportsController";
 import { CatalogItemController } from "../controllers/CatalogItemController";
 import { authMiddleware, roleMiddleware, permissionMiddleware, anyPermissionMiddleware } from "../middlewares/auth";
 import { loginLimiter, authActionLimiter } from "../middlewares/rateLimit";
@@ -45,6 +45,7 @@ import {
   uploadProformaInvoiceFile,
   uploadCustomsFile,
   uploadGoodsReceiptFile,
+  uploadSiteActivityPhoto,
 } from "../middlewares/upload";
 import { UserRole } from "../types/enums";
 
@@ -215,6 +216,22 @@ router.post("/plant-report-tables/:id/rows", authMiddleware, PlantReportTableCon
 router.put("/plant-report-rows/:id", authMiddleware, PlantReportTableController.updateRow);
 router.delete("/plant-report-rows/:id", authMiddleware, PlantReportTableController.removeRow);
 router.post("/plant-report-tables/:id/import", authMiddleware, PlantReportTableController.importSheet);
+
+// Site Activities page — one fixed-shape daily report per (project, date):
+// work activities, equipment, manpower, photos. Any org member can read and
+// save (data entry, same level as filling in a paper DPR); only admins can
+// delete a whole report.
+router.get("/site-activity-reports", authMiddleware, SiteActivityController.getByDate);
+router.get("/site-activity-reports/range", authMiddleware, SiteActivityController.getRange);
+router.post("/site-activity-reports", authMiddleware, SiteActivityController.save);
+router.delete(
+  "/site-activity-reports/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  SiteActivityController.remove,
+);
+router.post("/site-activity-reports/:reportId/photos", authMiddleware, ...uploadSiteActivityPhoto, SiteActivityController.uploadPhoto);
+router.delete("/site-activity-photos/:id", authMiddleware, SiteActivityController.removePhoto);
 
 // Notification routes — every authenticated user reads/manages only their own.
 router.get("/notifications", authMiddleware, NotificationController.list);
@@ -764,22 +781,6 @@ router.delete(
   CatalogItemController.deleteItem,
 );
 
-// Reports dashboard
-router.get("/workspace/reports/summary", authMiddleware, ReportsController.getSummary);
-router.get("/workspace/reports/activity", authMiddleware, ReportsController.getReportActivity);
-router.post(
-  "/workspace/reports/activity",
-  authMiddleware,
-  permissionMiddleware("projects.inventory"),
-  ReportsController.logReportActivity,
-);
-router.get("/workspace/reports/comments", authMiddleware, ReportsController.getReportComments);
-router.post(
-  "/workspace/reports/comments",
-  authMiddleware,
-  permissionMiddleware("projects.inventory"),
-  ReportsController.addReportComment,
-);
 
 // Organization-level document routes (sidebar Documents page). Rename/download/delete
 // reuse the same /projects/files/:fileId endpoints above — they resolve ownership

@@ -6,10 +6,8 @@ import {
   SavePlantReportColumnDto,
   SavePlantReportRowDto,
   SaveImportSheetDto,
-  PlantReportCellValue,
   VALID_COLUMN_DATA_TYPES,
   coerceRowValues,
-  coerceCellValue,
 } from "../dto/plantReport.dto";
 
 const shapeTable = (table: { id: number; name: string; sortOrder: number; isDefault: boolean }) => ({
@@ -360,19 +358,20 @@ export class PlantReportTableController {
 
   /** POST /plant-report-tables/:id/import — bulk-imports an uploaded
    * spreadsheet (any org member, same permission level as adding a row —
-   * this is data entry, just many rows at once). The file itself is parsed
-   * client-side (into a header list + row objects keyed by header name);
-   * this endpoint reuses any existing column whose name matches a header
-   * (case-insensitively) and creates a new column for every header that
-   * doesn't, so a sheet with any number/shape of columns "just works". */
+   * this is data entry, just many rows at once). Columns are never created
+   * here: the file is parsed and matched to this table's *existing* columns
+   * client-side (by header name), already keyed by column id exactly like a
+   * manual row create, so this just reuses `coerceRowValues` to bulk-insert
+   * rows — any column data doesn't match still gets dropped, since
+   * `coerceRowValues` only keeps keys that are real column ids. */
   static importSheet = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const tableId = parseInt(id as string, 10);
     if (!Number.isInteger(tableId)) return res.status(400).json({ message: "Invalid table id" });
 
     const body: SaveImportSheetDto = req.body;
-    if (!Array.isArray(body.columns) || !Array.isArray(body.rows)) {
-      return res.status(400).json({ message: "columns and rows are required" });
+    if (!Array.isArray(body.rows)) {
+      return res.status(400).json({ message: "rows are required" });
     }
 
     try {
@@ -384,37 +383,17 @@ export class PlantReportTableController {
       if (!table) return res.status(404).json({ message: "Table not found" });
 
       const result = await prisma.$transaction(async (tx) => {
-        const byName = new Map<string, { id: number; dataType: string }>();
-        for (const c of table.columns) byName.set(c.name.trim().toLowerCase(), { id: c.id, dataType: c.dataType });
-
-        let sortOrder = table.columns.length;
-        let columnsCreated = 0;
-        for (const col of body.columns) {
-          const name = (col.name || "").trim();
-          if (!name) continue;
-          const key = name.toLowerCase();
-          if (byName.has(key)) continue;
-          const dataType = VALID_COLUMN_DATA_TYPES.has(col.dataType) ? col.dataType : "text";
-          const created = await tx.plantReportColumn.create({ data: { tableId, name, dataType, sortOrder: sortOrder++ } });
-          byName.set(key, { id: created.id, dataType: created.dataType });
-          columnsCreated++;
-        }
-
         let rowSortOrder = await tx.plantReportRow.count({ where: { tableId } });
         let rowsCreated = 0;
         for (const rawRow of body.rows) {
           if (!rawRow || typeof rawRow !== "object") continue;
-          const values: Record<string, PlantReportCellValue> = {};
-          for (const [name, val] of Object.entries(rawRow)) {
-            const col = byName.get(name.trim().toLowerCase());
-            if (!col) continue;
-            values[String(col.id)] = coerceCellValue(val, col.dataType);
-          }
+          const values = coerceRowValues(table.columns, rawRow);
+          if (Object.keys(values).length === 0) continue;
           await tx.plantReportRow.create({ data: { tableId, sortOrder: rowSortOrder++, values } });
           rowsCreated++;
         }
 
-        return { columnsCreated, rowsCreated };
+        return { rowsCreated };
       });
 
       return res.status(200).json(result);

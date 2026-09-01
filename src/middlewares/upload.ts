@@ -212,3 +212,17 @@ export const uploadProformaInvoiceFile = makeOwnedResourceUpload("proforma-invoi
 export const uploadCustomsFile = makeOwnedResourceUpload("customs");
 // Goods receipt inspection photos, uploads/goods-receipts/<goodsReceiptId>/
 export const uploadGoodsReceiptFile = makeOwnedResourceUpload("goods-receipts");
+
+// Site Activities daily report photos, uploads/site-activities/<reportId>/ —
+// route param is :reportId rather than :itemId, so this can't use
+// makeOwnedResourceUpload above (which hardcodes that param name).
+export const uploadSiteActivityPhoto = makeUploadMiddleware({
+  field: "file",
+  mode: "single",
+  fileSizeLimit: 15 * 1024 * 1024,
+  imagesOnly: true,
+  resolveDir: (req) => {
+    const reportId = parsePositiveIntParam(req.params.reportId);
+    return reportId == null ? null : `site-activities/${reportId}`;
+  },
+});
