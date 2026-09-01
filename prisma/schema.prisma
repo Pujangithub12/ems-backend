@@ -60,8 +60,6 @@ model User {
   taskComments                      TaskComment[]
   memberships                       OrganizationMembership[]
   notifications                     Notification[]
-  plantDailyReportsCreated          PlantDailyReport[]
-  plantReportStaffEntries           PlantReportStaff[]
 
   @@map("user")
 }
@@ -80,35 +78,34 @@ model Organization {
   /// Storage key for the company seal/stamp image used on generated Purchase Order PDFs.
   stampImagePath     String?  @db.VarChar
 
-  activities              Activity[]
-  announcements           Announcement[]
-  calendarEvents          CalendarEvent[]
-  catalogItems            CatalogItem[]
-  dailyGeneration         DailyGeneration[]
-  expenseRequests         ExpenseRequest[]
-  fileAccess              FileAccess[]
-  hierarchyNodes          HierarchyNode[]
-  inventoryItems          InventoryItem[]
-  inventoryTransactions   InventoryTransaction[]
-  leaveRequests           LeaveRequest[]
-  monthlyPerformance      MonthlyPerformance[]
-  myTasks                 MyTask[]
-  procurementItems        ProcurementItem[]
-  purchaseOrders          PurchaseOrder[]
-  projects                Project[]
-  projectFiles            ProjectFile[]
-  projectHeadings         ProjectHeading[]
-  reportActivities        ReportActivity[]
-  reportComments          ReportComment[]
-  siteVisitRequests       SiteVisitRequest[]
-  tasks                   Task[]
-  vendors                 Vendor[]
-  warehouses              Warehouse[]
-  financeManualRecords    FinanceManualRecord[]
-  memberships             OrganizationMembership[]
-  notifications           Notification[]
-  plantDailyReports       PlantDailyReport[]
-  plantReportCustomFields PlantReportCustomField[]
+  activities            Activity[]
+  announcements         Announcement[]
+  calendarEvents        CalendarEvent[]
+  catalogItems          CatalogItem[]
+  dailyGeneration       DailyGeneration[]
+  expenseRequests       ExpenseRequest[]
+  fileAccess            FileAccess[]
+  hierarchyNodes        HierarchyNode[]
+  inventoryItems        InventoryItem[]
+  inventoryTransactions InventoryTransaction[]
+  leaveRequests         LeaveRequest[]
+  monthlyPerformance    MonthlyPerformance[]
+  myTasks               MyTask[]
+  procurementItems      ProcurementItem[]
+  purchaseOrders        PurchaseOrder[]
+  projects              Project[]
+  projectFiles          ProjectFile[]
+  projectHeadings       ProjectHeading[]
+  reportActivities      ReportActivity[]
+  reportComments        ReportComment[]
+  siteVisitRequests     SiteVisitRequest[]
+  tasks                 Task[]
+  vendors               Vendor[]
+  warehouses            Warehouse[]
+  financeManualRecords  FinanceManualRecord[]
+  memberships           OrganizationMembership[]
+  notifications         Notification[]
+  plantReportTables     PlantReportTable[]
 
   @@map("workspace")
 }
@@ -489,74 +486,70 @@ model PendingSignup {
   @@map("pending_signup")
 }
 
-/// A boiler/plant operator's daily log entry. One row per organization per
-/// calendar date (enforced by the unique index below). All plant metrics
-/// (steam, water, burner, etc.) are org-defined custom fields stored in
-/// `customValues` — there are no fixed reading columns, so field-specific
-/// derived calculations/validations (e.g. steam ton, shutdown-reason
-/// requirement) that used to live in the API no longer apply; see
-/// PlantReportCustomField for how fields are defined.
-model PlantDailyReport {
+/// A user-defined spreadsheet tab on the Plant Report page, scoped to one
+/// project (an org can run more than one plant, each tracked separately).
+/// "Progress Tracker" is just the first table auto-created per project (see
+/// PlantReportTableController.list) — there's nothing structurally special
+/// about it; every table has the same user-defined columns/rows shape, and
+/// the "+" tab button on the frontend creates more of these.
+model PlantReportTable {
   id             Int      @id @default(autoincrement())
   organizationId Int
-  /// Which plant/project this day's log belongs to — an organization can run
-  /// more than one plant, each logged (and totaled) separately.
-  projectId      Int?
-  date           DateTime @db.Date
-
-  /// Values for this organization's custom fields (see PlantReportCustomField),
-  /// keyed by field id (as a JSON string key) -> string | number | boolean | null.
-  /// Stored loosely rather than in a normalized value table since fields are
-  /// low-cardinality and org-defined; a deleted field just leaves an orphaned,
-  /// ignored key behind instead of requiring a cleanup pass.
-  customValues Json?
-
-  createdById Int?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  project      Project?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdBy    User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  staff        PlantReportStaff[]
-
-  @@unique([organizationId, projectId, date])
-  @@map("plant_daily_report")
-}
-
-/// Which staff were present for a given day's plant report — a join table
-/// instead of a text list so the "staff present" count is always derived
-/// from real rows, never typed (and thus never drifts) separately.
-model PlantReportStaff {
-  id       Int @id @default(autoincrement())
-  reportId Int
-  userId   Int
-
-  report PlantDailyReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
-  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([reportId, userId])
-  @@map("plant_report_staff")
-}
-
-/// An org-defined extra column for the daily plant report form — e.g. "Ash
-/// Removed (kg)" as a number field, or "Inspector Notes" as text. Values are
-/// stored per-report in PlantDailyReport.customValues, keyed by this field's
-/// id; dataType is enforced in the application layer (PlantReportController),
-/// not as a Postgres enum, so new types can be added without a migration.
-model PlantReportCustomField {
-  id             Int      @id @default(autoincrement())
-  organizationId Int
+  projectId      Int
   name           String   @db.VarChar
-  /// "text" | "number" | "date" | "boolean"
-  dataType       String   @db.VarChar
   sortOrder      Int      @default(0)
+  /// True only for the "Progress Tracker" tab auto-created per project (see
+  /// PlantReportTableController.list) — it and the frontend-only "Charts"
+  /// tab are the page's two permanent tabs and can't be renamed or deleted.
+  isDefault      Boolean  @default(false)
   createdAt      DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  columns      PlantReportColumn[]
+  rows         PlantReportRow[]
 
-  @@unique([organizationId, name])
-  @@map("plant_report_custom_field")
+  @@map("plant_report_table")
+}
+
+/// One user-defined column on a PlantReportTable. dataType is enforced in
+/// the application layer (PlantReportTableController), not as a Postgres
+/// enum, so new types can be added without a migration — same convention as
+/// the rest of this codebase's org-defined-field features.
+model PlantReportColumn {
+  id        Int    @id @default(autoincrement())
+  tableId   Int
+  name      String @db.VarChar
+  /// "text" | "number" | "date" | "boolean"
+  dataType  String @db.VarChar
+  sortOrder Int    @default(0)
+  /// Optional flat expected/target value for a "number" column — rendered as
+  /// a dashed horizontal reference line on the Charts tab for comparison
+  /// against the column's actual data. Meaningless for non-number columns.
+  target    Float?
+
+  table PlantReportTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@map("plant_report_column")
+}
+
+/// One row of a PlantReportTable. Cell values are stored loosely as JSON
+/// keyed by column id (as a string key) rather than in a normalized
+/// per-cell table, since columns are low-cardinality and user-defined; a
+/// deleted column just leaves an orphaned, ignored key behind instead of
+/// requiring a cleanup pass (same convention this codebase already used for
+/// PlantDailyReport.customValues).
+model PlantReportRow {
+  id        Int      @id @default(autoincrement())
+  tableId   Int
+  sortOrder Int      @default(0)
+  values    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  table PlantReportTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@map("plant_report_row")
 }
 
 model ProcurementAttachment {
@@ -994,7 +987,7 @@ model Project {
   dailyGeneration    DailyGeneration[]
   inventoryItems     InventoryItem[]
   monthlyPerformance MonthlyPerformance[]
-  plantDailyReports  PlantDailyReport[]
+  plantReportTables  PlantReportTable[]
   procurementItems   ProcurementItem[]
   purchaseOrders     PurchaseOrder[]
   organization       Organization?        @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_c224ab17df530651e53a398ed92")
