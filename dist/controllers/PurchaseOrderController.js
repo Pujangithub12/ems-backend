@@ -13,19 +13,17 @@ const LIST_INCLUDE = {
     vendor: true,
     project: true,
     items: true,
-    approvedBy: { select: { id: true, fullName: true } },
     createdBy: { select: { id: true, fullName: true } },
     shipment: { select: { status: true } },
 };
 const DETAIL_INCLUDE = {
     vendor: true,
     project: true,
-    approvedBy: { select: { id: true, fullName: true } },
     createdBy: { select: { id: true, fullName: true } },
     items: { include: { item: true } },
     statusHistory: { include: { changedBy: true }, orderBy: { createdAt: "desc" } },
     proformaInvoices: { include: { items: true }, orderBy: { createdAt: "desc" } },
-    shipment: { include: { insurance: true, customs: { include: { documents: true } } } },
+    shipment: { include: { insurance: true, customs: { include: { documents: true } }, letterOfCredit: true } },
     goodsReceipts: {
         include: { items: true, photos: true, warehouse: true, receivedBy: true },
         orderBy: { createdAt: "desc" },
@@ -34,8 +32,7 @@ const DETAIL_INCLUDE = {
 /** Purchase Order tab (procurement pipeline v2, step 3): created directly via createPurchaseOrder, then read/updated/tracked here through PI/Shipment/GRN. */
 class PurchaseOrderController {
     /** GET /workspace/purchase-orders — aggregated across every project in the organization.
-     * A plain admin only sees POs they created themselves; finance/super_admin see everything
-     * (they review POs created by others in the Purchase Approval tab). */
+     * A plain admin only sees POs they created themselves; finance/super_admin see everything. */
     static getOrganizationPurchaseOrders = async (req, res) => {
         try {
             const purchaseOrders = await prisma_1.prisma.purchaseOrder.findMany({
@@ -98,45 +95,53 @@ class PurchaseOrderController {
         }
         return `${maxNumber + 1}-${fiscalYear}`;
     }
-    /** POST /projects/:projectId/purchase-orders — creates a PO directly (vendor + items picked up
-     * front), no Purchase Request involved. poNumber is auto-generated as "{number}-{nepali fiscal
-     * year}" (e.g. "1-83/84"), incrementing per organization per fiscal year — still editable
-     * afterward via updatePurchaseOrder, which enforces uniqueness on manual edits. */
+    /** POST /projects/:projectId/purchase-orders (project-scoped) or POST /purchase-orders
+     * (org-wide — project is optional, e.g. for a PO not yet tied to a specific project) —
+     * creates a PO directly (vendor picked up front, no Purchase Request involved). Items are
+     * optional at creation time — they're added one at a time afterward from the Overview tab's
+     * Line Items section (see addPurchaseOrderItem). poNumber is auto-generated as "{number}-{nepali
+     * fiscal year}" (e.g. "1-83/84"), incrementing per organization per fiscal year — still
+     * editable afterward via updatePurchaseOrder, which enforces uniqueness on manual edits. */
     static createPurchaseOrder = async (req, res) => {
-        const { projectId } = req.params;
-        const { vendorId, items } = req.body;
-        if (!Array.isArray(items) || items.length === 0) {
-            return res.status(400).json({ message: "At least one item is required" });
-        }
-        for (const item of items) {
-            if (!item || typeof item.itemName !== "string" || !item.itemName.trim()) {
-                return res.status(400).json({ message: "Every item needs a name" });
+        const { vendorId, items, projectId: bodyProjectId } = req.body;
+        const projectIdRaw = req.params.projectId ?? (bodyProjectId != null ? String(bodyProjectId) : undefined);
+        if (items !== undefined) {
+            if (!Array.isArray(items)) {
+                return res.status(400).json({ message: "Items must be an array" });
+            }
+            for (const item of items) {
+                if (!item || typeof item.itemName !== "string" || !item.itemName.trim()) {
+                    return res.status(400).json({ message: "Every item needs a name" });
+                }
             }
         }
         try {
             const organizationId = req.organization.id;
-            const project = await prisma_1.prisma.project.findFirst({
-                where: { id: parseInt(projectId), organizationId },
-            });
-            if (!project)
-                return res.status(404).json({ message: "Project not found" });
+            let project = null;
+            if (projectIdRaw) {
+                project = await prisma_1.prisma.project.findFirst({
+                    where: { id: parseInt(projectIdRaw), organizationId },
+                });
+                if (!project)
+                    return res.status(404).json({ message: "Project not found" });
+            }
             const poNumber = await PurchaseOrderController.nextPoNumber(organizationId);
             const createdPo = await prisma_1.prisma.purchaseOrder.create({
                 data: {
                     organizationId,
-                    projectId: project.id,
+                    projectId: project?.id ?? null,
                     vendorId: vendorId ?? null,
                     createdById: req.user.id,
                     poNumber,
                     status: "created",
                     items: {
-                        create: items.map((item) => ({
+                        create: (items ?? []).map((item) => ({
                             itemName: item.itemName.trim(),
                             itemId: item.itemId ?? null,
                             quantity: item.quantity ?? 1,
                             unit: item.unit ?? null,
                             unitPrice: item.unitPrice ?? null,
-                            notes: item.notes ?? null,
+                            description: item.description ?? null,
                         })),
                     },
                 },
@@ -168,9 +173,8 @@ class PurchaseOrderController {
             return null;
         return purchaseOrder;
     }
-    /** A plain admin may only see/act on POs they created themselves — finance/super_admin (and
-     * anyone else who reaches these routes) see everything, since finance needs to review POs
-     * created by others. Used everywhere loadOwnedPurchaseOrder gates access to a specific PO. */
+    /** A plain admin may only see/act on POs they created themselves — finance/super_admin see
+     * everything. Used everywhere loadOwnedPurchaseOrder gates access to a specific PO. */
     static isVisibleTo(purchaseOrder, req) {
         if (req.user.role !== enums_1.UserRole.ADMIN)
             return true;
@@ -196,14 +200,12 @@ class PurchaseOrderController {
         }
     };
     /** PUT /purchase-orders/:id — update terms/delivery/status fields. Any status change is
-     * allowed here (no strict transition machine) except that `status` can't move past "created"
-     * until approvalStatus is "approved" (see the guard below). Reachable by anyone holding the
+     * allowed here (no strict transition machine). Reachable by anyone holding the
      * "projects.procurement" permission (admin/super_admin by default) plus finance/super_admin
-     * unconditionally — finance needs to edit a PO while reviewing it for approval without being
-     * granted the broader procurement permission (attachments/cost-sheet, etc. stay off-limits). */
+     * unconditionally. */
     static updatePurchaseOrder = async (req, res) => {
         const { id } = req.params;
-        const { poNumber, deliveryAddress, paymentTerms, deliveryDate, incoterms, taxPercent, terms, shippingTerms, deliveryPeriod, finalDestination, purchaseType, status, items, } = req.body;
+        const { poNumber, paymentTerms, incoterms, taxPercent, terms, deliveryPeriod, finalDestination, customerContactPerson, currency, purchaseType, status, items, } = req.body;
         try {
             const canEdit = (await (0, permissionService_1.roleHasPermission)(req.user.role, "projects.procurement")) ||
                 req.user.role === enums_1.UserRole.FINANCE ||
@@ -213,9 +215,6 @@ class PurchaseOrderController {
             const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id, req.organization.id);
             if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
                 return res.status(404).json({ message: "Purchase order not found" });
-            }
-            if (status !== undefined && status !== "created" && existing.approvalStatus !== "approved") {
-                return res.status(400).json({ message: "Purchase order must be approved before its status can change" });
             }
             const previousStatus = existing.status;
             const data = {};
@@ -232,24 +231,22 @@ class PurchaseOrderController {
                 }
                 data.poNumber = trimmed;
             }
-            if (deliveryAddress !== undefined)
-                data.deliveryAddress = deliveryAddress;
             if (paymentTerms !== undefined)
                 data.paymentTerms = paymentTerms;
-            if (deliveryDate !== undefined)
-                data.deliveryDate = deliveryDate ? new Date(deliveryDate) : null;
             if (incoterms !== undefined)
                 data.incoterms = incoterms;
             if (taxPercent !== undefined)
                 data.taxPercent = taxPercent;
             if (terms !== undefined)
                 data.terms = terms;
-            if (shippingTerms !== undefined)
-                data.shippingTerms = shippingTerms;
             if (deliveryPeriod !== undefined)
                 data.deliveryPeriod = deliveryPeriod;
             if (finalDestination !== undefined)
                 data.finalDestination = finalDestination;
+            if (customerContactPerson !== undefined)
+                data.customerContactPerson = customerContactPerson;
+            if (currency !== undefined)
+                data.currency = currency;
             if (purchaseType !== undefined)
                 data.purchaseType = purchaseType;
             if (status !== undefined)
@@ -287,43 +284,209 @@ class PurchaseOrderController {
             return res.status(500).json({ message: "Internal server error" });
         }
     };
-    /** POST /purchase-orders/:id/approval — the approve/reject decision itself. Deliberately
-     * narrower than "projects.procurement": only finance or super_admin may decide (a plain admin
-     * can edit a PO via updatePurchaseOrder above, but can't approve/reject it) — mirrors
-     * ExpenseRequestController.updateStatus's finance cross-cutting-approval carve-out. */
-    static decidePurchaseOrderApproval = async (req, res) => {
+    /** POST /purchase-orders/:id/items — adds a single line item to an existing PO (used by the
+     * "Add Item" form on the Overview tab, now that items are no longer collected at creation
+     * time). Same edit permission as updatePurchaseOrder. */
+    static addPurchaseOrderItem = async (req, res) => {
         const { id } = req.params;
-        const { decision } = req.body;
-        if (req.user.role !== enums_1.UserRole.FINANCE && req.user.role !== enums_1.UserRole.SUPER_ADMIN) {
-            return res.status(403).json({ message: "Only finance or a super admin can approve or reject a purchase order" });
+        const { itemName, itemId, quantity, unit, unitPrice, description } = req.body;
+        if (typeof itemName !== "string" || !itemName.trim()) {
+            return res.status(400).json({ message: "Item name is required" });
         }
-        if (decision !== "approved" && decision !== "rejected") {
-            return res.status(400).json({ message: "Invalid decision" });
+        if (typeof quantity !== "number" || !Number.isFinite(quantity) || quantity <= 0) {
+            return res.status(400).json({ message: "A valid quantity is required" });
         }
         try {
+            const canEdit = (await (0, permissionService_1.roleHasPermission)(req.user.role, "projects.procurement")) ||
+                req.user.role === enums_1.UserRole.FINANCE ||
+                req.user.role === enums_1.UserRole.SUPER_ADMIN;
+            if (!canEdit)
+                return res.status(403).json({ message: "Forbidden" });
             const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id, req.organization.id);
-            if (!existing)
+            if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
                 return res.status(404).json({ message: "Purchase order not found" });
-            if (existing.approvalStatus !== "pending_approval") {
-                return res.status(400).json({ message: "This purchase order has already been decided" });
             }
-            await prisma_1.prisma.purchaseOrder.update({
-                where: { id: existing.id },
-                data: { approvalStatus: decision, approvedById: req.user.id, approvedAt: new Date() },
-            });
-            await prisma_1.prisma.purchaseOrderStatusHistory.create({
+            await prisma_1.prisma.purchaseOrderItem.create({
                 data: {
-                    fromStatus: existing.status,
-                    toStatus: decision,
                     purchaseOrderId: existing.id,
-                    changedById: req.user.id,
+                    itemName: itemName.trim(),
+                    itemId: itemId ?? null,
+                    quantity,
+                    unit: unit ?? null,
+                    unitPrice: unitPrice ?? null,
+                    description: description?.trim() || null,
                 },
             });
             const purchaseOrder = await prisma_1.prisma.purchaseOrder.findUnique({
                 where: { id: existing.id },
                 include: DETAIL_INCLUDE,
             });
-            return res.status(200).json({ message: `Purchase order ${decision}`, purchaseOrder });
+            return res.status(201).json({ message: "Item added", purchaseOrder });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** Loads a PurchaseOrderItem scoped to both the given PO and organization — used by
+     * editPurchaseOrderItem/deletePurchaseOrderItem so an itemId can't be aimed at another PO. */
+    static async loadOwnedPurchaseOrderItem(poId, itemId, organizationId) {
+        const po = await PurchaseOrderController.loadOwnedPurchaseOrder(poId, organizationId);
+        if (!po)
+            return null;
+        const item = await prisma_1.prisma.purchaseOrderItem.findFirst({
+            where: { id: parseInt(itemId), purchaseOrderId: po.id },
+        });
+        if (!item)
+            return null;
+        return { po, item };
+    }
+    /** PUT /purchase-orders/:id/items/:itemId — full edit of one line item (Overview tab's Line
+     * Items table). Same edit permission as addPurchaseOrderItem. */
+    static editPurchaseOrderItem = async (req, res) => {
+        const { id, itemId } = req.params;
+        const { itemName, itemId: catalogItemId, quantity, unit, unitPrice, description } = req.body;
+        if (typeof itemName !== "string" || !itemName.trim()) {
+            return res.status(400).json({ message: "Item name is required" });
+        }
+        if (typeof quantity !== "number" || !Number.isFinite(quantity) || quantity <= 0) {
+            return res.status(400).json({ message: "A valid quantity is required" });
+        }
+        try {
+            const canEdit = (await (0, permissionService_1.roleHasPermission)(req.user.role, "projects.procurement")) ||
+                req.user.role === enums_1.UserRole.FINANCE ||
+                req.user.role === enums_1.UserRole.SUPER_ADMIN;
+            if (!canEdit)
+                return res.status(403).json({ message: "Forbidden" });
+            const loaded = await PurchaseOrderController.loadOwnedPurchaseOrderItem(id, itemId, req.organization.id);
+            if (!loaded || !PurchaseOrderController.isVisibleTo(loaded.po, req)) {
+                return res.status(404).json({ message: "Purchase order item not found" });
+            }
+            await prisma_1.prisma.purchaseOrderItem.update({
+                where: { id: loaded.item.id },
+                data: {
+                    itemName: itemName.trim(),
+                    itemId: catalogItemId ?? null,
+                    quantity,
+                    unit: unit ?? null,
+                    unitPrice: unitPrice ?? null,
+                    description: description?.trim() || null,
+                },
+            });
+            const purchaseOrder = await prisma_1.prisma.purchaseOrder.findUnique({
+                where: { id: loaded.po.id },
+                include: DETAIL_INCLUDE,
+            });
+            return res.status(200).json({ message: "Item updated", purchaseOrder });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** DELETE /purchase-orders/:id/items/:itemId — removes one line item. Same edit permission as
+     * addPurchaseOrderItem. Any goods receipt line items already recorded against this row keep
+     * their own history but lose the link (onDelete: SetNull on GoodsReceiptItem.purchaseOrderItem). */
+    static deletePurchaseOrderItem = async (req, res) => {
+        const { id, itemId } = req.params;
+        try {
+            const canEdit = (await (0, permissionService_1.roleHasPermission)(req.user.role, "projects.procurement")) ||
+                req.user.role === enums_1.UserRole.FINANCE ||
+                req.user.role === enums_1.UserRole.SUPER_ADMIN;
+            if (!canEdit)
+                return res.status(403).json({ message: "Forbidden" });
+            const loaded = await PurchaseOrderController.loadOwnedPurchaseOrderItem(id, itemId, req.organization.id);
+            if (!loaded || !PurchaseOrderController.isVisibleTo(loaded.po, req)) {
+                return res.status(404).json({ message: "Purchase order item not found" });
+            }
+            await prisma_1.prisma.purchaseOrderItem.delete({ where: { id: loaded.item.id } });
+            const purchaseOrder = await prisma_1.prisma.purchaseOrder.findUnique({
+                where: { id: loaded.po.id },
+                include: DETAIL_INCLUDE,
+            });
+            return res.status(200).json({ message: "Item deleted", purchaseOrder });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    static async loadOwnedPurchaseOrderPayment(poId, paymentId, organizationId) {
+        const po = await PurchaseOrderController.loadOwnedPurchaseOrder(poId, organizationId);
+        if (!po)
+            return null;
+        const payment = await prisma_1.prisma.purchaseOrderPayment.findFirst({
+            where: { id: parseInt(paymentId), purchaseOrderId: po.id },
+        });
+        if (!payment)
+            return null;
+        return { po, payment };
+    }
+    /** POST /purchase-orders/:id/payments — logs one installment paid against a PO (Finance
+     * page). A PO can be paid in several installments, so this is additive, not a single-field
+     * update. Same edit permission as addPurchaseOrderItem — finance must be able to log
+     * payments even though finance doesn't hold "projects.procurement" by default. */
+    static addPurchaseOrderPayment = async (req, res) => {
+        const { id } = req.params;
+        const { amount, paidDate, reference, notes } = req.body;
+        if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+            return res.status(400).json({ message: "A valid amount is required" });
+        }
+        const parsedDate = paidDate ? new Date(paidDate) : null;
+        if (!parsedDate || Number.isNaN(parsedDate.getTime())) {
+            return res.status(400).json({ message: "A valid paid date is required" });
+        }
+        try {
+            const canEdit = (await (0, permissionService_1.roleHasPermission)(req.user.role, "projects.procurement")) ||
+                req.user.role === enums_1.UserRole.FINANCE ||
+                req.user.role === enums_1.UserRole.SUPER_ADMIN;
+            if (!canEdit)
+                return res.status(403).json({ message: "Forbidden" });
+            const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id, req.organization.id);
+            if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
+                return res.status(404).json({ message: "Purchase order not found" });
+            }
+            await prisma_1.prisma.purchaseOrderPayment.create({
+                data: {
+                    purchaseOrderId: existing.id,
+                    amount,
+                    paidDate: parsedDate,
+                    reference: reference?.trim() || null,
+                    notes: notes?.trim() || null,
+                    createdById: req.user.id,
+                },
+            });
+            const purchaseOrder = await prisma_1.prisma.purchaseOrder.findUnique({
+                where: { id: existing.id },
+                include: DETAIL_INCLUDE,
+            });
+            return res.status(201).json({ message: "Payment logged", purchaseOrder });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** DELETE /purchase-orders/:id/payments/:paymentId — removes one logged payment. Same edit
+     * permission as addPurchaseOrderPayment. */
+    static deletePurchaseOrderPayment = async (req, res) => {
+        const { id, paymentId } = req.params;
+        try {
+            const canEdit = (await (0, permissionService_1.roleHasPermission)(req.user.role, "projects.procurement")) ||
+                req.user.role === enums_1.UserRole.FINANCE ||
+                req.user.role === enums_1.UserRole.SUPER_ADMIN;
+            if (!canEdit)
+                return res.status(403).json({ message: "Forbidden" });
+            const loaded = await PurchaseOrderController.loadOwnedPurchaseOrderPayment(id, paymentId, req.organization.id);
+            if (!loaded || !PurchaseOrderController.isVisibleTo(loaded.po, req)) {
+                return res.status(404).json({ message: "Payment not found" });
+            }
+            await prisma_1.prisma.purchaseOrderPayment.delete({ where: { id: loaded.payment.id } });
+            const purchaseOrder = await prisma_1.prisma.purchaseOrder.findUnique({
+                where: { id: loaded.po.id },
+                include: DETAIL_INCLUDE,
+            });
+            return res.status(200).json({ message: "Payment deleted", purchaseOrder });
         }
         catch (error) {
             console.error(error);
@@ -342,9 +505,6 @@ class PurchaseOrderController {
             const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id, req.organization.id);
             if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
                 return res.status(404).json({ message: "Purchase order not found" });
-            }
-            if (existing.approvalStatus !== "approved") {
-                return res.status(403).json({ message: "Purchase order must be approved before its PDF can be downloaded" });
             }
             const purchaseOrder = await prisma_1.prisma.purchaseOrder.findUnique({ where: { id: existing.id }, include: PDF_INCLUDE });
             if (!purchaseOrder)
@@ -369,15 +529,14 @@ class PurchaseOrderController {
             const doc = (0, purchaseOrderPdf_1.buildPurchaseOrderPdf)({
                 poNumber: purchaseOrder.poNumber,
                 createdAt: purchaseOrder.createdAt,
-                deliveryAddress: purchaseOrder.deliveryAddress,
                 paymentTerms: purchaseOrder.paymentTerms,
-                deliveryDate: purchaseOrder.deliveryDate,
                 incoterms: purchaseOrder.incoterms,
                 taxPercent: purchaseOrder.taxPercent,
                 terms: purchaseOrder.terms,
-                shippingTerms: purchaseOrder.shippingTerms,
                 deliveryPeriod: purchaseOrder.deliveryPeriod,
                 finalDestination: purchaseOrder.finalDestination,
+                customerContactPerson: purchaseOrder.customerContactPerson,
+                currency: purchaseOrder.currency,
                 organizationName: purchaseOrder.organization?.name ?? null,
                 organizationAddress: purchaseOrder.organization?.address ?? null,
                 organizationContact: purchaseOrder.organization?.contact ?? null,

@@ -5,7 +5,7 @@
 // source of the varchar-with-default values stored in the DB (not native
 // Postgres enums, see the Prisma schema comments on Task.status etc).
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MyTaskStatus = exports.UserRole = exports.TaskStatus = exports.TaskPriority = void 0;
+exports.ProjectStatus = exports.MyTaskStatus = exports.UserRole = exports.TaskStatus = exports.TaskPriority = void 0;
 var TaskPriority;
 (function (TaskPriority) {
     TaskPriority["HIGH"] = "high";
@@ -33,4 +33,15 @@ var MyTaskStatus;
     MyTaskStatus["PENDING"] = "pending";
     MyTaskStatus["COMPLETED"] = "completed";
 })(MyTaskStatus || (exports.MyTaskStatus = MyTaskStatus = {}));
+/** Project.status — a separate set of literal values from TaskStatus (a project uses
+ * "pending", not TaskStatus.PENDING's "to_do"); mixing the two up let a project's status
+ * silently fail to save back to "pending" once changed away from it (ProjectController
+ * validated against TaskStatus's values instead of these). */
+var ProjectStatus;
+(function (ProjectStatus) {
+    ProjectStatus["PENDING"] = "pending";
+    ProjectStatus["IN_PROGRESS"] = "in_progress";
+    ProjectStatus["COMPLETED"] = "completed";
+    ProjectStatus["ON_HOLD"] = "on_hold";
+})(ProjectStatus || (exports.ProjectStatus = ProjectStatus = {}));
 //# sourceMappingURL=enums.js.map

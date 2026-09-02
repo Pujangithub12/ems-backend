@@ -102,9 +102,9 @@ class ProjectController {
                 data: {
                     name,
                     ...(description !== undefined ? { description } : {}),
-                    status: status && Object.values(enums_1.TaskStatus).includes(status)
+                    status: status && Object.values(enums_1.ProjectStatus).includes(status)
                         ? status
-                        : enums_1.TaskStatus.PENDING,
+                        : enums_1.ProjectStatus.PENDING,
                     priority: priority && Object.values(enums_1.TaskPriority).includes(priority)
                         ? priority
                         : enums_1.TaskPriority.MEDIUM,
@@ -417,7 +417,7 @@ class ProjectController {
             if (dueDate) {
                 data.dueDate = new Date(dueDate);
             }
-            if (status && Object.values(enums_1.TaskStatus).includes(status)) {
+            if (status && Object.values(enums_1.ProjectStatus).includes(status)) {
                 data.status = status;
             }
             if (priority && Object.values(enums_1.TaskPriority).includes(priority)) {

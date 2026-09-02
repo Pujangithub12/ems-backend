@@ -41,6 +41,9 @@ const MANUAL_RECORD_INCLUDE = {
   payments: { orderBy: { paidDate: "desc" as const } },
 } as const;
 
+/** Currency options offered on the Finance page's Add/Edit Record form. */
+const MANUAL_RECORD_CURRENCIES = new Set(["NPR", "INR", "USD", "RMB"]);
+
 type PaymentEntry = { id: number; amount: number; paidDate: Date; reference: string | null; notes: string | null };
 
 /** A Finance ledger row — either derived from a real PurchaseOrder or entered manually. Both
@@ -61,6 +64,7 @@ type FinanceLedgerRow = {
   outstandingBalance: number;
   payments: PaymentEntry[];
   createdAt: Date;
+  currency: string;
 };
 
 const toPaymentEntries = (payments: { id: number; amount: { toNumber(): number }; paidDate: Date; reference: string | null; notes: string | null }[]): PaymentEntry[] =>
@@ -72,6 +76,7 @@ async function buildFinanceRow(po: {
   poNumber: string | null;
   paymentTerms: string | null;
   createdAt: Date;
+  currency: string | null;
   vendor: { id: number; name: string } | null;
   items: { itemName: string }[];
   payments: { id: number; amount: { toNumber(): number }; paidDate: Date; reference: string | null; notes: string | null }[];
@@ -97,6 +102,7 @@ async function buildFinanceRow(po: {
     outstandingBalance: itemValue - amountPaid,
     payments,
     createdAt: po.createdAt,
+    currency: po.currency || "NPR",
   };
 }
 
@@ -109,6 +115,7 @@ function buildManualFinanceRow(record: {
   itemValue: { toNumber(): number };
   paymentTerms: string | null;
   createdAt: Date;
+  currency: string;
   vendor: { id: number; name: string } | null;
   payments: { id: number; amount: { toNumber(): number }; paidDate: Date; reference: string | null; notes: string | null }[];
 }): FinanceLedgerRow {
@@ -132,6 +139,7 @@ function buildManualFinanceRow(record: {
     outstandingBalance: itemValue - amountPaid,
     payments,
     createdAt: record.createdAt,
+    currency: record.currency || "NPR",
   };
 }
 
@@ -144,19 +152,18 @@ type CostBreakdownRow = {
   lcCharge: number;
   lcCommission: number;
   vat: number;
-  refundableMarginPercent: number;
   refundableAmount: number;
   refundedAmount: number;
   toBeRefunded: number;
   remarks: string | null;
 };
 
-/** VAT-refund figures shared by both row builders — refundableAmount/toBeRefunded are always
- * computed, never stored (see the schema comment on PurchaseOrderItem.refundableMarginPercent). */
-const refundFields = (vat: number, refundableMarginPercent: number, refundedAmount: number) => {
-  const refundableAmount = vat * (refundableMarginPercent / 100);
+/** VAT-refund figures shared by both row builders. Refundable Amount is no longer tracked via a
+ * per-row margin (that column was removed), so it's always 0 — toBeRefunded is then just the
+ * negative of whatever's been refunded so far. */
+const refundFields = (refundedAmount: number) => {
+  const refundableAmount = 0;
   return {
-    refundableMarginPercent,
     refundableAmount,
     refundedAmount,
     toBeRefunded: refundableAmount - refundedAmount,
@@ -179,7 +186,6 @@ async function buildPoCostBreakdownRows(po: {
     lcChargeOverride: { toNumber(): number } | null;
     lcCommissionOverride: { toNumber(): number } | null;
     vatOverride: { toNumber(): number } | null;
-    refundableMarginPercent: { toNumber(): number } | null;
     refundedAmount: { toNumber(): number } | null;
   }[];
   shipment: { letterOfCredit: { lcNumber: string | null } | null } | null;
@@ -203,7 +209,7 @@ async function buildPoCostBreakdownRows(po: {
       lcCharge: item.lcChargeOverride != null ? num(item.lcChargeOverride) : costSheet.lcCharge * share,
       lcCommission: item.lcCommissionOverride != null ? num(item.lcCommissionOverride) : costSheet.lcCommission * share,
       vat,
-      ...refundFields(vat, num(item.refundableMarginPercent), num(item.refundedAmount)),
+      ...refundFields(num(item.refundedAmount)),
       remarks: item.remarks,
     };
   });
@@ -219,7 +225,6 @@ function buildManualCostBreakdownRows(record: {
   lcCharge: { toNumber(): number } | null;
   lcCommission: { toNumber(): number } | null;
   vat: { toNumber(): number } | null;
-  refundableMarginPercent: { toNumber(): number } | null;
   refundedAmount: { toNumber(): number } | null;
   remarks: string | null;
 }): CostBreakdownRow[] {
@@ -234,7 +239,7 @@ function buildManualCostBreakdownRows(record: {
       lcCharge: num(record.lcCharge),
       lcCommission: num(record.lcCommission),
       vat,
-      ...refundFields(vat, num(record.refundableMarginPercent), num(record.refundedAmount)),
+      ...refundFields(num(record.refundedAmount)),
       remarks: record.remarks,
     },
   ];
@@ -261,7 +266,6 @@ function validateCostBreakdownRowInput({
   lcCharge,
   lcCommission,
   vat,
-  refundableMarginPercent,
   refundedAmount,
 }: EditCostBreakdownRowDto): string | null {
   if (typeof itemName !== "string" || !itemName.trim()) return "Item name is required";
@@ -275,9 +279,6 @@ function validateCostBreakdownRowInput({
   ];
   for (const [label, value] of nonNegativeFields) {
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return `A valid ${label} is required`;
-  }
-  if (typeof refundableMarginPercent !== "number" || !Number.isFinite(refundableMarginPercent) || refundableMarginPercent < 0 || refundableMarginPercent > 100) {
-    return "Refundable margin must be a percentage between 0 and 100";
   }
   return null;
 }
@@ -549,7 +550,6 @@ export class FinanceController {
           lcChargeOverride: dto.lcCharge,
           lcCommissionOverride: dto.lcCommission,
           vatOverride: dto.vat,
-          refundableMarginPercent: dto.refundableMarginPercent,
           refundedAmount: dto.refundedAmount,
           remarks: dto.remarks?.trim() || null,
         },
@@ -595,7 +595,6 @@ export class FinanceController {
           lcCharge: dto.lcCharge,
           lcCommission: dto.lcCommission,
           vat: dto.vat,
-          refundableMarginPercent: dto.refundableMarginPercent,
           refundedAmount: dto.refundedAmount,
           remarks: dto.remarks?.trim() || null,
         },
@@ -613,12 +612,15 @@ export class FinanceController {
   static createManualRecord = async (req: AuthRequest, res: Response) => {
     if (!(await canEditFinance(req.user!.role))) return res.status(403).json({ message: "Forbidden" });
 
-    const { vendorName, itemName, referenceNumber, itemValue, paymentTerms, vendorId }: SaveFinanceManualRecordDto = req.body;
+    const { vendorName, itemName, referenceNumber, itemValue, paymentTerms, vendorId, currency }: SaveFinanceManualRecordDto = req.body;
 
     if (!vendorName?.trim()) return res.status(400).json({ message: "Vendor name is required" });
     if (!itemName?.trim()) return res.status(400).json({ message: "Item name is required" });
     if (typeof itemValue !== "number" || !Number.isFinite(itemValue) || itemValue < 0) {
       return res.status(400).json({ message: "A valid item value is required" });
+    }
+    if (currency !== undefined && !MANUAL_RECORD_CURRENCIES.has(currency)) {
+      return res.status(400).json({ message: "Invalid currency" });
     }
 
     try {
@@ -637,6 +639,7 @@ export class FinanceController {
           itemValue,
           paymentTerms: paymentTerms?.trim() || null,
           vendorId: linkedVendorId,
+          currency: currency || "NPR",
           organizationId: req.organization!.id,
           createdById: req.user!.id,
         },
@@ -655,12 +658,15 @@ export class FinanceController {
     if (!(await canEditFinance(req.user!.role))) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
-    const { vendorName, itemName, referenceNumber, itemValue, paymentTerms, vendorId }: SaveFinanceManualRecordDto = req.body;
+    const { vendorName, itemName, referenceNumber, itemValue, paymentTerms, vendorId, currency }: SaveFinanceManualRecordDto = req.body;
 
     if (!vendorName?.trim()) return res.status(400).json({ message: "Vendor name is required" });
     if (!itemName?.trim()) return res.status(400).json({ message: "Item name is required" });
     if (typeof itemValue !== "number" || !Number.isFinite(itemValue) || itemValue < 0) {
       return res.status(400).json({ message: "A valid item value is required" });
+    }
+    if (currency !== undefined && !MANUAL_RECORD_CURRENCIES.has(currency)) {
+      return res.status(400).json({ message: "Invalid currency" });
     }
 
     try {
@@ -683,6 +689,7 @@ export class FinanceController {
           itemValue,
           paymentTerms: paymentTerms?.trim() || null,
           vendorId: linkedVendorId,
+          ...(currency ? { currency } : {}),
         },
         include: MANUAL_RECORD_INCLUDE,
       });

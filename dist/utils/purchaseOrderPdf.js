@@ -30,7 +30,7 @@ const SIGNATURE_GRAY = "#545454";
 // US Letter, matching the reference template's page setup exactly (not A4).
 const PAGE_WIDTH = 612;
 const PAGE_HEIGHT = 792;
-const MARGIN_TOP = 76;
+const MARGIN_TOP = 40;
 const MARGIN_RIGHT = 54;
 const MARGIN_BOTTOM = 14;
 const MARGIN_LEFT = 54;
@@ -53,20 +53,18 @@ const FONT_BODY_BOLD_ITALIC_PATH = require.resolve("@fontsource/carlito/files/ca
 const fmtDate = (d) => (d ? d.toLocaleDateString("en-US") : "--");
 const fmtAmount = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 /** Fills a navy bar with white bold label text — used for every full-width section header. */
-function sectionBar(doc, x, y, width, height, label, fontSize = 9.5) {
+function sectionBar(doc, x, y, width, height, label, fontSize = 11) {
     doc.rect(x, y, width, height).fill(NAVY);
     doc
         .fillColor("#ffffff")
-        .font(FONT_BODY_BOLD)
+        .font(FONT_COMPANY)
         .fontSize(fontSize)
         .text(label, x + 6, y + (height - fontSize) / 2, { width: width - 12 });
 }
 /** A bold black caption line with a plain black value line beneath it — the template's
- * "NAME of Contact Person / COMPANY NAME / ADDRESS / PHONE / EMAIL ADDRESS" field style
- * (caption casing is passed through as-is; the reference template mixes "NAME of Contact
- * Person" with fully-capitalized labels rather than uppercasing everything uniformly). */
+ * "NAME OF CONTACT PERSON / COMPANY NAME / ADDRESS / PHONE / EMAIL ADDRESS" field style. */
 function labeledField(doc, x, y, width, caption, value) {
-    doc.fillColor(BLACK).font(FONT_BODY_BOLD).fontSize(7.5).text(caption, x, y, { width });
+    doc.fillColor(BLACK).font(FONT_COMPANY).fontSize(9).text(caption, x, y, { width });
     const captionHeight = doc.heightOfString(caption, { width });
     doc
         .fillColor(BLACK)
@@ -100,7 +98,7 @@ function buildPurchaseOrderPdf(po) {
     doc
         .fillColor(NAVY)
         .font(FONT_COMPANY)
-        .fontSize(19)
+        .fontSize(24)
         .text(companyName, MARGIN_LEFT, y + 6, { width: nameBlockW - 8 });
     const nameBottom = doc.y;
     doc.rect(badgeX, y, badgeW, badgeH).fill(BADGE_NAVY);
@@ -152,16 +150,16 @@ function buildPurchaseOrderPdf(po) {
     const fieldY = fieldsTop + 8;
     const vendor = po.vendor;
     const vendorFields = [
-        ["NAME of Contact Person", vendor?.contactPerson || "--"],
+        ["NAME OF CONTACT PERSON", vendor?.contactPerson || "--"],
         ["COMPANY NAME", vendor?.name || "--"],
         ["ADDRESS", vendor?.address || vendor?.location || "--"],
         ["PHONE", vendor?.contact || "--"],
         ["EMAIL ADDRESS", vendor?.email || "--"],
     ];
     const customerFields = [
-        ["NAME of Contact Person", "--"],
+        ["NAME OF CONTACT PERSON", po.customerContactPerson || "--"],
         ["COMPANY NAME", companyName],
-        ["ADDRESS", po.deliveryAddress || po.organizationAddress || "--"],
+        ["ADDRESS", po.organizationAddress || "--"],
         ["PHONE", po.organizationContact || "--"],
         ["EMAIL ADDRESS", po.organizationEmail || "--"],
     ];
@@ -170,7 +168,7 @@ function buildPurchaseOrderPdf(po) {
     const measure = (fields, w) => {
         let my = fieldY;
         for (const [label, value] of fields) {
-            const capH = doc.font(FONT_BODY_BOLD).fontSize(7.5).heightOfString(label, { width: w });
+            const capH = doc.font(FONT_COMPANY).fontSize(9).heightOfString(label, { width: w });
             const valH = doc.font(FONT_BODY).fontSize(9.5).heightOfString(value || "--", { width: w });
             my += capH + 2 + valH + 8;
         }
@@ -197,10 +195,10 @@ function buildPurchaseOrderPdf(po) {
     const colGap = 10;
     const triW = (CONTENT_WIDTH - colGap * 2) / 3;
     const triLabels = ["SHIPPING TERMS", "DELIVERY PERIOD", "FINAL DESTINATION"];
-    const triValues = [po.shippingTerms || "--", po.deliveryPeriod || "--", po.finalDestination || "--"];
+    const triValues = [po.incoterms || "--", po.deliveryPeriod || "--", po.finalDestination || "--"];
     for (let i = 0; i < 3; i++) {
         const x = MARGIN_LEFT + i * (triW + colGap);
-        sectionBar(doc, x, y, triW, 16, triLabels[i], 7.5);
+        sectionBar(doc, x, y, triW, 16, triLabels[i]);
     }
     const triValueTop = y + 16;
     const triTextY = triValueTop + 6;
@@ -218,15 +216,15 @@ function buildPurchaseOrderPdf(po) {
         const x = MARGIN_LEFT + i * (triW + colGap);
         doc.fillColor(BLACK).font(FONT_BODY).fontSize(9).text(triValues[i], x + 6, triTextY, { width: triW - 12 });
     }
-    y = triValueTop + triValueH + 12;
+    y = triValueTop + triValueH + 6;
     // ---- "Product Details" — a compact auto-width label (not a full-width bar), matching
     // the reference: it's a run-level highlight on the heading text, not a table cell. ----
     const productLabel = "Product Details";
-    doc.font(FONT_BODY_BOLD).fontSize(10.5);
+    doc.font(FONT_COMPANY).fontSize(11);
     const productLabelW = doc.widthOfString(productLabel) + 20;
-    doc.rect(MARGIN_LEFT, y, productLabelW, 20).fill(PRODUCT_LABEL_NAVY);
-    doc.fillColor("#ffffff").text(productLabel, MARGIN_LEFT + 10, y + 5, { width: productLabelW - 20 });
-    y += 20 + 10;
+    doc.rect(MARGIN_LEFT, y, productLabelW, 22).fill(PRODUCT_LABEL_NAVY);
+    doc.fillColor("#ffffff").text(productLabel, MARGIN_LEFT + 10, y + 5.5, { width: productLabelW - 20 });
+    y += 22 + 5;
     // ---- Items table (ratio 1090:4580:1158:1522:1294) ----
     const colW = (twips) => (CONTENT_WIDTH * twips) / 9644;
     const cols = [
@@ -242,14 +240,15 @@ function buildPurchaseOrderPdf(po) {
     const commonUnit = itemUnits.size === 1 ? [...itemUnits][0] : null;
     cols[2].label = commonUnit ? `Quantity (${commonUnit})` : "Quantity";
     let colX = MARGIN_LEFT;
-    const headerH = 24;
+    doc.font(FONT_COMPANY).fontSize(9);
+    const headerH = Math.max(24, ...cols.map((col) => doc.heightOfString(col.label, { width: col.width - 10, align: col.align || "left" }) + 14));
     for (const col of cols) {
         doc.rect(colX, y, col.width, headerH).fill(NAVY);
         doc
             .fillColor("#ffffff")
-            .font(FONT_BODY_BOLD)
-            .fontSize(8)
-            .text(col.label, colX + 5, y + 8, { width: col.width - 10, align: col.align || "left" });
+            .font(FONT_COMPANY)
+            .fontSize(9)
+            .text(col.label, colX + 5, y + 7, { width: col.width - 10, align: col.align || "left" });
         colX += col.width;
     }
     y += headerH;
@@ -265,20 +264,34 @@ function buildPurchaseOrderPdf(po) {
                 ? `${item.quantity} ${rowUnit}`
                 : String(item.quantity);
         const rowValues = [item.hsnCode || "", item.itemName, rowQuantity, fmtAmount(unitPrice), fmtAmount(amount)];
-        const rowHeight = Math.max(18, ...cols.map((col, i) => {
-            const bold = i === 1;
-            return doc.font(bold ? FONT_BODY_BOLD : FONT_BODY).fontSize(8.5).heightOfString(rowValues[i], { width: col.width - 10 }) + 8;
+        const description = (item.description || "").trim();
+        const descColWidth = cols[1].width - 10;
+        const nameHeight = doc.font(FONT_BODY_BOLD).fontSize(8.5).heightOfString(item.itemName, { width: descColWidth });
+        const descriptionHeight = description
+            ? doc.font(FONT_BODY).fontSize(8.5).heightOfString(description, { width: descColWidth }) + 2
+            : 0;
+        const rowHeight = Math.max(18, nameHeight + descriptionHeight + 8, ...cols.slice(0, 1).concat(cols.slice(2)).map((col, i) => {
+            const value = i === 0 ? rowValues[0] : rowValues[i + 1];
+            return doc.font(FONT_BODY).fontSize(8.5).heightOfString(value, { width: col.width - 10 }) + 8;
         }));
         colX = MARGIN_LEFT;
         for (let i = 0; i < cols.length; i++) {
             const col = cols[i];
             doc.rect(colX, y, col.width, rowHeight).fill(LIGHT_BG);
             doc.rect(colX, y, col.width, rowHeight).stroke("#ffffff");
-            doc
-                .fillColor(BLACK)
-                .font(i === 1 ? FONT_BODY_BOLD : FONT_BODY)
-                .fontSize(8.5)
-                .text(rowValues[i], colX + 5, y + 5, { width: col.width - 10, align: col.align || "left" });
+            if (i === 1) {
+                doc.fillColor(BLACK).font(FONT_BODY_BOLD).fontSize(8.5).text(item.itemName, colX + 5, y + 5, { width: descColWidth });
+                if (description) {
+                    doc.fillColor(BLACK).font(FONT_BODY).fontSize(8.5).text(description, colX + 5, y + 5 + nameHeight + 2, { width: descColWidth });
+                }
+            }
+            else {
+                doc
+                    .fillColor(BLACK)
+                    .font(FONT_BODY)
+                    .fontSize(8.5)
+                    .text(rowValues[i], colX + 5, y + 5, { width: col.width - 10, align: col.align || "left" });
+            }
             colX += col.width;
         }
         y += rowHeight;
@@ -307,7 +320,7 @@ function buildPurchaseOrderPdf(po) {
     // ---- Amount in Words (navy, bold italic white) + Grand Total (light bg, left-aligned) —
     // merged HSN+Description+Qty for the words, then Unit-Price-width label cell, then
     // Amount-width value cell, matching the reference exactly. ----
-    const amountWordsText = `Amount in Words: ${(0, numberToWords_1.amountToWords)(grandTotal)}.`;
+    const amountWordsText = `Amount in Words: ${(0, numberToWords_1.amountToWords)(grandTotal, po.currency?.trim() || "Rupees")}.`;
     const totalRowH = Math.max(30, doc.font(FONT_BODY_BOLD_ITALIC).fontSize(8.5).heightOfString(amountWordsText, { width: hsnDescQtyW - 16 }) + 12);
     doc.rect(MARGIN_LEFT, y, hsnDescQtyW, totalRowH).fill(NAVY);
     doc
@@ -326,10 +339,12 @@ function buildPurchaseOrderPdf(po) {
         .text("GRAND TOTAL", MARGIN_LEFT + hsnDescQtyW + 8, y + (totalRowH - 9) / 2, { width: unitPriceW - 16 });
     doc
         .fontSize(9.5)
-        .text(fmtAmount(grandTotal), MARGIN_LEFT + hsnDescQtyW + unitPriceW + 8, y + (totalRowH - 10) / 2, { width: amountW - 16 });
+        .text(`${po.currency?.trim() || "Rupees"} ${fmtAmount(grandTotal)}`, MARGIN_LEFT + hsnDescQtyW + unitPriceW + 8, y + (totalRowH - 10) / 2, {
+        width: amountW - 16,
+    });
     y += totalRowH + 14;
     // ---- Payment Terms ----
-    sectionBar(doc, MARGIN_LEFT, y, CONTENT_WIDTH, 16, "PAYMENT TERMS", 8);
+    sectionBar(doc, MARGIN_LEFT, y, CONTENT_WIDTH, 16, "PAYMENT TERMS");
     y += 16 + 8;
     const paymentTermsText = (po.paymentTerms || "").trim();
     if (paymentTermsText) {
@@ -349,11 +364,11 @@ function buildPurchaseOrderPdf(po) {
     // ---- Signature line — the org's uploaded signature image sits above the line if set,
     // otherwise it's left blank; the label is always the generic "Authorized Signatory"
     // (never a specific person's name), and the org's stamp sits alongside if set. ----
-    const sigY = Math.max(y + 20, doc.page.height - 100);
-    const sigW = 74.5;
+    const sigY = Math.max(y + 20, doc.page.height - 50);
+    const sigW = 100;
     if (po.signatureImage) {
         try {
-            doc.image(po.signatureImage, MARGIN_LEFT, sigY - 28, { fit: [sigW, 26], valign: "bottom" });
+            doc.image(po.signatureImage, MARGIN_LEFT, sigY - 35, { fit: [sigW, 35], valign: "bottom" });
         }
         catch (err) {
             console.error("Failed to embed organization signature image:", err);
@@ -363,7 +378,7 @@ function buildPurchaseOrderPdf(po) {
     doc.fillColor(SIGNATURE_GRAY).font(FONT_BODY_BOLD).fontSize(8).text("Authorized Signatory", MARGIN_LEFT, sigY + 5, { width: 160 });
     if (po.stampImage) {
         try {
-            doc.image(po.stampImage, MARGIN_LEFT + sigW + 24, sigY - 44, { fit: [60, 60] });
+            doc.image(po.stampImage, MARGIN_LEFT + sigW + 24, sigY - 66, { fit: [82, 82] });
         }
         catch (err) {
             console.error("Failed to embed organization stamp image:", err);

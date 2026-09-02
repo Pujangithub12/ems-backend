@@ -62,7 +62,7 @@ class ShipmentController {
     static async loadOwnedShipment(id, organizationId) {
         const shipment = await prisma_1.prisma.shipment.findFirst({
             where: { id: parseInt(id) },
-            include: { purchaseOrder: true, insurance: true, customs: true },
+            include: { purchaseOrder: true, insurance: true, customs: true, letterOfCredit: true },
         });
         if (!shipment || shipment.purchaseOrder?.organizationId !== organizationId)
             return null;
@@ -179,6 +179,31 @@ class ShipmentController {
                 data,
             });
             return res.status(200).json({ message: "Insurance updated", insurance });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** PUT /shipments/:id/letter-of-credit — create-or-update in one call (unlike Insurance's separate
+     * POST/PUT pair) since the frontend never needs to address the LetterOfCredit row by its own id.
+     * Optional, international purchases only (not enforced server-side). Admin-gated. */
+    static saveLetterOfCredit = async (req, res) => {
+        const { id } = req.params;
+        const { lcNumber, lcCharge, lcCommission } = req.body;
+        try {
+            const shipment = await ShipmentController.loadOwnedShipment(id, req.organization.id);
+            if (!shipment)
+                return res.status(404).json({ message: "Shipment not found" });
+            const data = {
+                ...(lcNumber !== undefined ? { lcNumber } : {}),
+                ...(lcCharge !== undefined ? { lcCharge } : {}),
+                ...(lcCommission !== undefined ? { lcCommission } : {}),
+            };
+            const letterOfCredit = shipment.letterOfCredit
+                ? await prisma_1.prisma.letterOfCredit.update({ where: { id: shipment.letterOfCredit.id }, data })
+                : await prisma_1.prisma.letterOfCredit.create({ data: { shipmentId: shipment.id, ...data } });
+            return res.status(200).json({ message: "Letter of credit saved", letterOfCredit });
         }
         catch (error) {
             console.error(error);

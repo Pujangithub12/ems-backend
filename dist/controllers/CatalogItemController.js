@@ -48,6 +48,59 @@ class CatalogItemController {
             return res.status(500).json({ message: "Internal server error" });
         }
     };
+    /** PUT /organization/items/:itemId — rename/re-code a catalog item. */
+    static updateItem = async (req, res) => {
+        const { itemId } = req.params;
+        const { name, code } = req.body;
+        try {
+            const item = await prisma_1.prisma.catalogItem.findFirst({
+                where: { id: parseInt(itemId), organizationId: req.organization.id },
+            });
+            if (!item)
+                return res.status(404).json({ message: "Item not found" });
+            const data = {};
+            if (name !== undefined) {
+                const trimmedName = name.trim();
+                if (!trimmedName)
+                    return res.status(400).json({ message: "Item name is required" });
+                const duplicate = await prisma_1.prisma.catalogItem.findFirst({
+                    where: {
+                        organizationId: req.organization.id,
+                        name: { equals: trimmedName, mode: "insensitive" },
+                        NOT: { id: item.id },
+                    },
+                });
+                if (duplicate)
+                    return res.status(400).json({ message: "An item with this name already exists" });
+                data.name = trimmedName;
+            }
+            if (code !== undefined)
+                data.code = code.trim() || null;
+            const updatedItem = await prisma_1.prisma.catalogItem.update({ where: { id: item.id }, data });
+            return res.status(200).json({ message: "Item updated", item: updatedItem });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** DELETE /organization/items/:itemId — Purchase Order/Proforma Invoice/Inventory rows referencing this item fall back to their free-text name (onDelete: SetNull on the relation). */
+    static deleteItem = async (req, res) => {
+        const { itemId } = req.params;
+        try {
+            const item = await prisma_1.prisma.catalogItem.findFirst({
+                where: { id: parseInt(itemId), organizationId: req.organization.id },
+            });
+            if (!item)
+                return res.status(404).json({ message: "Item not found" });
+            await prisma_1.prisma.catalogItem.delete({ where: { id: item.id } });
+            return res.status(200).json({ message: "Item deleted" });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
 }
 exports.CatalogItemController = CatalogItemController;
 //# sourceMappingURL=CatalogItemController.js.map
