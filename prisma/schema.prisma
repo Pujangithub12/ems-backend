@@ -104,6 +104,7 @@ model Organization {
   notifications         Notification[]
   plantReportTables     PlantReportTable[]
   siteActivityReports   SiteActivityReport[]
+  siteActivityWorkTypes SiteActivityWorkType[]
 
   @@map("workspace")
 }
@@ -561,6 +562,14 @@ model SiteActivityReport {
   projectId      Int
   reportDate     DateTime @db.Date
   location       String?  @db.VarChar
+  /// Free-text Bikram Sambat date note (e.g. "2083 Bhadra 13") shown alongside reportDate on the Site Diary page — not computed/validated, just a manual annotation.
+  reportDateBs   String?  @db.VarChar
+  /// Free-text name shown on the Site Diary page's "Prepared by" field — distinct from createdBy (the app user who saved the entry).
+  preparedBy     String?  @db.VarChar
+  /// Freeform notes shown in the Site Diary's "Remarks / issues / concerns" footer panel.
+  remarks        String?
+  /// Name entered in the Site Diary's "Signature (site in-charge)" field — a typed name, not an image.
+  signedBy       String?  @db.VarChar
   /// "draft" | "submitted"
   status         String   @default("submitted") @db.VarChar
   createdById    Int?
@@ -604,14 +613,15 @@ model SiteActivityItem {
 
 /// One "Equipment & Machinery Log" row on a SiteActivityReport.
 model SiteActivityEquipment {
-  id            Int    @id @default(autoincrement())
+  id            Int     @id @default(autoincrement())
   reportId      Int
-  sortOrder     Int    @default(0)
-  equipmentName String @db.VarChar
-  quantity      Int    @default(1)
+  sortOrder     Int     @default(0)
+  equipmentName String  @db.VarChar
+  quantity      Int     @default(1)
   workingHours  Float?
   /// "working" | "idle" | "breakdown"
-  condition     String @default("working") @db.VarChar
+  condition     String  @default("working") @db.VarChar
+  remarks       String? @db.VarChar
 
   report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
@@ -622,11 +632,14 @@ model SiteActivityEquipment {
 /// label (e.g. "Site Engineer") rather than an enum, so an org can use
 /// whatever role names their site actually has.
 model SiteActivityManpower {
-  id        Int    @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   reportId  Int
-  sortOrder Int    @default(0)
-  role      String @db.VarChar
-  headcount Int    @default(0)
+  sortOrder Int     @default(0)
+  role      String  @db.VarChar
+  headcount Int     @default(0)
+  /// Free-text names, filled in only for specific posts (e.g. named engineers) — most rows leave this blank and just report a headcount.
+  names     String? @db.VarChar
+  remarks   String? @db.VarChar
 
   report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
@@ -718,6 +731,25 @@ model SiteActivityInstruction {
   report SiteActivityReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
   @@map("site_activity_instruction")
+}
+
+/// Org-wide reusable predefined-options vocabulary for the Site Diary's
+/// Work Activities / Equipment / Materials tables — `kind` distinguishes
+/// which dropdown an option belongs to ("activity" | "equipment" |
+/// "material"). Not a rigid enum: SiteActivityController.save() auto-adds
+/// any new value typed in, so each list grows organically instead of
+/// needing separate admin CRUD.
+model SiteActivityWorkType {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  kind           String   @default("activity") @db.VarChar
+  name           String   @db.VarChar
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, kind, name])
+  @@map("site_activity_work_type")
 }
 
 model ProcurementAttachment {
@@ -858,34 +890,34 @@ model PurchaseOrderPayment {
 /// PurchaseOrder — for tracking payments/balances that don't have (or don't yet have) a PO
 /// behind them. Shares the PurchaseOrderPayment log for its payment history.
 model FinanceManualRecord {
-  id                      Int      @id @default(autoincrement())
-  vendorName              String   @db.VarChar
-  itemName                String   @db.VarChar
+  id              Int      @id @default(autoincrement())
+  vendorName      String   @db.VarChar
+  itemName        String   @db.VarChar
   /// Free-text procurement/reference identifier — the manual-record equivalent of PurchaseOrder.poNumber.
-  referenceNumber         String?  @db.VarChar
-  itemValue               Decimal  @db.Decimal
-  paymentTerms            String?  @db.VarChar
+  referenceNumber String?  @db.VarChar
+  itemValue       Decimal  @db.Decimal
+  /// "NPR" | "INR" | "USD" | "RMB" — set on the Finance page's Add/Edit Record form.
+  currency        String   @default("NPR") @db.VarChar
+  paymentTerms    String?  @db.VarChar
   /// The following mirror the Finance cost-breakdown page's columns for a PO row — plain stored
   /// fields here (no shipment/proration behind a manual record, unlike PurchaseOrderItem's
   /// override columns below).
-  freight                 Decimal? @db.Decimal
-  lcNumber                String?  @db.VarChar
-  lcCharge                Decimal? @db.Decimal
-  lcCommission            Decimal? @db.Decimal
-  vat                     Decimal? @db.Decimal
-  /// VAT-refund tracking (Finance cost-breakdown page): refundableMarginPercent is the % of VAT
-  /// that's refundable; refundableAmount = vat * refundableMarginPercent / 100 (computed, not
-  /// stored); refundedAmount is how much has actually been refunded so far; toBeRefunded =
-  /// refundableAmount - refundedAmount (computed, not stored).
-  refundableMarginPercent Decimal? @db.Decimal
-  refundedAmount          Decimal? @db.Decimal
+  freight         Decimal? @db.Decimal
+  lcNumber        String?  @db.VarChar
+  lcCharge        Decimal? @db.Decimal
+  lcCommission    Decimal? @db.Decimal
+  vat             Decimal? @db.Decimal
+  /// VAT-refund tracking (Finance cost-breakdown page): how much of this record's VAT has
+  /// actually been refunded so far. Refundable Amount is no longer tracked per-margin (that
+  /// column was removed), so it's always treated as 0 here.
+  refundedAmount  Decimal? @db.Decimal
   /// Freeform note shown on the record's Finance cost-breakdown page.
-  remarks                 String?
-  createdAt               DateTime @default(now())
-  organizationId          Int?
+  remarks         String?
+  createdAt       DateTime @default(now())
+  organizationId  Int?
   /// Optional link to a real Vendor so this record's totals fold into that vendor's Finance drilldown page.
-  vendorId                Int?
-  createdById             Int?
+  vendorId        Int?
+  createdById     Int?
 
   organization Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   vendor       Vendor?                @relation(fields: [vendorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
@@ -897,34 +929,32 @@ model FinanceManualRecord {
 
 /// Snapshot copy of the selected PurchaseRequestItem rows at PO-generation time — not a live reference, so the PO stays stable if the PR is later edited.
 model PurchaseOrderItem {
-  id                      Int      @id @default(autoincrement())
-  itemName                String   @db.VarChar
-  quantity                Float    @default(1)
-  unit                    String?  @db.VarChar
-  unitPrice               Decimal? @db.Decimal
+  id                   Int      @id @default(autoincrement())
+  itemName             String   @db.VarChar
+  quantity             Float    @default(1)
+  unit                 String?  @db.VarChar
+  unitPrice            Decimal? @db.Decimal
   /// Entered on the Overview tab's "Add Item" form — shown under the item name in the PDF's Product Description cell.
-  description             String?
+  description          String?
   /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
-  hsnCode                 String?  @db.VarChar
+  hsnCode              String?  @db.VarChar
   /// The following let the Finance cost-breakdown page override this item's computed share of
   /// the PO's freight/LC charge/LC commission/VAT (normally prorated from Shipment/Customs/
   /// LetterOfCredit by this item's value share — see computeCostSheet/buildPoCostBreakdownRows).
   /// Null means "use the computed proration"; a non-null value here wins.
-  freightOverride         Decimal? @db.Decimal
-  lcChargeOverride        Decimal? @db.Decimal
-  lcCommissionOverride    Decimal? @db.Decimal
-  vatOverride             Decimal? @db.Decimal
-  /// VAT-refund tracking (Finance cost-breakdown page): refundableMarginPercent is the % of this
-  /// item's VAT (see vatOverride above) that's refundable; refundableAmount = vat *
-  /// refundableMarginPercent / 100 (computed, not stored); refundedAmount is how much has
-  /// actually been refunded so far; toBeRefunded = refundableAmount - refundedAmount (computed).
-  refundableMarginPercent Decimal? @db.Decimal
-  refundedAmount          Decimal? @db.Decimal
+  freightOverride      Decimal? @db.Decimal
+  lcChargeOverride     Decimal? @db.Decimal
+  lcCommissionOverride Decimal? @db.Decimal
+  vatOverride          Decimal? @db.Decimal
+  /// VAT-refund tracking (Finance cost-breakdown page): how much of this item's VAT (see
+  /// vatOverride above) has actually been refunded so far. Refundable Amount is no longer
+  /// tracked per-margin (that column was removed), so it's always treated as 0 here.
+  refundedAmount       Decimal? @db.Decimal
   /// Freeform note shown on the PO's Finance cost-breakdown page (not printed on the PO PDF).
-  remarks                 String?
-  createdAt               DateTime @default(now())
-  purchaseOrderId         Int?
-  itemId                  Int?
+  remarks              String?
+  createdAt            DateTime @default(now())
+  purchaseOrderId      Int?
+  itemId               Int?
 
   purchaseOrder     PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   item              CatalogItem?       @relation(fields: [itemId], references: [id], onDelete: SetNull, onUpdate: NoAction)
@@ -949,20 +979,38 @@ model PurchaseOrderStatusHistory {
 }
 
 model ProformaInvoice {
-  id              Int       @id @default(autoincrement())
-  piNumber        String?   @db.VarChar
-  piDate          DateTime? @db.Date
-  currency        String    @default("NPR") @db.VarChar
-  exchangeRate    Decimal   @default(1) @db.Decimal
-  paymentTerms    String?   @db.VarChar
-  validityDate    DateTime? @db.Date
+  id                  Int       @id @default(autoincrement())
+  piNumber            String?   @db.VarChar
+  piDate              DateTime? @db.Date
+  currency            String    @default("NPR") @db.VarChar
+  exchangeRate        Decimal   @default(1) @db.Decimal
+  paymentTerms        String?   @db.VarChar
+  validityDate        DateTime? @db.Date
   /// Single PDF attachment per spec ("Attachment (PDF)") — not a join table since only one file is expected.
-  fileName        String?   @db.VarChar
-  filePath        String?   @db.VarChar
-  status          String    @default("waiting") @db.VarChar
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @default(now()) @updatedAt
-  purchaseOrderId Int?
+  fileName            String?   @db.VarChar
+  filePath            String?   @db.VarChar
+  status              String    @default("waiting") @db.VarChar
+  /// VAT % applied to taxable line items only (see ProformaInvoiceItem.taxable) on the generated PDF — falls back to 13 when unset.
+  taxPercent          Decimal?  @db.Decimal
+  /// PAN fields for the PDF's CUSTOMER/VENDOR boxes — kept on the PI itself (not Vendor/Organization master data) since they're filled in per-invoice.
+  customerPan         String?   @db.VarChar
+  vendorPan           String?   @db.VarChar
+  /// Bank Details box on the PDF.
+  bankBeneficiaryName String?   @db.VarChar
+  bankAccountNumber   String?   @db.VarChar
+  bankName            String?   @db.VarChar
+  bankSwiftCode       String?   @db.VarChar
+  bankAddress         String?
+  /// Terms of Delivery box on the PDF.
+  deliveryTerms       String?   @db.VarChar
+  placeOfLoading      String?   @db.VarChar
+  placeOfDischarge    String?   @db.VarChar
+  modeOfShipment      String?   @db.VarChar
+  /// Free-text NOTES section on the PDF.
+  notes               String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @default(now()) @updatedAt
+  purchaseOrderId     Int?
 
   purchaseOrder PurchaseOrder?        @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   items         ProformaInvoiceItem[]
@@ -976,6 +1024,10 @@ model ProformaInvoiceItem {
   quantity          Int      @default(1)
   unit              String?  @db.VarChar
   unitPrice         Decimal? @db.Decimal
+  /// HS (Harmonized System) customs code for the PI PDF's line-item table.
+  hsnCode           String?  @db.VarChar
+  /// Whether this line item is subject to VAT on the PI PDF — non-taxable items are summed separately from taxable ones (see ProformaInvoice.taxPercent).
+  taxable           Boolean  @default(true)
   createdAt         DateTime @default(now())
   proformaInvoiceId Int?
   itemId            Int?

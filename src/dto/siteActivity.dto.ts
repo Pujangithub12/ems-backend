@@ -19,11 +19,14 @@ export interface SaveSiteActivityEquipmentDto {
   quantity?: number | null;
   workingHours?: number | null;
   condition?: string;
+  remarks?: string | null;
 }
 
 export interface SaveSiteActivityManpowerDto {
   role: string;
   headcount?: number | null;
+  names?: string | null;
+  remarks?: string | null;
 }
 
 export interface SaveSiteActivityWeatherDto {
@@ -63,6 +66,10 @@ export interface SaveSiteActivityInstructionDto {
 export interface SaveSiteActivityReportDto {
   reportDate: string;
   location?: string | null;
+  reportDateBs?: string | null;
+  preparedBy?: string | null;
+  remarks?: string | null;
+  signedBy?: string | null;
   status?: string;
   activities?: SaveSiteActivityItemDto[];
   equipment?: SaveSiteActivityEquipmentDto[];

@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.uploadGoodsReceiptFile = exports.uploadCustomsFile = exports.uploadProformaInvoiceFile = exports.uploadProcurementFile = exports.uploadInventoryFile = exports.uploadOrganizationStamp = exports.uploadOrganizationSignature = exports.uploadOrganizationFile = exports.uploadProjectFile = exports.upload = void 0;
+exports.uploadSiteActivityPhoto = exports.uploadGoodsReceiptFile = exports.uploadCustomsFile = exports.uploadProformaInvoiceFile = exports.uploadProcurementFile = exports.uploadInventoryFile = exports.uploadOrganizationStamp = exports.uploadOrganizationSignature = exports.uploadOrganizationFile = exports.uploadProjectFile = exports.upload = void 0;
 const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
 const supabaseStorage_1 = require("../config/supabaseStorage");
@@ -191,4 +191,17 @@ exports.uploadProformaInvoiceFile = makeOwnedResourceUpload("proforma-invoices")
 exports.uploadCustomsFile = makeOwnedResourceUpload("customs");
 // Goods receipt inspection photos, uploads/goods-receipts/<goodsReceiptId>/
 exports.uploadGoodsReceiptFile = makeOwnedResourceUpload("goods-receipts");
+// Site Activities daily report photos, uploads/site-activities/<reportId>/ —
+// route param is :reportId rather than :itemId, so this can't use
+// makeOwnedResourceUpload above (which hardcodes that param name).
+exports.uploadSiteActivityPhoto = makeUploadMiddleware({
+    field: "file",
+    mode: "single",
+    fileSizeLimit: 15 * 1024 * 1024,
+    imagesOnly: true,
+    resolveDir: (req) => {
+        const reportId = parsePositiveIntParam(req.params.reportId);
+        return reportId == null ? null : `site-activities/${reportId}`;
+    },
+});
 //# sourceMappingURL=upload.js.map

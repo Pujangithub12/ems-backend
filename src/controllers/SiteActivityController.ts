@@ -23,13 +23,17 @@ const shapeReport = (report: {
   projectId: number;
   reportDate: Date;
   location: string | null;
+  reportDateBs: string | null;
+  preparedBy: string | null;
+  remarks: string | null;
+  signedBy: string | null;
   status: string;
   createdAt: Date;
   updatedAt: Date;
   createdBy: { id: number; fullName: string } | null;
   activities: { id: number; sortOrder: number; description: string; chainage: string | null; todayQty: number | null; unit: string | null; status: string; remarks: string | null; photos: { id: number; filePath: string; fileName: string; caption: string | null }[] }[];
-  equipment: { id: number; sortOrder: number; equipmentName: string; quantity: number; workingHours: number | null; condition: string }[];
-  manpower: { id: number; sortOrder: number; role: string; headcount: number }[];
+  equipment: { id: number; sortOrder: number; equipmentName: string; quantity: number; workingHours: number | null; condition: string; remarks: string | null }[];
+  manpower: { id: number; sortOrder: number; role: string; headcount: number; names: string | null; remarks: string | null }[];
   photos: { id: number; itemId: number | null; filePath: string; fileName: string; caption: string | null; uploadedAt: Date }[];
   weather: { id: number; slot: string; condition: string | null; tempC: number | null; rainfall: string | null; remarks: string | null }[];
   materials: { id: number; sortOrder: number; materialType: string; receivedQuantity: number | null; receivedUnit: string | null; usedQuantity: number | null; usedUnit: string | null; remarks: string | null }[];
@@ -40,6 +44,10 @@ const shapeReport = (report: {
   projectId: report.projectId,
   reportDate: report.reportDate.toISOString().slice(0, 10),
   location: report.location,
+  reportDateBs: report.reportDateBs,
+  preparedBy: report.preparedBy,
+  remarks: report.remarks,
+  signedBy: report.signedBy,
   status: report.status,
   createdBy: report.createdBy ? { id: report.createdBy.id, name: report.createdBy.fullName } : null,
   createdAt: report.createdAt,
@@ -58,10 +66,10 @@ const shapeReport = (report: {
     })),
   equipment: report.equipment
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((e) => ({ id: e.id, equipmentName: e.equipmentName, quantity: e.quantity, workingHours: e.workingHours, condition: e.condition })),
+    .map((e) => ({ id: e.id, equipmentName: e.equipmentName, quantity: e.quantity, workingHours: e.workingHours, condition: e.condition, remarks: e.remarks })),
   manpower: report.manpower
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((m) => ({ id: m.id, role: m.role, headcount: m.headcount })),
+    .map((m) => ({ id: m.id, role: m.role, headcount: m.headcount, names: m.names, remarks: m.remarks })),
   photos: report.photos.map((p) => ({
     id: p.id,
     itemId: p.itemId,
@@ -106,7 +114,58 @@ const REPORT_INCLUDE = {
  * link that replaced Plant Report's old "Work Activities" tab) — a fixed
  * daily-log shape (work activities, equipment, manpower, photos) matching
  * the paper DPR form, one report per (project, date). */
+const OPTION_KINDS = new Set(["activity", "equipment", "material"]);
+
 export class SiteActivityController {
+  /** GET /site-activity-options?kind=activity|equipment|material — the org's
+   * reusable predefined-options vocabulary for the Work Activities /
+   * Equipment / Materials tables' dropdowns, alphabetical. Grows
+   * automatically as new values are saved (see `save()` below) — no
+   * separate admin CRUD needed. */
+  static listOptions = async (req: AuthRequest, res: Response) => {
+    try {
+      const kind = typeof req.query.kind === "string" && OPTION_KINDS.has(req.query.kind) ? req.query.kind : "activity";
+      const options = await prisma.siteActivityWorkType.findMany({
+        where: { organizationId: req.organization!.id, kind },
+        orderBy: { name: "asc" },
+        select: { name: true },
+      });
+      return res.status(200).json({ options: options.map((o) => o.name) });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** POST /site-activity-options — explicitly add a new option to one of the
+   * predefined-options dropdowns (the "+" popup next to a select-only
+   * dropdown). Body: `{ kind, name }`. Returns the full updated list for that
+   * kind so the frontend can select the new entry immediately. */
+  static createOption = async (req: AuthRequest, res: Response) => {
+    try {
+      const kind = typeof req.body?.kind === "string" && OPTION_KINDS.has(req.body.kind) ? req.body.kind : "activity";
+      const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+      if (!name) {
+        return res.status(400).json({ message: "name is required" });
+      }
+      const organizationId = req.organization!.id;
+      await prisma.siteActivityWorkType.upsert({
+        where: { organizationId_kind_name: { organizationId, kind, name } },
+        update: {},
+        create: { organizationId, kind, name },
+      });
+      const options = await prisma.siteActivityWorkType.findMany({
+        where: { organizationId, kind },
+        orderBy: { name: "asc" },
+        select: { name: true },
+      });
+      return res.status(201).json({ options: options.map((o) => o.name) });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   /** GET /site-activity-reports?projectId&date — the one report for that
    * project+date, or `{ report: null }` if none has been filled in yet (the
    * frontend shows a "New DPR" prompt in that case rather than a 404). */
@@ -178,6 +237,10 @@ export class SiteActivityController {
 
     const status = body.status && VALID_REPORT_STATUS.has(body.status) ? body.status : "submitted";
     const location = (body.location || "").trim() || null;
+    const reportDateBs = (body.reportDateBs || "").trim() || null;
+    const preparedBy = (body.preparedBy || "").trim() || null;
+    const remarks = (body.remarks || "").trim() || null;
+    const signedBy = (body.signedBy || "").trim() || null;
 
     const activities = (Array.isArray(body.activities) ? body.activities : [])
       .map((a) => ({
@@ -196,6 +259,7 @@ export class SiteActivityController {
         quantity: e.quantity != null && Number.isFinite(Number(e.quantity)) ? Math.max(0, Math.trunc(Number(e.quantity))) : 1,
         workingHours: e.workingHours != null && Number.isFinite(Number(e.workingHours)) ? Number(e.workingHours) : null,
         condition: e.condition && VALID_EQUIPMENT_CONDITION.has(e.condition) ? e.condition : "working",
+        remarks: (e.remarks || "").trim() || null,
       }))
       .filter((e) => e.equipmentName);
 
@@ -203,6 +267,8 @@ export class SiteActivityController {
       .map((m) => ({
         role: (m.role || "").trim(),
         headcount: m.headcount != null && Number.isFinite(Number(m.headcount)) ? Math.max(0, Math.trunc(Number(m.headcount))) : 0,
+        names: (m.names || "").trim() || null,
+        remarks: (m.remarks || "").trim() || null,
       }))
       .filter((m) => m.role);
 
@@ -256,7 +322,7 @@ export class SiteActivityController {
         let id: number;
         if (existing) {
           id = existing.id;
-          await tx.siteActivityReport.update({ where: { id }, data: { location, status } });
+          await tx.siteActivityReport.update({ where: { id }, data: { location, status, reportDateBs, preparedBy, remarks, signedBy } });
           await tx.siteActivityItem.deleteMany({ where: { reportId: id } });
           await tx.siteActivityEquipment.deleteMany({ where: { reportId: id } });
           await tx.siteActivityManpower.deleteMany({ where: { reportId: id } });
@@ -266,7 +332,7 @@ export class SiteActivityController {
           await tx.siteActivityInstruction.deleteMany({ where: { reportId: id } });
         } else {
           const created = await tx.siteActivityReport.create({
-            data: { organizationId, projectId, reportDate, location, status, createdById: req.user!.id },
+            data: { organizationId, projectId, reportDate, location, status, reportDateBs, preparedBy, remarks, signedBy, createdById: req.user!.id },
           });
           id = created.id;
         }
@@ -295,6 +361,22 @@ export class SiteActivityController {
 
         return id;
       });
+
+      // Grow the org's predefined-options vocabularies (Work description / Equipment /
+      // Material type) with any new values typed in — best-effort, outside the main
+      // transaction (a duplicate/failure here shouldn't fail the save).
+      const newOptions: { organizationId: number; kind: string; name: string }[] = [
+        ...Array.from(new Set(activities.map((a) => a.description).filter(Boolean))).map((name) => ({ organizationId, kind: "activity", name })),
+        ...Array.from(new Set(equipment.map((e) => e.equipmentName).filter(Boolean))).map((name) => ({ organizationId, kind: "equipment", name })),
+        ...Array.from(new Set(materials.map((m) => m.materialType).filter(Boolean))).map((name) => ({ organizationId, kind: "material", name })),
+      ];
+      if (newOptions.length > 0) {
+        try {
+          await prisma.siteActivityWorkType.createMany({ data: newOptions, skipDuplicates: true });
+        } catch (error) {
+          console.error("Failed to record new site activity options:", error);
+        }
+      }
 
       const report = await prisma.siteActivityReport.findUniqueOrThrow({ where: { id: reportId }, include: REPORT_INCLUDE });
       return res.status(existing ? 200 : 201).json({ report: shapeReport(report) });

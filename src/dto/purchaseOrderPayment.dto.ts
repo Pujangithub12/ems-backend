@@ -17,6 +17,8 @@ export interface SaveFinanceManualRecordDto {
   itemValue: number;
   paymentTerms?: string | null;
   vendorId?: number | null;
+  /** "NPR" | "INR" | "USD" | "RMB" — falls back to "NPR" when unset. */
+  currency?: string;
 }
 
 /** Body shape for editing a full row on the Finance cost-breakdown page — same fields whether
@@ -30,9 +32,7 @@ export interface EditCostBreakdownRowDto {
   lcCharge: number;
   lcCommission: number;
   vat: number;
-  /** % of `vat` that's refundable — refundableAmount/toBeRefunded are computed server-side, not submitted. */
-  refundableMarginPercent: number;
-  /** How much of the refundable amount has actually been refunded so far. */
+  /** How much VAT has actually been refunded so far. */
   refundedAmount: number;
   remarks?: string | null;
 }

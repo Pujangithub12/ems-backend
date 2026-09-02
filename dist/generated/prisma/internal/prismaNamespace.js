@@ -48,8 +48,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PurchaseOrderScalarFieldEnum = exports.ProcurementStatusHistoryScalarFieldEnum = exports.ProcurementItemScalarFieldEnum = exports.ProcurementAttachmentScalarFieldEnum = exports.PlantReportCustomFieldScalarFieldEnum = exports.PlantReportStaffScalarFieldEnum = exports.PlantDailyReportScalarFieldEnum = exports.PendingSignupScalarFieldEnum = exports.PasswordResetOtpScalarFieldEnum = exports.NotificationScalarFieldEnum = exports.MyTaskScalarFieldEnum = exports.MonthlyPerformanceScalarFieldEnum = exports.DailyGenerationScalarFieldEnum = exports.LeaveRequestScalarFieldEnum = exports.InventoryTransactionScalarFieldEnum = exports.InventorySerialScalarFieldEnum = exports.InventoryItemScalarFieldEnum = exports.InventoryBatchScalarFieldEnum = exports.InventoryAttachmentScalarFieldEnum = exports.HierarchyNodeSecondaryManagerScalarFieldEnum = exports.HierarchyNodeScalarFieldEnum = exports.FileAccessScalarFieldEnum = exports.ExpenseRequestScalarFieldEnum = exports.CatalogItemScalarFieldEnum = exports.CalendarEventScalarFieldEnum = exports.AnnouncementScalarFieldEnum = exports.ActivityScalarFieldEnum = exports.OrganizationInviteScalarFieldEnum = exports.OrganizationMembershipScalarFieldEnum = exports.OrganizationScalarFieldEnum = exports.UserScalarFieldEnum = exports.TransactionIsolationLevel = exports.ModelName = exports.AnyNull = exports.JsonNull = exports.DbNull = exports.NullTypes = exports.prismaVersion = exports.getExtensionContext = exports.Decimal = exports.Sql = exports.raw = exports.join = exports.empty = exports.sql = exports.PrismaClientValidationError = exports.PrismaClientInitializationError = exports.PrismaClientRustPanicError = exports.PrismaClientUnknownRequestError = exports.PrismaClientKnownRequestError = void 0;
-exports.defineExtension = exports.JsonNullValueFilter = exports.NullsOrder = exports.QueryMode = exports.NullableJsonNullValueInput = exports.SortOrder = exports.WarehouseScalarFieldEnum = exports.VendorScalarFieldEnum = exports.TaskCommentScalarFieldEnum = exports.TaskAssigneeScalarFieldEnum = exports.TaskLinkScalarFieldEnum = exports.TaskScalarFieldEnum = exports.SubTaskCommentScalarFieldEnum = exports.SubTaskScalarFieldEnum = exports.StockTransferScalarFieldEnum = exports.SiteVisitRequestScalarFieldEnum = exports.ScheduleTaskLinkScalarFieldEnum = exports.ScheduleTaskScalarFieldEnum = exports.RolePermissionScalarFieldEnum = exports.ReportCommentScalarFieldEnum = exports.ReportActivityScalarFieldEnum = exports.ProjectHeadingScalarFieldEnum = exports.ProjectFileScalarFieldEnum = exports.ProjectAssigneeScalarFieldEnum = exports.ProjectScalarFieldEnum = exports.GoodsReceiptPhotoScalarFieldEnum = exports.GoodsReceiptItemScalarFieldEnum = exports.GoodsReceiptScalarFieldEnum = exports.CustomsDocumentScalarFieldEnum = exports.CustomsScalarFieldEnum = exports.InsuranceScalarFieldEnum = exports.ShipmentScalarFieldEnum = exports.ProformaInvoiceItemScalarFieldEnum = exports.ProformaInvoiceScalarFieldEnum = exports.PurchaseOrderStatusHistoryScalarFieldEnum = exports.PurchaseOrderItemScalarFieldEnum = void 0;
+exports.SiteActivityManpowerScalarFieldEnum = exports.SiteActivityEquipmentScalarFieldEnum = exports.SiteActivityItemScalarFieldEnum = exports.SiteActivityReportScalarFieldEnum = exports.PlantReportRowScalarFieldEnum = exports.PlantReportColumnScalarFieldEnum = exports.PlantReportTableScalarFieldEnum = exports.PendingSignupScalarFieldEnum = exports.PasswordResetOtpScalarFieldEnum = exports.NotificationScalarFieldEnum = exports.MyTaskScalarFieldEnum = exports.MonthlyPerformanceScalarFieldEnum = exports.DailyGenerationScalarFieldEnum = exports.LeaveRequestScalarFieldEnum = exports.InventoryTransactionScalarFieldEnum = exports.InventorySerialScalarFieldEnum = exports.InventoryItemScalarFieldEnum = exports.InventoryBatchScalarFieldEnum = exports.InventoryAttachmentScalarFieldEnum = exports.HierarchyNodeSecondaryManagerScalarFieldEnum = exports.HierarchyNodeScalarFieldEnum = exports.FileAccessScalarFieldEnum = exports.ExpenseRequestScalarFieldEnum = exports.CatalogItemScalarFieldEnum = exports.CalendarEventScalarFieldEnum = exports.AnnouncementScalarFieldEnum = exports.ActivityScalarFieldEnum = exports.OrganizationInviteScalarFieldEnum = exports.OrganizationMembershipScalarFieldEnum = exports.OrganizationScalarFieldEnum = exports.UserScalarFieldEnum = exports.TransactionIsolationLevel = exports.ModelName = exports.AnyNull = exports.JsonNull = exports.DbNull = exports.NullTypes = exports.prismaVersion = exports.getExtensionContext = exports.Decimal = exports.Sql = exports.raw = exports.join = exports.empty = exports.sql = exports.PrismaClientValidationError = exports.PrismaClientInitializationError = exports.PrismaClientRustPanicError = exports.PrismaClientUnknownRequestError = exports.PrismaClientKnownRequestError = void 0;
+exports.defineExtension = exports.JsonNullValueFilter = exports.NullsOrder = exports.QueryMode = exports.NullableJsonNullValueInput = exports.SortOrder = exports.WarehouseScalarFieldEnum = exports.VendorScalarFieldEnum = exports.TaskCommentScalarFieldEnum = exports.TaskAssigneeScalarFieldEnum = exports.TaskLinkScalarFieldEnum = exports.TaskScalarFieldEnum = exports.SubTaskCommentScalarFieldEnum = exports.SubTaskScalarFieldEnum = exports.StockTransferScalarFieldEnum = exports.SiteVisitRequestScalarFieldEnum = exports.ScheduleTaskLinkScalarFieldEnum = exports.ScheduleTaskScalarFieldEnum = exports.RolePermissionScalarFieldEnum = exports.ProjectHeadingScalarFieldEnum = exports.ProjectFileScalarFieldEnum = exports.ProjectAssigneeScalarFieldEnum = exports.ProjectScalarFieldEnum = exports.GoodsReceiptPhotoScalarFieldEnum = exports.GoodsReceiptItemScalarFieldEnum = exports.GoodsReceiptScalarFieldEnum = exports.CustomsDocumentScalarFieldEnum = exports.CustomsScalarFieldEnum = exports.LetterOfCreditScalarFieldEnum = exports.InsuranceScalarFieldEnum = exports.ShipmentScalarFieldEnum = exports.ProformaInvoiceItemScalarFieldEnum = exports.ProformaInvoiceScalarFieldEnum = exports.PurchaseOrderStatusHistoryScalarFieldEnum = exports.PurchaseOrderItemScalarFieldEnum = exports.FinanceManualRecordScalarFieldEnum = exports.PurchaseOrderPaymentScalarFieldEnum = exports.PurchaseOrderScalarFieldEnum = exports.ProcurementStatusHistoryScalarFieldEnum = exports.ProcurementItemScalarFieldEnum = exports.ProcurementAttachmentScalarFieldEnum = exports.SiteActivityWorkTypeScalarFieldEnum = exports.SiteActivityInstructionScalarFieldEnum = exports.SiteActivitySafetyScalarFieldEnum = exports.SiteActivityMaterialScalarFieldEnum = exports.SiteActivityWeatherScalarFieldEnum = exports.SiteActivityPhotoScalarFieldEnum = void 0;
 const runtime = __importStar(require("@prisma/client/runtime/client"));
 /**
  * Prisma Errors
@@ -128,19 +128,32 @@ exports.ModelName = {
     Notification: 'Notification',
     PasswordResetOtp: 'PasswordResetOtp',
     PendingSignup: 'PendingSignup',
-    PlantDailyReport: 'PlantDailyReport',
-    PlantReportStaff: 'PlantReportStaff',
-    PlantReportCustomField: 'PlantReportCustomField',
+    PlantReportTable: 'PlantReportTable',
+    PlantReportColumn: 'PlantReportColumn',
+    PlantReportRow: 'PlantReportRow',
+    SiteActivityReport: 'SiteActivityReport',
+    SiteActivityItem: 'SiteActivityItem',
+    SiteActivityEquipment: 'SiteActivityEquipment',
+    SiteActivityManpower: 'SiteActivityManpower',
+    SiteActivityPhoto: 'SiteActivityPhoto',
+    SiteActivityWeather: 'SiteActivityWeather',
+    SiteActivityMaterial: 'SiteActivityMaterial',
+    SiteActivitySafety: 'SiteActivitySafety',
+    SiteActivityInstruction: 'SiteActivityInstruction',
+    SiteActivityWorkType: 'SiteActivityWorkType',
     ProcurementAttachment: 'ProcurementAttachment',
     ProcurementItem: 'ProcurementItem',
     ProcurementStatusHistory: 'ProcurementStatusHistory',
     PurchaseOrder: 'PurchaseOrder',
+    PurchaseOrderPayment: 'PurchaseOrderPayment',
+    FinanceManualRecord: 'FinanceManualRecord',
     PurchaseOrderItem: 'PurchaseOrderItem',
     PurchaseOrderStatusHistory: 'PurchaseOrderStatusHistory',
     ProformaInvoice: 'ProformaInvoice',
     ProformaInvoiceItem: 'ProformaInvoiceItem',
     Shipment: 'Shipment',
     Insurance: 'Insurance',
+    LetterOfCredit: 'LetterOfCredit',
     Customs: 'Customs',
     CustomsDocument: 'CustomsDocument',
     GoodsReceipt: 'GoodsReceipt',
@@ -150,8 +163,6 @@ exports.ModelName = {
     ProjectAssignee: 'ProjectAssignee',
     ProjectFile: 'ProjectFile',
     ProjectHeading: 'ProjectHeading',
-    ReportActivity: 'ReportActivity',
-    ReportComment: 'ReportComment',
     RolePermission: 'RolePermission',
     ScheduleTask: 'ScheduleTask',
     ScheduleTaskLink: 'ScheduleTaskLink',
@@ -431,27 +442,127 @@ exports.PendingSignupScalarFieldEnum = {
     attempts: 'attempts',
     createdAt: 'createdAt'
 };
-exports.PlantDailyReportScalarFieldEnum = {
+exports.PlantReportTableScalarFieldEnum = {
     id: 'id',
     organizationId: 'organizationId',
     projectId: 'projectId',
-    date: 'date',
-    customValues: 'customValues',
+    name: 'name',
+    sortOrder: 'sortOrder',
+    isDefault: 'isDefault',
+    createdAt: 'createdAt'
+};
+exports.PlantReportColumnScalarFieldEnum = {
+    id: 'id',
+    tableId: 'tableId',
+    name: 'name',
+    dataType: 'dataType',
+    sortOrder: 'sortOrder',
+    target: 'target'
+};
+exports.PlantReportRowScalarFieldEnum = {
+    id: 'id',
+    tableId: 'tableId',
+    sortOrder: 'sortOrder',
+    values: 'values',
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt'
+};
+exports.SiteActivityReportScalarFieldEnum = {
+    id: 'id',
+    organizationId: 'organizationId',
+    projectId: 'projectId',
+    reportDate: 'reportDate',
+    location: 'location',
+    reportDateBs: 'reportDateBs',
+    preparedBy: 'preparedBy',
+    remarks: 'remarks',
+    signedBy: 'signedBy',
+    status: 'status',
     createdById: 'createdById',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
 };
-exports.PlantReportStaffScalarFieldEnum = {
+exports.SiteActivityItemScalarFieldEnum = {
     id: 'id',
     reportId: 'reportId',
-    userId: 'userId'
+    sortOrder: 'sortOrder',
+    description: 'description',
+    chainage: 'chainage',
+    todayQty: 'todayQty',
+    unit: 'unit',
+    status: 'status',
+    remarks: 'remarks'
 };
-exports.PlantReportCustomFieldScalarFieldEnum = {
+exports.SiteActivityEquipmentScalarFieldEnum = {
+    id: 'id',
+    reportId: 'reportId',
+    sortOrder: 'sortOrder',
+    equipmentName: 'equipmentName',
+    quantity: 'quantity',
+    workingHours: 'workingHours',
+    condition: 'condition',
+    remarks: 'remarks'
+};
+exports.SiteActivityManpowerScalarFieldEnum = {
+    id: 'id',
+    reportId: 'reportId',
+    sortOrder: 'sortOrder',
+    role: 'role',
+    headcount: 'headcount',
+    names: 'names',
+    remarks: 'remarks'
+};
+exports.SiteActivityPhotoScalarFieldEnum = {
+    id: 'id',
+    reportId: 'reportId',
+    itemId: 'itemId',
+    filePath: 'filePath',
+    fileName: 'fileName',
+    caption: 'caption',
+    uploadedAt: 'uploadedAt'
+};
+exports.SiteActivityWeatherScalarFieldEnum = {
+    id: 'id',
+    reportId: 'reportId',
+    slot: 'slot',
+    condition: 'condition',
+    tempC: 'tempC',
+    rainfall: 'rainfall',
+    remarks: 'remarks'
+};
+exports.SiteActivityMaterialScalarFieldEnum = {
+    id: 'id',
+    reportId: 'reportId',
+    sortOrder: 'sortOrder',
+    materialType: 'materialType',
+    receivedQuantity: 'receivedQuantity',
+    receivedUnit: 'receivedUnit',
+    usedQuantity: 'usedQuantity',
+    usedUnit: 'usedUnit',
+    remarks: 'remarks'
+};
+exports.SiteActivitySafetyScalarFieldEnum = {
+    id: 'id',
+    reportId: 'reportId',
+    sortOrder: 'sortOrder',
+    type: 'type',
+    description: 'description',
+    actionTaken: 'actionTaken'
+};
+exports.SiteActivityInstructionScalarFieldEnum = {
+    id: 'id',
+    reportId: 'reportId',
+    sortOrder: 'sortOrder',
+    description: 'description',
+    byWhom: 'byWhom',
+    toWhom: 'toWhom',
+    time: 'time',
+    signatureOf: 'signatureOf'
+};
+exports.SiteActivityWorkTypeScalarFieldEnum = {
     id: 'id',
     organizationId: 'organizationId',
     name: 'name',
-    dataType: 'dataType',
-    sortOrder: 'sortOrder',
     createdAt: 'createdAt'
 };
 exports.ProcurementAttachmentScalarFieldEnum = {
@@ -498,20 +609,16 @@ exports.ProcurementStatusHistoryScalarFieldEnum = {
 exports.PurchaseOrderScalarFieldEnum = {
     id: 'id',
     poNumber: 'poNumber',
-    deliveryAddress: 'deliveryAddress',
     paymentTerms: 'paymentTerms',
-    deliveryDate: 'deliveryDate',
     incoterms: 'incoterms',
     taxPercent: 'taxPercent',
     terms: 'terms',
-    shippingTerms: 'shippingTerms',
     deliveryPeriod: 'deliveryPeriod',
     finalDestination: 'finalDestination',
+    customerContactPerson: 'customerContactPerson',
+    currency: 'currency',
     purchaseType: 'purchaseType',
     status: 'status',
-    approvalStatus: 'approvalStatus',
-    approvedById: 'approvedById',
-    approvedAt: 'approvedAt',
     createdById: 'createdById',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt',
@@ -519,14 +626,51 @@ exports.PurchaseOrderScalarFieldEnum = {
     projectId: 'projectId',
     organizationId: 'organizationId'
 };
+exports.PurchaseOrderPaymentScalarFieldEnum = {
+    id: 'id',
+    amount: 'amount',
+    paidDate: 'paidDate',
+    reference: 'reference',
+    notes: 'notes',
+    createdAt: 'createdAt',
+    purchaseOrderId: 'purchaseOrderId',
+    manualRecordId: 'manualRecordId',
+    createdById: 'createdById'
+};
+exports.FinanceManualRecordScalarFieldEnum = {
+    id: 'id',
+    vendorName: 'vendorName',
+    itemName: 'itemName',
+    referenceNumber: 'referenceNumber',
+    itemValue: 'itemValue',
+    currency: 'currency',
+    paymentTerms: 'paymentTerms',
+    freight: 'freight',
+    lcNumber: 'lcNumber',
+    lcCharge: 'lcCharge',
+    lcCommission: 'lcCommission',
+    vat: 'vat',
+    refundedAmount: 'refundedAmount',
+    remarks: 'remarks',
+    createdAt: 'createdAt',
+    organizationId: 'organizationId',
+    vendorId: 'vendorId',
+    createdById: 'createdById'
+};
 exports.PurchaseOrderItemScalarFieldEnum = {
     id: 'id',
     itemName: 'itemName',
     quantity: 'quantity',
     unit: 'unit',
     unitPrice: 'unitPrice',
-    notes: 'notes',
+    description: 'description',
     hsnCode: 'hsnCode',
+    freightOverride: 'freightOverride',
+    lcChargeOverride: 'lcChargeOverride',
+    lcCommissionOverride: 'lcCommissionOverride',
+    vatOverride: 'vatOverride',
+    refundedAmount: 'refundedAmount',
+    remarks: 'remarks',
     createdAt: 'createdAt',
     purchaseOrderId: 'purchaseOrderId',
     itemId: 'itemId'
@@ -551,6 +695,19 @@ exports.ProformaInvoiceScalarFieldEnum = {
     fileName: 'fileName',
     filePath: 'filePath',
     status: 'status',
+    taxPercent: 'taxPercent',
+    customerPan: 'customerPan',
+    vendorPan: 'vendorPan',
+    bankBeneficiaryName: 'bankBeneficiaryName',
+    bankAccountNumber: 'bankAccountNumber',
+    bankName: 'bankName',
+    bankSwiftCode: 'bankSwiftCode',
+    bankAddress: 'bankAddress',
+    deliveryTerms: 'deliveryTerms',
+    placeOfLoading: 'placeOfLoading',
+    placeOfDischarge: 'placeOfDischarge',
+    modeOfShipment: 'modeOfShipment',
+    notes: 'notes',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt',
     purchaseOrderId: 'purchaseOrderId'
@@ -561,6 +718,8 @@ exports.ProformaInvoiceItemScalarFieldEnum = {
     quantity: 'quantity',
     unit: 'unit',
     unitPrice: 'unitPrice',
+    hsnCode: 'hsnCode',
+    taxable: 'taxable',
     createdAt: 'createdAt',
     proformaInvoiceId: 'proformaInvoiceId',
     itemId: 'itemId'
@@ -596,6 +755,14 @@ exports.InsuranceScalarFieldEnum = {
     claimStatus: 'claimStatus',
     attachmentFileName: 'attachmentFileName',
     attachmentFilePath: 'attachmentFilePath',
+    createdAt: 'createdAt',
+    shipmentId: 'shipmentId'
+};
+exports.LetterOfCreditScalarFieldEnum = {
+    id: 'id',
+    lcNumber: 'lcNumber',
+    lcCharge: 'lcCharge',
+    lcCommission: 'lcCommission',
     createdAt: 'createdAt',
     shipmentId: 'shipmentId'
 };
@@ -690,23 +857,6 @@ exports.ProjectHeadingScalarFieldEnum = {
     createdAt: 'createdAt',
     projectId: 'projectId',
     parentHeadingId: 'parentHeadingId',
-    organizationId: 'organizationId'
-};
-exports.ReportActivityScalarFieldEnum = {
-    id: 'id',
-    reportType: 'reportType',
-    action: 'action',
-    format: 'format',
-    createdAt: 'createdAt',
-    performedById: 'performedById',
-    organizationId: 'organizationId'
-};
-exports.ReportCommentScalarFieldEnum = {
-    id: 'id',
-    reportKey: 'reportKey',
-    body: 'body',
-    createdAt: 'createdAt',
-    createdById: 'createdById',
     organizationId: 'organizationId'
 };
 exports.RolePermissionScalarFieldEnum = {

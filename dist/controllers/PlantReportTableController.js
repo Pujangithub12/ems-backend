@@ -1,0 +1,392 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.PlantReportTableController = void 0;
+const prisma_1 = require("../config/prisma");
+const plantReport_dto_1 = require("../dto/plantReport.dto");
+const shapeTable = (table) => ({
+    id: table.id,
+    name: table.name,
+    sortOrder: table.sortOrder,
+    isDefault: table.isDefault,
+});
+const shapeColumn = (column) => ({
+    id: column.id,
+    name: column.name,
+    dataType: column.dataType,
+    sortOrder: column.sortOrder,
+    target: column.target,
+});
+const shapeRow = (row) => ({
+    id: row.id,
+    sortOrder: row.sortOrder,
+    values: row.values ?? {},
+});
+/** Manages the Plant Report page's project-scoped custom tables ("tabs") —
+ * each with its own user-defined columns and rows, replacing the old fixed
+ * Daily Log / Work Activities / Manpower / etc. feature entirely per the
+ * redesign: every tab is now a generic spreadsheet, "Progress Tracker" being
+ * just the first one auto-created for a project. */
+class PlantReportTableController {
+    /** GET /plant-report-tables?projectId — lists this project's tables
+     * (no columns/rows — kept light for the tab bar). Auto-creates a
+     * "Progress Tracker" table the first time a project has none, so every
+     * project always has at least one tab (mirrors the default-organization
+     * seeding convention used elsewhere in this app). */
+    static list = async (req, res) => {
+        const projectId = parseInt(req.query.projectId, 10);
+        if (!Number.isInteger(projectId))
+            return res.status(400).json({ message: "projectId is required" });
+        try {
+            const organizationId = req.organization.id;
+            const project = await prisma_1.prisma.project.findFirst({ where: { id: projectId, organizationId } });
+            if (!project)
+                return res.status(404).json({ message: "Project not found in this organization" });
+            let tables = await prisma_1.prisma.plantReportTable.findMany({
+                where: { organizationId, projectId },
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+            });
+            if (tables.length === 0) {
+                const seeded = await prisma_1.prisma.plantReportTable.create({
+                    data: {
+                        organizationId,
+                        projectId,
+                        name: "Progress Tracker",
+                        sortOrder: 0,
+                        isDefault: true,
+                        columns: { create: { name: "Date", dataType: "date", sortOrder: 0 } },
+                    },
+                });
+                tables = [seeded];
+            }
+            return res.status(200).json({ tables: tables.map(shapeTable) });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** GET /plant-report-tables/:id — one table's columns + rows. */
+    static getById = async (req, res) => {
+        const { id } = req.params;
+        const tableId = parseInt(id, 10);
+        if (!Number.isInteger(tableId))
+            return res.status(400).json({ message: "Invalid table id" });
+        try {
+            const organizationId = req.organization.id;
+            const table = await prisma_1.prisma.plantReportTable.findFirst({
+                where: { id: tableId, organizationId },
+                include: {
+                    columns: { orderBy: { sortOrder: "asc" } },
+                    rows: { orderBy: { sortOrder: "asc" } },
+                },
+            });
+            if (!table)
+                return res.status(404).json({ message: "Table not found" });
+            return res.status(200).json({
+                table: shapeTable(table),
+                columns: table.columns.map(shapeColumn),
+                rows: table.rows.map(shapeRow),
+            });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** POST /plant-report-tables?projectId — creates a new tab (admin-only, roleMiddleware on the route). */
+    static create = async (req, res) => {
+        const projectId = parseInt(req.query.projectId ?? req.body.projectId, 10);
+        const body = req.body;
+        const name = (body.name || "").trim();
+        if (!Number.isInteger(projectId))
+            return res.status(400).json({ message: "projectId is required" });
+        if (!name)
+            return res.status(400).json({ message: "Table name is required" });
+        try {
+            const organizationId = req.organization.id;
+            const project = await prisma_1.prisma.project.findFirst({ where: { id: projectId, organizationId } });
+            if (!project)
+                return res.status(404).json({ message: "Project not found in this organization" });
+            const count = await prisma_1.prisma.plantReportTable.count({ where: { organizationId, projectId } });
+            const table = await prisma_1.prisma.plantReportTable.create({
+                data: { organizationId, projectId, name, sortOrder: count },
+            });
+            return res.status(201).json({ table: shapeTable(table) });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** PUT /plant-report-tables/:id — rename (admin-only). */
+    static update = async (req, res) => {
+        const { id } = req.params;
+        const tableId = parseInt(id, 10);
+        if (!Number.isInteger(tableId))
+            return res.status(400).json({ message: "Invalid table id" });
+        const body = req.body;
+        const name = (body.name || "").trim();
+        if (!name)
+            return res.status(400).json({ message: "Table name is required" });
+        try {
+            const organizationId = req.organization.id;
+            const existing = await prisma_1.prisma.plantReportTable.findFirst({ where: { id: tableId, organizationId } });
+            if (!existing)
+                return res.status(404).json({ message: "Table not found" });
+            if (existing.isDefault)
+                return res.status(403).json({ message: "The default Progress Tracker tab can't be renamed" });
+            const updated = await prisma_1.prisma.plantReportTable.update({ where: { id: tableId }, data: { name } });
+            return res.status(200).json({ table: shapeTable(updated) });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** DELETE /plant-report-tables/:id (admin-only) — cascades to its columns/rows. */
+    static remove = async (req, res) => {
+        const { id } = req.params;
+        const tableId = parseInt(id, 10);
+        if (!Number.isInteger(tableId))
+            return res.status(400).json({ message: "Invalid table id" });
+        try {
+            const organizationId = req.organization.id;
+            const existing = await prisma_1.prisma.plantReportTable.findFirst({ where: { id: tableId, organizationId } });
+            if (!existing)
+                return res.status(404).json({ message: "Table not found" });
+            if (existing.isDefault)
+                return res.status(403).json({ message: "The default Progress Tracker tab can't be deleted" });
+            await prisma_1.prisma.plantReportTable.delete({ where: { id: tableId } });
+            return res.status(200).json({ message: "Table deleted" });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** POST /plant-report-tables/:id/columns — adds a column (admin-only). */
+    static createColumn = async (req, res) => {
+        const { id } = req.params;
+        const tableId = parseInt(id, 10);
+        if (!Number.isInteger(tableId))
+            return res.status(400).json({ message: "Invalid table id" });
+        const body = req.body;
+        const name = (body.name || "").trim();
+        if (!name)
+            return res.status(400).json({ message: "Column name is required" });
+        if (!plantReport_dto_1.VALID_COLUMN_DATA_TYPES.has(body.dataType)) {
+            return res.status(400).json({ message: "dataType must be one of text, number, date, boolean" });
+        }
+        try {
+            const organizationId = req.organization.id;
+            const table = await prisma_1.prisma.plantReportTable.findFirst({ where: { id: tableId, organizationId } });
+            if (!table)
+                return res.status(404).json({ message: "Table not found" });
+            const targetNum = Number(body.target);
+            const target = body.target != null && body.target !== "" && Number.isFinite(targetNum) ? targetNum : null;
+            const count = await prisma_1.prisma.plantReportColumn.count({ where: { tableId } });
+            const column = await prisma_1.prisma.plantReportColumn.create({
+                data: { tableId, name, dataType: body.dataType, sortOrder: count, target },
+            });
+            return res.status(201).json({ column: shapeColumn(column) });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** PUT /plant-report-columns/:id — rename / change type (admin-only). */
+    static updateColumn = async (req, res) => {
+        const { id } = req.params;
+        const columnId = parseInt(id, 10);
+        if (!Number.isInteger(columnId))
+            return res.status(400).json({ message: "Invalid column id" });
+        const body = req.body;
+        const name = (body.name || "").trim();
+        if (!name)
+            return res.status(400).json({ message: "Column name is required" });
+        if (!plantReport_dto_1.VALID_COLUMN_DATA_TYPES.has(body.dataType)) {
+            return res.status(400).json({ message: "dataType must be one of text, number, date, boolean" });
+        }
+        try {
+            const organizationId = req.organization.id;
+            const existing = await prisma_1.prisma.plantReportColumn.findFirst({
+                where: { id: columnId, table: { organizationId } },
+                include: { table: { select: { isDefault: true } } },
+            });
+            if (!existing)
+                return res.status(404).json({ message: "Column not found" });
+            if (existing.table.isDefault && existing.dataType === "date" && body.dataType !== "date") {
+                const otherDateColumns = await prisma_1.prisma.plantReportColumn.count({
+                    where: { tableId: existing.tableId, dataType: "date", id: { not: columnId } },
+                });
+                if (otherDateColumns === 0) {
+                    return res.status(403).json({ message: "Progress Tracker must keep at least one Date column" });
+                }
+            }
+            const targetNum = Number(body.target);
+            const target = body.target != null && body.target !== "" && Number.isFinite(targetNum) ? targetNum : null;
+            const updated = await prisma_1.prisma.plantReportColumn.update({
+                where: { id: columnId },
+                data: { name, dataType: body.dataType, target },
+            });
+            return res.status(200).json({ column: shapeColumn(updated) });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** DELETE /plant-report-columns/:id (admin-only) — existing rows keep the
+     * now-orphaned key in their `values` JSON (ignored on read), same
+     * convention as this app's other org-defined-field features. Blocked if
+     * it's the Progress Tracker's only remaining Date column. */
+    static removeColumn = async (req, res) => {
+        const { id } = req.params;
+        const columnId = parseInt(id, 10);
+        if (!Number.isInteger(columnId))
+            return res.status(400).json({ message: "Invalid column id" });
+        try {
+            const organizationId = req.organization.id;
+            const existing = await prisma_1.prisma.plantReportColumn.findFirst({
+                where: { id: columnId, table: { organizationId } },
+                include: { table: { select: { isDefault: true } } },
+            });
+            if (!existing)
+                return res.status(404).json({ message: "Column not found" });
+            if (existing.table.isDefault && existing.dataType === "date") {
+                const otherDateColumns = await prisma_1.prisma.plantReportColumn.count({
+                    where: { tableId: existing.tableId, dataType: "date", id: { not: columnId } },
+                });
+                if (otherDateColumns === 0) {
+                    return res.status(403).json({ message: "Progress Tracker must keep at least one Date column" });
+                }
+            }
+            await prisma_1.prisma.plantReportColumn.delete({ where: { id: columnId } });
+            return res.status(200).json({ message: "Column deleted" });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** POST /plant-report-tables/:id/rows — adds a row (any org member). */
+    static createRow = async (req, res) => {
+        const { id } = req.params;
+        const tableId = parseInt(id, 10);
+        if (!Number.isInteger(tableId))
+            return res.status(400).json({ message: "Invalid table id" });
+        const body = req.body;
+        try {
+            const organizationId = req.organization.id;
+            const table = await prisma_1.prisma.plantReportTable.findFirst({
+                where: { id: tableId, organizationId },
+                include: { columns: true },
+            });
+            if (!table)
+                return res.status(404).json({ message: "Table not found" });
+            const count = await prisma_1.prisma.plantReportRow.count({ where: { tableId } });
+            const row = await prisma_1.prisma.plantReportRow.create({
+                data: { tableId, sortOrder: count, values: (0, plantReport_dto_1.coerceRowValues)(table.columns, body.values) },
+            });
+            return res.status(201).json({ row: shapeRow(row) });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** PUT /plant-report-rows/:id — full replace of a row's cell values (any org member). */
+    static updateRow = async (req, res) => {
+        const { id } = req.params;
+        const rowId = parseInt(id, 10);
+        if (!Number.isInteger(rowId))
+            return res.status(400).json({ message: "Invalid row id" });
+        const body = req.body;
+        try {
+            const organizationId = req.organization.id;
+            const existing = await prisma_1.prisma.plantReportRow.findFirst({
+                where: { id: rowId, table: { organizationId } },
+                include: { table: { include: { columns: true } } },
+            });
+            if (!existing)
+                return res.status(404).json({ message: "Row not found" });
+            const updated = await prisma_1.prisma.plantReportRow.update({
+                where: { id: rowId },
+                data: { values: (0, plantReport_dto_1.coerceRowValues)(existing.table.columns, body.values) },
+            });
+            return res.status(200).json({ row: shapeRow(updated) });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** DELETE /plant-report-rows/:id (any org member). */
+    static removeRow = async (req, res) => {
+        const { id } = req.params;
+        const rowId = parseInt(id, 10);
+        if (!Number.isInteger(rowId))
+            return res.status(400).json({ message: "Invalid row id" });
+        try {
+            const organizationId = req.organization.id;
+            const existing = await prisma_1.prisma.plantReportRow.findFirst({ where: { id: rowId, table: { organizationId } } });
+            if (!existing)
+                return res.status(404).json({ message: "Row not found" });
+            await prisma_1.prisma.plantReportRow.delete({ where: { id: rowId } });
+            return res.status(200).json({ message: "Row deleted" });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /** POST /plant-report-tables/:id/import — bulk-imports an uploaded
+     * spreadsheet (any org member, same permission level as adding a row —
+     * this is data entry, just many rows at once). Columns are never created
+     * here: the file is parsed and matched to this table's *existing* columns
+     * client-side (by header name), already keyed by column id exactly like a
+     * manual row create, so this just reuses `coerceRowValues` to bulk-insert
+     * rows — any column data doesn't match still gets dropped, since
+     * `coerceRowValues` only keeps keys that are real column ids. */
+    static importSheet = async (req, res) => {
+        const { id } = req.params;
+        const tableId = parseInt(id, 10);
+        if (!Number.isInteger(tableId))
+            return res.status(400).json({ message: "Invalid table id" });
+        const body = req.body;
+        if (!Array.isArray(body.rows)) {
+            return res.status(400).json({ message: "rows are required" });
+        }
+        try {
+            const organizationId = req.organization.id;
+            const table = await prisma_1.prisma.plantReportTable.findFirst({
+                where: { id: tableId, organizationId },
+                include: { columns: true },
+            });
+            if (!table)
+                return res.status(404).json({ message: "Table not found" });
+            const result = await prisma_1.prisma.$transaction(async (tx) => {
+                let rowSortOrder = await tx.plantReportRow.count({ where: { tableId } });
+                let rowsCreated = 0;
+                for (const rawRow of body.rows) {
+                    if (!rawRow || typeof rawRow !== "object")
+                        continue;
+                    const values = (0, plantReport_dto_1.coerceRowValues)(table.columns, rawRow);
+                    if (Object.keys(values).length === 0)
+                        continue;
+                    await tx.plantReportRow.create({ data: { tableId, sortOrder: rowSortOrder++, values } });
+                    rowsCreated++;
+                }
+                return { rowsCreated };
+            });
+            return res.status(200).json(result);
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+}
+exports.PlantReportTableController = PlantReportTableController;
+//# sourceMappingURL=PlantReportTableController.js.map

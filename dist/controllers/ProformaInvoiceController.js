@@ -2,9 +2,15 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProformaInvoiceController = void 0;
 const prisma_1 = require("../config/prisma");
+const proformaInvoicePdf_1 = require("../utils/proformaInvoicePdf");
+const supabaseStorage_1 = require("../config/supabaseStorage");
 const DETAIL_INCLUDE = {
     purchaseOrder: true,
     items: { include: { item: true } },
+};
+const PDF_INCLUDE = {
+    purchaseOrder: { include: { vendor: true, organization: true } },
+    items: true,
 };
 const LIST_INCLUDE = {
     purchaseOrder: { include: { vendor: true, project: true } },
@@ -32,6 +38,8 @@ async function resolveItemInputs(rawItems, organizationId) {
             quantity: raw.quantity && raw.quantity > 0 ? Math.round(raw.quantity) : 1,
             unit: raw.unit ?? null,
             unitPrice: raw.unitPrice ?? null,
+            hsnCode: raw.hsnCode ?? null,
+            taxable: raw.taxable ?? true,
         });
     }
     return resolved;
@@ -65,7 +73,7 @@ class ProformaInvoiceController {
     /** POST /purchase-orders/:id/proforma-invoices — creates a proforma invoice for a purchase order with its line items. Admin-gated (see routes.ts). */
     static addProformaInvoice = async (req, res) => {
         const { id } = req.params;
-        const { piNumber, piDate, currency, exchangeRate, paymentTerms, validityDate, items } = req.body;
+        const { piNumber, piDate, currency, exchangeRate, paymentTerms, validityDate, taxPercent, customerPan, vendorPan, bankBeneficiaryName, bankAccountNumber, bankName, bankSwiftCode, bankAddress, deliveryTerms, placeOfLoading, placeOfDischarge, modeOfShipment, notes, items, } = req.body;
         try {
             const purchaseOrder = await prisma_1.prisma.purchaseOrder.findFirst({
                 where: { id: parseInt(id), organizationId: req.organization.id },
@@ -88,6 +96,19 @@ class ProformaInvoiceController {
                     ...(piDate ? { piDate: new Date(piDate) } : {}),
                     ...(paymentTerms ? { paymentTerms } : {}),
                     ...(validityDate ? { validityDate: new Date(validityDate) } : {}),
+                    ...(taxPercent !== undefined ? { taxPercent } : {}),
+                    ...(customerPan ? { customerPan } : {}),
+                    ...(vendorPan ? { vendorPan } : {}),
+                    ...(bankBeneficiaryName ? { bankBeneficiaryName } : {}),
+                    ...(bankAccountNumber ? { bankAccountNumber } : {}),
+                    ...(bankName ? { bankName } : {}),
+                    ...(bankSwiftCode ? { bankSwiftCode } : {}),
+                    ...(bankAddress ? { bankAddress } : {}),
+                    ...(deliveryTerms ? { deliveryTerms } : {}),
+                    ...(placeOfLoading ? { placeOfLoading } : {}),
+                    ...(placeOfDischarge ? { placeOfDischarge } : {}),
+                    ...(modeOfShipment ? { modeOfShipment } : {}),
+                    ...(notes ? { notes } : {}),
                     items: { create: resolvedItems },
                 },
             });
@@ -107,7 +128,7 @@ class ProformaInvoiceController {
     /** PUT /proforma-invoices/:id — update fields and/or full-replace line items. Admin-gated. */
     static updateProformaInvoice = async (req, res) => {
         const { id } = req.params;
-        const { piNumber, piDate, currency, exchangeRate, paymentTerms, validityDate, status, items } = req.body;
+        const { piNumber, piDate, currency, exchangeRate, paymentTerms, validityDate, status, taxPercent, customerPan, vendorPan, bankBeneficiaryName, bankAccountNumber, bankName, bankSwiftCode, bankAddress, deliveryTerms, placeOfLoading, placeOfDischarge, modeOfShipment, notes, items, } = req.body;
         try {
             const existing = await ProformaInvoiceController.loadOwnedProformaInvoice(id, req.organization.id);
             if (!existing)
@@ -127,6 +148,32 @@ class ProformaInvoiceController {
                 data.piDate = piDate ? new Date(piDate) : null;
             if (validityDate !== undefined)
                 data.validityDate = validityDate ? new Date(validityDate) : null;
+            if (taxPercent !== undefined)
+                data.taxPercent = taxPercent;
+            if (customerPan !== undefined)
+                data.customerPan = customerPan;
+            if (vendorPan !== undefined)
+                data.vendorPan = vendorPan;
+            if (bankBeneficiaryName !== undefined)
+                data.bankBeneficiaryName = bankBeneficiaryName;
+            if (bankAccountNumber !== undefined)
+                data.bankAccountNumber = bankAccountNumber;
+            if (bankName !== undefined)
+                data.bankName = bankName;
+            if (bankSwiftCode !== undefined)
+                data.bankSwiftCode = bankSwiftCode;
+            if (bankAddress !== undefined)
+                data.bankAddress = bankAddress;
+            if (deliveryTerms !== undefined)
+                data.deliveryTerms = deliveryTerms;
+            if (placeOfLoading !== undefined)
+                data.placeOfLoading = placeOfLoading;
+            if (placeOfDischarge !== undefined)
+                data.placeOfDischarge = placeOfDischarge;
+            if (modeOfShipment !== undefined)
+                data.modeOfShipment = modeOfShipment;
+            if (notes !== undefined)
+                data.notes = notes;
             if (items !== undefined) {
                 let resolvedItems;
                 try {
@@ -204,6 +251,75 @@ class ProformaInvoiceController {
                 },
             });
             return res.status(200).json({ message: "Attachment uploaded", proformaInvoice });
+        }
+        catch (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Internal server error" });
+        }
+    };
+    /**
+     * GET /proforma-invoices/:id/pdf — renders the PI on demand and streams it back as an
+     * attachment, always regenerated live from current data (mirrors PurchaseOrderController.downloadPdf).
+     */
+    static downloadPdf = async (req, res) => {
+        const { id } = req.params;
+        try {
+            const proformaInvoice = await prisma_1.prisma.proformaInvoice.findFirst({
+                where: { id: parseInt(id) },
+                include: PDF_INCLUDE,
+            });
+            if (!proformaInvoice || proformaInvoice.purchaseOrder?.organizationId !== req.organization.id) {
+                return res.status(404).json({ message: "Proforma invoice not found" });
+            }
+            const organization = proformaInvoice.purchaseOrder?.organization;
+            const loadOrgImage = async (key) => {
+                if (!key)
+                    return null;
+                try {
+                    return await (0, supabaseStorage_1.downloadFileFromStorage)(key);
+                }
+                catch (error) {
+                    console.error(`Failed to load organization letterhead image "${key}":`, error);
+                    return null;
+                }
+            };
+            const [signatureImage, stampImage] = await Promise.all([
+                loadOrgImage(organization?.signatureImagePath),
+                loadOrgImage(organization?.stampImagePath),
+            ]);
+            const doc = (0, proformaInvoicePdf_1.buildProformaInvoicePdf)({
+                piNumber: proformaInvoice.piNumber,
+                piDate: proformaInvoice.piDate,
+                taxPercent: proformaInvoice.taxPercent,
+                currency: proformaInvoice.currency,
+                paymentTerms: proformaInvoice.paymentTerms,
+                notes: proformaInvoice.notes,
+                customerContactPerson: proformaInvoice.purchaseOrder?.customerContactPerson ?? null,
+                customerPan: proformaInvoice.customerPan,
+                organizationName: organization?.name ?? null,
+                organizationAddress: organization?.address ?? null,
+                organizationContact: organization?.contact ?? null,
+                organizationEmail: organization?.email ?? null,
+                vendorPan: proformaInvoice.vendorPan,
+                vendor: proformaInvoice.purchaseOrder?.vendor ?? null,
+                bankBeneficiaryName: proformaInvoice.bankBeneficiaryName,
+                bankAccountNumber: proformaInvoice.bankAccountNumber,
+                bankName: proformaInvoice.bankName,
+                bankSwiftCode: proformaInvoice.bankSwiftCode,
+                bankAddress: proformaInvoice.bankAddress,
+                deliveryTerms: proformaInvoice.deliveryTerms,
+                placeOfLoading: proformaInvoice.placeOfLoading,
+                placeOfDischarge: proformaInvoice.placeOfDischarge,
+                modeOfShipment: proformaInvoice.modeOfShipment,
+                signatureImage,
+                stampImage,
+                items: proformaInvoice.items,
+            });
+            const downloadName = (proformaInvoice.piNumber || `PI-${proformaInvoice.id}`).replace(/\//g, "-");
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `attachment; filename="${downloadName}.pdf"`);
+            doc.pipe(res);
+            doc.end();
         }
         catch (error) {
             console.error(error);

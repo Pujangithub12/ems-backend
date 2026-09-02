@@ -221,6 +221,8 @@ router.post("/plant-report-tables/:id/import", authMiddleware, PlantReportTableC
 // work activities, equipment, manpower, photos. Any org member can read and
 // save (data entry, same level as filling in a paper DPR); only admins can
 // delete a whole report.
+router.get("/site-activity-options", authMiddleware, SiteActivityController.listOptions);
+router.post("/site-activity-options", authMiddleware, SiteActivityController.createOption);
 router.get("/site-activity-reports", authMiddleware, SiteActivityController.getByDate);
 router.get("/site-activity-reports/range", authMiddleware, SiteActivityController.getRange);
 router.post("/site-activity-reports", authMiddleware, SiteActivityController.save);
@@ -487,6 +489,7 @@ router.post(
   ...uploadProformaInvoiceFile,
   ProformaInvoiceController.addAttachment,
 );
+router.get("/proforma-invoices/:id/pdf", authMiddleware, ProformaInvoiceController.downloadPdf);
 
 // Shipment (Local + International) + Insurance + Customs
 router.post(
