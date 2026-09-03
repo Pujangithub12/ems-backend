@@ -12,18 +12,46 @@ import { downloadFileFromStorage } from "../config/supabaseStorage";
 
 const DETAIL_INCLUDE = {
   purchaseOrder: true,
+  vendor: true,
   items: { include: { item: true } },
 } as const;
 
 const PDF_INCLUDE = {
   purchaseOrder: { include: { vendor: true, organization: true } },
+  organization: true,
+  vendor: true,
   items: true,
 } as const;
 
 const LIST_INCLUDE = {
   purchaseOrder: { include: { vendor: true, project: true } },
+  vendor: true,
   items: true,
 } as const;
+
+/** Resolves the PDF's VENDOR box: a PO-backed PI always uses the PO's vendor; a PO-less PI uses
+ * its own freeform vendor* fields, falling back to the linked Vendor's stored details for any
+ * field left blank. */
+function resolvePdfVendor(pi: {
+  purchaseOrder?: { vendor: { name: string; contactPerson: string | null; address: string | null; location: string | null; contact: string | null; email: string | null } | null } | null;
+  vendor?: { name: string; contactPerson: string | null; address: string | null; location: string | null; contact: string | null; email: string | null } | null;
+  vendorName?: string | null;
+  vendorContactPerson?: string | null;
+  vendorAddress?: string | null;
+  vendorContact?: string | null;
+  vendorEmail?: string | null;
+}) {
+  if (pi.purchaseOrder) return pi.purchaseOrder.vendor ?? null;
+  if (!pi.vendorName && !pi.vendor) return null;
+  return {
+    name: pi.vendorName || pi.vendor?.name || "",
+    contactPerson: pi.vendorContactPerson || pi.vendor?.contactPerson || null,
+    address: pi.vendorAddress || pi.vendor?.address || null,
+    location: pi.vendor?.location ?? null,
+    contact: pi.vendorContact || pi.vendor?.contact || null,
+    email: pi.vendorEmail || pi.vendor?.email || null,
+  };
+}
 
 /** Resolves item-name/catalog-item pairs for a proforma invoice's line items — prefers the catalog reference when given. Tolerates an empty/undefined list. */
 async function resolveItemInputs(rawItems: ProformaInvoiceItemInput[] | undefined, organizationId: number) {
@@ -69,15 +97,15 @@ export class ProformaInvoiceController {
       where: { id: parseInt(id) },
       include: DETAIL_INCLUDE,
     });
-    if (!proformaInvoice || proformaInvoice.purchaseOrder?.organizationId !== organizationId) return null;
+    if (!proformaInvoice || proformaInvoice.organizationId !== organizationId) return null;
     return proformaInvoice;
   }
 
-  /** GET /workspace/proforma-invoices — every proforma invoice across every purchase order in the organization, for the sidebar Proforma Invoices page. */
+  /** GET /workspace/proforma-invoices — every proforma invoice in the organization (PO-backed or standalone), for the sidebar Proforma Invoices page. */
   static getAllProformaInvoices = async (req: AuthRequest, res: Response) => {
     try {
       const proformaInvoices = await prisma.proformaInvoice.findMany({
-        where: { purchaseOrder: { organizationId: req.organization!.id } },
+        where: { organizationId: req.organization!.id },
         include: LIST_INCLUDE,
         orderBy: { createdAt: "desc" },
       });
@@ -130,6 +158,8 @@ export class ProformaInvoiceController {
       const created = await prisma.proformaInvoice.create({
         data: {
           purchaseOrderId: purchaseOrder.id,
+          organizationId: req.organization!.id,
+          createdById: req.user!.id,
           currency: currency ?? "NPR",
           exchangeRate: exchangeRate ?? 1,
           ...(piNumber ? { piNumber } : {}),
@@ -168,6 +198,105 @@ export class ProformaInvoiceController {
     }
   };
 
+  /** POST /workspace/proforma-invoices — creates a proforma invoice with no purchase order behind it
+   * (a standalone/quote-only PI). Vendor details are either linked from an existing Vendor (vendorId)
+   * or entered freeform (vendorName/vendorContactPerson/...) — mirrors FinanceManualRecord's pattern
+   * for org-scoped rows that aren't tied to a real PurchaseOrder. Admin-gated (see routes.ts). */
+  static addStandaloneProformaInvoice = async (req: AuthRequest, res: Response) => {
+    const {
+      piNumber,
+      piDate,
+      currency,
+      exchangeRate,
+      paymentTerms,
+      validityDate,
+      taxPercent,
+      customerPan,
+      vendorPan,
+      vendorId,
+      vendorName,
+      vendorContactPerson,
+      vendorAddress,
+      vendorContact,
+      vendorEmail,
+      bankBeneficiaryName,
+      bankAccountNumber,
+      bankName,
+      bankSwiftCode,
+      bankAddress,
+      deliveryTerms,
+      placeOfLoading,
+      placeOfDischarge,
+      modeOfShipment,
+      notes,
+      items,
+    }: AddProformaInvoiceDto = req.body;
+
+    try {
+      let linkedVendor = null as Awaited<ReturnType<typeof prisma.vendor.findFirst>> | null;
+      if (vendorId) {
+        linkedVendor = await prisma.vendor.findFirst({ where: { id: vendorId, organizationId: req.organization!.id } });
+        if (!linkedVendor) return res.status(404).json({ message: "Selected vendor not found" });
+      }
+      if (!linkedVendor && !vendorName?.trim()) {
+        return res.status(400).json({ message: "Select a vendor or enter a vendor name" });
+      }
+
+      let resolvedItems;
+      try {
+        resolvedItems = await resolveItemInputs(items, req.organization!.id);
+      } catch (validationError) {
+        return res.status(400).json({ message: (validationError as Error).message });
+      }
+
+      const created = await prisma.proformaInvoice.create({
+        data: {
+          organizationId: req.organization!.id,
+          createdById: req.user!.id,
+          ...(vendorId ? { vendorId } : {}),
+          currency: currency ?? "NPR",
+          exchangeRate: exchangeRate ?? 1,
+          ...(piNumber ? { piNumber } : {}),
+          ...(piDate ? { piDate: new Date(piDate) } : {}),
+          ...(paymentTerms ? { paymentTerms } : {}),
+          ...(validityDate ? { validityDate: new Date(validityDate) } : {}),
+          ...(taxPercent !== undefined ? { taxPercent } : {}),
+          ...(customerPan ? { customerPan } : {}),
+          ...(vendorPan ? { vendorPan } : {}),
+          ...(vendorName ? { vendorName } : {}),
+          ...(vendorContactPerson ? { vendorContactPerson } : {}),
+          ...(vendorAddress ? { vendorAddress } : {}),
+          ...(vendorContact ? { vendorContact } : {}),
+          ...(vendorEmail ? { vendorEmail } : {}),
+          ...(bankBeneficiaryName ? { bankBeneficiaryName } : {}),
+          ...(bankAccountNumber ? { bankAccountNumber } : {}),
+          ...(bankName ? { bankName } : {}),
+          ...(bankSwiftCode ? { bankSwiftCode } : {}),
+          ...(bankAddress ? { bankAddress } : {}),
+          ...(deliveryTerms ? { deliveryTerms } : {}),
+          ...(placeOfLoading ? { placeOfLoading } : {}),
+          ...(placeOfDischarge ? { placeOfDischarge } : {}),
+          ...(modeOfShipment ? { modeOfShipment } : {}),
+          ...(notes ? { notes } : {}),
+          items: { create: resolvedItems },
+        },
+      });
+
+      const generatedPiNumber = `PI-${String(created.id).padStart(6, "0")}`;
+      await prisma.proformaInvoice.update({ where: { id: created.id }, data: { piNumber: generatedPiNumber } });
+
+      const proformaInvoice = await prisma.proformaInvoice.findUnique({
+        where: { id: created.id },
+        include: { items: true, vendor: true },
+      });
+
+      return res.status(201).json({ message: "Proforma invoice created", proformaInvoice });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   /** PUT /proforma-invoices/:id — update fields and/or full-replace line items. Admin-gated. */
   static updateProformaInvoice = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
@@ -182,6 +311,12 @@ export class ProformaInvoiceController {
       taxPercent,
       customerPan,
       vendorPan,
+      vendorId,
+      vendorName,
+      vendorContactPerson,
+      vendorAddress,
+      vendorContact,
+      vendorEmail,
       bankBeneficiaryName,
       bankAccountNumber,
       bankName,
@@ -210,6 +345,18 @@ export class ProformaInvoiceController {
       if (taxPercent !== undefined) data.taxPercent = taxPercent;
       if (customerPan !== undefined) data.customerPan = customerPan;
       if (vendorPan !== undefined) data.vendorPan = vendorPan;
+      if (vendorId !== undefined) {
+        if (vendorId) {
+          const linkedVendor = await prisma.vendor.findFirst({ where: { id: vendorId, organizationId: req.organization!.id } });
+          if (!linkedVendor) return res.status(404).json({ message: "Selected vendor not found" });
+        }
+        data.vendorId = vendorId;
+      }
+      if (vendorName !== undefined) data.vendorName = vendorName;
+      if (vendorContactPerson !== undefined) data.vendorContactPerson = vendorContactPerson;
+      if (vendorAddress !== undefined) data.vendorAddress = vendorAddress;
+      if (vendorContact !== undefined) data.vendorContact = vendorContact;
+      if (vendorEmail !== undefined) data.vendorEmail = vendorEmail;
       if (bankBeneficiaryName !== undefined) data.bankBeneficiaryName = bankBeneficiaryName;
       if (bankAccountNumber !== undefined) data.bankAccountNumber = bankAccountNumber;
       if (bankName !== undefined) data.bankName = bankName;
@@ -319,11 +466,11 @@ export class ProformaInvoiceController {
         where: { id: parseInt(id as string) },
         include: PDF_INCLUDE,
       });
-      if (!proformaInvoice || proformaInvoice.purchaseOrder?.organizationId !== req.organization!.id) {
+      if (!proformaInvoice || proformaInvoice.organizationId !== req.organization!.id) {
         return res.status(404).json({ message: "Proforma invoice not found" });
       }
 
-      const organization = proformaInvoice.purchaseOrder?.organization;
+      const organization = proformaInvoice.purchaseOrder?.organization ?? proformaInvoice.organization;
       const loadOrgImage = async (key: string | null | undefined) => {
         if (!key) return null;
         try {
@@ -352,7 +499,7 @@ export class ProformaInvoiceController {
         organizationContact: organization?.contact ?? null,
         organizationEmail: organization?.email ?? null,
         vendorPan: proformaInvoice.vendorPan,
-        vendor: proformaInvoice.purchaseOrder?.vendor ?? null,
+        vendor: resolvePdfVendor(proformaInvoice),
         bankBeneficiaryName: proformaInvoice.bankBeneficiaryName,
         bankAccountNumber: proformaInvoice.bankAccountNumber,
         bankName: proformaInvoice.bankName,

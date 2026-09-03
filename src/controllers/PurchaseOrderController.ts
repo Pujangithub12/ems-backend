@@ -482,7 +482,7 @@ export class PurchaseOrderController {
    * payments even though finance doesn't hold "projects.procurement" by default. */
   static addPurchaseOrderPayment = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { amount, paidDate, reference, notes }: AddPurchaseOrderPaymentDto = req.body;
+    const { amount, paidDate, exchangeRate, reference, notes }: AddPurchaseOrderPaymentDto = req.body;
 
     if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ message: "A valid amount is required" });
@@ -490,6 +490,9 @@ export class PurchaseOrderController {
     const parsedDate = paidDate ? new Date(paidDate) : null;
     if (!parsedDate || Number.isNaN(parsedDate.getTime())) {
       return res.status(400).json({ message: "A valid paid date is required" });
+    }
+    if (exchangeRate != null && (typeof exchangeRate !== "number" || !Number.isFinite(exchangeRate) || exchangeRate <= 0)) {
+      return res.status(400).json({ message: "A valid exchange rate is required" });
     }
 
     try {
@@ -509,6 +512,7 @@ export class PurchaseOrderController {
           purchaseOrderId: existing.id,
           amount,
           paidDate: parsedDate,
+          exchangeRate: exchangeRate ?? null,
           reference: reference?.trim() || null,
           notes: notes?.trim() || null,
           createdById: req.user!.id,

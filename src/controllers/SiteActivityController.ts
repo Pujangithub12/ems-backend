@@ -31,6 +31,7 @@ const shapeReport = (report: {
   createdAt: Date;
   updatedAt: Date;
   createdBy: { id: number; fullName: string } | null;
+  updatedBy: { id: number; fullName: string } | null;
   activities: { id: number; sortOrder: number; description: string; chainage: string | null; todayQty: number | null; unit: string | null; status: string; remarks: string | null; photos: { id: number; filePath: string; fileName: string; caption: string | null }[] }[];
   equipment: { id: number; sortOrder: number; equipmentName: string; quantity: number; workingHours: number | null; condition: string; remarks: string | null }[];
   manpower: { id: number; sortOrder: number; role: string; headcount: number; names: string | null; remarks: string | null }[];
@@ -50,6 +51,7 @@ const shapeReport = (report: {
   signedBy: report.signedBy,
   status: report.status,
   createdBy: report.createdBy ? { id: report.createdBy.id, name: report.createdBy.fullName } : null,
+  updatedBy: report.updatedBy ? { id: report.updatedBy.id, name: report.updatedBy.fullName } : null,
   createdAt: report.createdAt,
   updatedAt: report.updatedAt,
   activities: report.activities
@@ -100,6 +102,7 @@ const shapeReport = (report: {
 
 const REPORT_INCLUDE = {
   createdBy: { select: { id: true, fullName: true } },
+  updatedBy: { select: { id: true, fullName: true } },
   activities: { include: { photos: true } },
   equipment: true,
   manpower: true,
@@ -322,7 +325,10 @@ export class SiteActivityController {
         let id: number;
         if (existing) {
           id = existing.id;
-          await tx.siteActivityReport.update({ where: { id }, data: { location, status, reportDateBs, preparedBy, remarks, signedBy } });
+          await tx.siteActivityReport.update({
+            where: { id },
+            data: { location, status, reportDateBs, preparedBy, remarks, signedBy, updatedById: req.user!.id },
+          });
           await tx.siteActivityItem.deleteMany({ where: { reportId: id } });
           await tx.siteActivityEquipment.deleteMany({ where: { reportId: id } });
           await tx.siteActivityManpower.deleteMany({ where: { reportId: id } });
@@ -332,7 +338,19 @@ export class SiteActivityController {
           await tx.siteActivityInstruction.deleteMany({ where: { reportId: id } });
         } else {
           const created = await tx.siteActivityReport.create({
-            data: { organizationId, projectId, reportDate, location, status, reportDateBs, preparedBy, remarks, signedBy, createdById: req.user!.id },
+            data: {
+              organizationId,
+              projectId,
+              reportDate,
+              location,
+              status,
+              reportDateBs,
+              preparedBy,
+              remarks,
+              signedBy,
+              createdById: req.user!.id,
+              updatedById: req.user!.id,
+            },
           });
           id = created.id;
         }

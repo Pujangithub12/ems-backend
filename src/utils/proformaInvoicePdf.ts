@@ -65,29 +65,34 @@ export interface ProformaInvoicePdfData {
   items: ProformaInvoicePdfItem[];
 }
 
-// Colors — reused from purchaseOrderPdf.ts so both generated documents share one visual language.
-const NAVY = "#1B3E6B";
-const BADGE_NAVY = "#234061";
-const LIGHT_BG = "#DCE6F0";
+// Colors — matches the company's reference paper Proforma Invoice: a dark forest-green
+// letterhead/section-bar theme with a light sage-green fill for boxed content, rather than the
+// navy theme purchaseOrderPdf.ts uses.
+const NAVY = "#2E4A28";
+const BADGE_NAVY = "#41652F";
+const LIGHT_BG = "#E4EEDD";
 const BLACK = "#000000";
 const SIGNATURE_GRAY = "#545454";
+const BORDER_GREEN = "#2E4A28";
 
 const PAGE_WIDTH = 612;
 const PAGE_HEIGHT = 792;
-const MARGIN_TOP = 40;
-const MARGIN_RIGHT = 54;
+const MARGIN_TOP = 22;
+const MARGIN_RIGHT = 26;
 const MARGIN_BOTTOM = 14;
-const MARGIN_LEFT = 54;
+const MARGIN_LEFT = 26;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
 
 const FONT_COMPANY = "Company";
 const FONT_BODY = "Body";
 const FONT_BODY_BOLD = "Body-Bold";
 const FONT_BODY_BOLD_ITALIC = "Body-BoldItalic";
-const FONT_COMPANY_PATH = require.resolve("@fontsource/caladea/files/caladea-latin-700-normal.woff");
-const FONT_BODY_PATH = require.resolve("@fontsource/carlito/files/carlito-latin-400-normal.woff");
-const FONT_BODY_BOLD_PATH = require.resolve("@fontsource/carlito/files/carlito-latin-700-normal.woff");
-const FONT_BODY_BOLD_ITALIC_PATH = require.resolve("@fontsource/carlito/files/carlito-latin-700-italic.woff");
+// Comic Neue — a free, metric-compatible substitute for Comic Sans MS (which is a proprietary
+// Microsoft font that can't be redistributed/embedded), used throughout this PDF per request.
+const FONT_COMPANY_PATH = require.resolve("@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff");
+const FONT_BODY_PATH = require.resolve("@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff");
+const FONT_BODY_BOLD_PATH = require.resolve("@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff");
+const FONT_BODY_BOLD_ITALIC_PATH = require.resolve("@fontsource/comic-neue/files/comic-neue-latin-700-italic.woff");
 
 const fmtDate = (d?: Date | null) => (d ? d.toLocaleDateString("en-US") : "--");
 const fmtAmount = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -136,61 +141,69 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
   // section that wouldn't fit in the remaining space, so a fresh page starts exactly where
   // the next section begins instead of after a stretch of invisible overflow.
   const PAGE_BOTTOM = PAGE_HEIGHT - MARGIN_BOTTOM;
+  // The reference paper form has a thin green frame around the whole sheet — redraw it on
+  // every page (drawing first so all later content paints over it, never the reverse).
+  function drawPageBorder() {
+    doc.rect(10, 10, PAGE_WIDTH - 20, PAGE_HEIGHT - 20).lineWidth(1.25).stroke(BORDER_GREEN);
+  }
+  drawPageBorder();
   function ensureSpace(needed: number) {
     if (y + needed > PAGE_BOTTOM) {
       doc.addPage();
       y = MARGIN_TOP;
+      drawPageBorder();
     }
   }
 
-  // ---- Letterhead: company name + address/phone left-aligned; PI No./Date box top-right;
-  // a centered "PROFORMA INVOICE" title sits right above the Customer/Vendor table. ----
+  // ---- Letterhead: a full-width dark-green banner with the company name + address in white,
+  // then a row right below it with the centered "PROFORMA INVOICE" title and the PI No./Date
+  // stacked at the right, both sharing that same horizontal band. ----
   const companyName = pi.organizationName || "Proforma Invoice";
-  const metaW = 160;
-  const metaX = MARGIN_LEFT + CONTENT_WIDTH - metaW;
-  const metaTop = y;
-  sectionBar(doc, metaX, metaTop, metaW / 2, 16, "PI NO.", 7.5);
-  sectionBar(doc, metaX + metaW / 2, metaTop, metaW / 2, 16, "DATE", 7.5);
-  doc
-    .rect(metaX, metaTop + 16, metaW / 2, 18)
-    .stroke(LIGHT_BG)
-    .rect(metaX + metaW / 2, metaTop + 16, metaW / 2, 18)
-    .stroke(LIGHT_BG);
-  doc
-    .fillColor(BLACK)
-    .font(FONT_BODY_BOLD)
-    .fontSize(9)
-    .text(pi.piNumber || "--", metaX + 4, metaTop + 21, { width: metaW / 2 - 8 })
-    .text(fmtDate(pi.piDate), metaX + metaW / 2 + 4, metaTop + 21, { width: metaW / 2 - 8 });
-  const metaBottom = metaTop + 16 + 18;
-
-  // Company name/address, left-aligned, constrained to the space left of the PI No./Date
-  // box so it never runs underneath it.
-  const nameBlockW = CONTENT_WIDTH - metaW - 16;
-  doc
-    .fillColor(NAVY)
-    .font(FONT_COMPANY)
-    .fontSize(22)
-    .text(companyName, MARGIN_LEFT, y + 4, { width: nameBlockW });
-  y = doc.y + 4;
 
   const letterheadLine = [pi.organizationAddress, pi.organizationContact]
     .filter((v): v is string => !!v && v.trim().length > 0)
     .join(" | ");
+  const bannerH =
+    28 +
+    (letterheadLine ? doc.font(FONT_BODY_BOLD).fontSize(9).heightOfString(letterheadLine, { width: CONTENT_WIDTH - 16 }) + 6 : 0);
+  doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, bannerH).fill(NAVY);
+  doc
+    .fillColor("#ffffff")
+    .font(FONT_COMPANY)
+    .fontSize(20)
+    .text(companyName, MARGIN_LEFT + 8, y + 6, { width: CONTENT_WIDTH - 16, align: "center" });
   if (letterheadLine) {
-    doc.fillColor(NAVY).font(FONT_BODY_BOLD).fontSize(9).text(letterheadLine, MARGIN_LEFT, y, { width: nameBlockW });
-    y = doc.y;
+    doc
+      .fillColor("#ffffff")
+      .font(FONT_BODY_BOLD)
+      .fontSize(9)
+      .text(letterheadLine, MARGIN_LEFT + 8, doc.y + 2, { width: CONTENT_WIDTH - 16, align: "center" });
   }
-  y = Math.max(y, metaBottom) + 16;
+  y += bannerH + 12;
 
   // ---- Centered "PROFORMA INVOICE" title, right above the Customer/Vendor table — plain
-  // navy text, no background fill. ----
+  // dark-green text, no background fill — sharing its row with PI No./Date, stacked at the
+  // right. ----
+  doc.font(FONT_BODY_BOLD).fontSize(15);
+  const titleH = doc.heightOfString("PROFORMA INVOICE", { width: CONTENT_WIDTH, align: "center" });
+  const piNoText = `PI No:- ${pi.piNumber || "--"}`;
+  const dateText = `Date: ${fmtDate(pi.piDate)}`;
+  doc.font(FONT_BODY_BOLD).fontSize(8.5);
+  const piMetaH = doc.heightOfString(piNoText, { width: CONTENT_WIDTH }) + doc.heightOfString(dateText, { width: CONTENT_WIDTH }) + 2;
+  const titleRowH = Math.max(titleH, piMetaH);
+
   doc
     .fillColor(NAVY)
     .font(FONT_BODY_BOLD)
     .fontSize(15)
-    .text("PROFORMA INVOICE", MARGIN_LEFT, y, { width: CONTENT_WIDTH, align: "center" });
-  y = doc.y + 10;
+    .text("PROFORMA INVOICE", MARGIN_LEFT, y + (titleRowH - titleH) / 2, { width: CONTENT_WIDTH, align: "center" });
+  doc
+    .fillColor(BLACK)
+    .font(FONT_BODY_BOLD)
+    .fontSize(8.5)
+    .text(piNoText, MARGIN_LEFT, y + (titleRowH - piMetaH) / 2, { width: CONTENT_WIDTH, align: "right" })
+    .text(dateText, MARGIN_LEFT, doc.y + 1, { width: CONTENT_WIDTH, align: "right" });
+  y += titleRowH + 10;
 
   // ---- Customer / Vendor, one table (matches purchaseOrderPdf.ts's Vendor/Customer table, ratio flipped: Customer first as in the reference) ----
   const customerW = (CONTENT_WIDTH * 5625) / 9644;
@@ -310,6 +323,7 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
   }
 
   // ---- Non-Taxable / Taxable / VAT / Total rows ----
+  const currencyCode = pi.currency?.trim() || "NPR";
   const taxPercent = num(pi.taxPercent) || 13;
   const vatAmount = taxableSubtotal * (taxPercent / 100);
   const grandTotal = nonTaxableSubtotal + taxableSubtotal + vatAmount;
@@ -327,7 +341,7 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
       .font(opts?.bold ? FONT_BODY_BOLD : FONT_BODY)
       .fontSize(8.5)
       .text(label, MARGIN_LEFT + labelW - 160, y + 5, { width: 154, align: "right" })
-      .text(fmtAmount(value), MARGIN_LEFT + labelW + 4, y + 5, { width: amountW - 8, align: "right" });
+      .text(`${currencyCode} ${fmtAmount(value)}`, MARGIN_LEFT + labelW + 4, y + 5, { width: amountW - 8, align: "right" });
     y += rowH;
   };
   summaryRow("Non-Taxable Amount", nonTaxableSubtotal);
@@ -342,7 +356,7 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
     .font(FONT_BODY_BOLD)
     .fontSize(9.5)
     .text("TOTAL AMOUNT", MARGIN_LEFT + labelW - 160, y + 6, { width: 154, align: "right" })
-    .text(fmtAmount(grandTotal), MARGIN_LEFT + labelW + 4, y + 6, { width: amountW - 8, align: "right" });
+    .text(`${currencyCode} ${fmtAmount(grandTotal)}`, MARGIN_LEFT + labelW + 4, y + 6, { width: amountW - 8, align: "right" });
   y += totalRowH + 8;
 
   // ---- Amount in Words ----
@@ -427,40 +441,66 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
   const boxBottom = Math.max(bankBottom, deliveryBottom);
   doc.rect(bankX, boxTop, halfW, boxBottom - boxTop).stroke(LIGHT_BG);
   doc.rect(deliveryX, boxTop, halfW, boxBottom - boxTop).stroke(LIGHT_BG);
-  y = boxBottom + 12;
 
-  // ---- Notes ----
-  if (pi.notes) {
-    const notesH = doc.font(FONT_BODY).fontSize(8.5).heightOfString(pi.notes, { width: CONTENT_WIDTH });
-    ensureSpace(16 + 6 + notesH + 14);
-    sectionBar(doc, MARGIN_LEFT, y, CONTENT_WIDTH, 16, "NOTES");
-    y += 16 + 6;
-    doc.fillColor(BLACK).font(FONT_BODY).fontSize(8.5).text(pi.notes, MARGIN_LEFT, y, { width: CONTENT_WIDTH });
-    y = doc.y + 14;
+  // ---- Notes + Signature, side by side in one row so the signature/stamp always lands on the
+  // same page as Notes whenever the two fit together (rather than Notes being able to fit while
+  // the signature spills to a fresh page below it). ----
+  const hasNotes = !!pi.notes;
+  const sigColW = 210;
+  const notesSigGap = 16;
+  const notesColW = hasNotes ? CONTENT_WIDTH - sigColW - notesSigGap : 0;
+  const sigColX = hasNotes ? MARGIN_LEFT + notesColW + notesSigGap : MARGIN_LEFT;
+
+  const notesBlockH = hasNotes ? 16 + 6 + doc.font(FONT_BODY).fontSize(8.5).heightOfString(pi.notes!, { width: notesColW }) : 0;
+  const sigBlockH = 90; // signature line + label, plus headroom for the stamp above it
+  const rowH = Math.max(notesBlockH, sigBlockH);
+
+  // Prefer a clean gap below the Bank Details/Terms of Delivery box; if that would push this row
+  // to a fresh page, pack it tightly against — or a little into — that box instead, since landing
+  // on the same page matters more than the gap. Only actually page-break if it doesn't fit even
+  // packed that tight.
+  const preferredGap = 12;
+  const overlapAllowance = 10;
+  let rowTop: number;
+  if (boxBottom + preferredGap + rowH <= PAGE_BOTTOM) {
+    rowTop = boxBottom + preferredGap;
+  } else if (boxBottom - overlapAllowance + rowH <= PAGE_BOTTOM) {
+    rowTop = PAGE_BOTTOM - rowH;
+  } else {
+    doc.addPage();
+    rowTop = MARGIN_TOP;
+    drawPageBorder();
+  }
+  y = rowTop;
+
+  if (hasNotes) {
+    sectionBar(doc, MARGIN_LEFT, rowTop, notesColW, 16, "NOTES");
+    doc
+      .fillColor(BLACK)
+      .font(FONT_BODY)
+      .fontSize(8.5)
+      .text(pi.notes!, MARGIN_LEFT, rowTop + 16 + 6, { width: notesColW });
   }
 
-  // ---- Signature line — placed a fixed gap after the preceding content, not pinned to
-  // the bottom of the page (pinning it there caused a large blank gap whenever the content
-  // above ended well short of the page bottom). ----
-  ensureSpace(70 + 35 + 20);
-  const sigY = y + 70;
+  const sigY = rowTop + 70;
   const sigW = 100;
   if (pi.signatureImage) {
     try {
-      doc.image(pi.signatureImage, MARGIN_LEFT, sigY - 35, { fit: [sigW, 35], valign: "bottom" });
+      doc.image(pi.signatureImage, sigColX, sigY - 35, { fit: [sigW, 35], valign: "bottom" });
     } catch (err) {
       console.error("Failed to embed organization signature image:", err);
     }
   }
-  doc.moveTo(MARGIN_LEFT, sigY).lineTo(MARGIN_LEFT + sigW, sigY).strokeColor(BLACK).lineWidth(0.75).stroke();
-  doc.fillColor(SIGNATURE_GRAY).font(FONT_BODY_BOLD).fontSize(8).text("Authorized Signatory", MARGIN_LEFT, sigY + 5, { width: 160 });
+  doc.moveTo(sigColX, sigY).lineTo(sigColX + sigW, sigY).strokeColor(BLACK).lineWidth(0.75).stroke();
+  doc.fillColor(SIGNATURE_GRAY).font(FONT_BODY_BOLD).fontSize(8).text("Authorized Signatory", sigColX, sigY + 5, { width: 160 });
   if (pi.stampImage) {
     try {
-      doc.image(pi.stampImage, MARGIN_LEFT + sigW + 24, sigY - 66, { fit: [82, 82] });
+      doc.image(pi.stampImage, sigColX + sigW + 24, sigY - 66, { fit: [82, 82] });
     } catch (err) {
       console.error("Failed to embed organization stamp image:", err);
     }
   }
+  y = rowTop + rowH;
 
   return doc;
 }

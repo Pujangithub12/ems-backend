@@ -443,6 +443,7 @@ router.get("/purchase-orders/:id/pdf", authMiddleware, PurchaseOrderController.d
 // Finance — payment ledger layered on top of the Cost Sheet above (role-gated inline in
 // FinanceController, not via permissionMiddleware, since it must include finance).
 router.get("/workspace/finance/purchase-orders", authMiddleware, FinanceController.getFinanceOverview);
+router.get("/workspace/finance/exchange-rates", authMiddleware, FinanceController.getExchangeRates);
 router.get("/workspace/finance/vendors/:vendorId", authMiddleware, FinanceController.getVendorFinanceSummary);
 router.get("/workspace/finance/items", authMiddleware, FinanceController.getItemCostReport);
 router.post("/workspace/finance/manual-records", authMiddleware, FinanceController.createManualRecord);
@@ -462,6 +463,12 @@ router.post(
   authMiddleware,
   permissionMiddleware("projects.procurement"),
   ProformaInvoiceController.addProformaInvoice,
+);
+router.post(
+  "/workspace/proforma-invoices",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  ProformaInvoiceController.addStandaloneProformaInvoice,
 );
 router.put(
   "/proforma-invoices/:id",

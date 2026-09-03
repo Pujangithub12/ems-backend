@@ -4,6 +4,7 @@ import { AuthRequest } from "../middlewares/auth";
 import { UserRole } from "../types/enums";
 import { roleHasPermission } from "../utils/permissionService";
 import { computeCostSheet } from "../utils/costSheet";
+import { getTodayExchangeRates } from "../utils/exchangeRates";
 import { AddManualRecordPaymentDto, SaveFinanceManualRecordDto, EditCostBreakdownRowDto } from "../dto/purchaseOrderPayment.dto";
 
 /** Postgres `numeric` columns come back as Prisma's Decimal wrapper or null — coerce for arithmetic (same convention as costSheet.ts). */
@@ -44,7 +45,16 @@ const MANUAL_RECORD_INCLUDE = {
 /** Currency options offered on the Finance page's Add/Edit Record form. */
 const MANUAL_RECORD_CURRENCIES = new Set(["NPR", "INR", "USD", "RMB"]);
 
-type PaymentEntry = { id: number; amount: number; paidDate: Date; reference: string | null; notes: string | null };
+type PaymentEntry = {
+  id: number;
+  amount: number;
+  paidDate: Date;
+  /** NPR per 1 unit of the row's currency at the time this installment was paid — null for NPR
+   * rows or payments logged before this field existed. */
+  exchangeRate: number | null;
+  reference: string | null;
+  notes: string | null;
+};
 
 /** A Finance ledger row — either derived from a real PurchaseOrder or entered manually. Both
  * sources render in the same table shape; `source`/`poId`/`manualRecordId` tell the frontend
@@ -67,8 +77,24 @@ type FinanceLedgerRow = {
   currency: string;
 };
 
-const toPaymentEntries = (payments: { id: number; amount: { toNumber(): number }; paidDate: Date; reference: string | null; notes: string | null }[]): PaymentEntry[] =>
-  payments.map((p) => ({ id: p.id, amount: num(p.amount), paidDate: p.paidDate, reference: p.reference, notes: p.notes }));
+const toPaymentEntries = (
+  payments: {
+    id: number;
+    amount: { toNumber(): number };
+    paidDate: Date;
+    exchangeRate: { toNumber(): number } | null;
+    reference: string | null;
+    notes: string | null;
+  }[],
+): PaymentEntry[] =>
+  payments.map((p) => ({
+    id: p.id,
+    amount: num(p.amount),
+    paidDate: p.paidDate,
+    exchangeRate: p.exchangeRate != null ? num(p.exchangeRate) : null,
+    reference: p.reference,
+    notes: p.notes,
+  }));
 
 /** Finance's per-PO row — one entry per real PurchaseOrder. */
 async function buildFinanceRow(po: {
@@ -79,7 +105,7 @@ async function buildFinanceRow(po: {
   currency: string | null;
   vendor: { id: number; name: string } | null;
   items: { itemName: string }[];
-  payments: { id: number; amount: { toNumber(): number }; paidDate: Date; reference: string | null; notes: string | null }[];
+  payments: { id: number; amount: { toNumber(): number }; paidDate: Date; exchangeRate: { toNumber(): number } | null; reference: string | null; notes: string | null }[];
 }): Promise<FinanceLedgerRow> {
   const costSheet = await computeCostSheet(po.id);
   const itemValue = costSheet?.grandTotal ?? 0;
@@ -117,7 +143,7 @@ function buildManualFinanceRow(record: {
   createdAt: Date;
   currency: string;
   vendor: { id: number; name: string } | null;
-  payments: { id: number; amount: { toNumber(): number }; paidDate: Date; reference: string | null; notes: string | null }[];
+  payments: { id: number; amount: { toNumber(): number }; paidDate: Date; exchangeRate: { toNumber(): number } | null; reference: string | null; notes: string | null }[];
 }): FinanceLedgerRow {
   const itemValue = num(record.itemValue);
   const payments = toPaymentEntries(record.payments);
@@ -149,26 +175,25 @@ type CostBreakdownRow = {
   majorCost: number;
   freight: number;
   lcNumber: string | null;
+  lcAmount: number;
   lcCharge: number;
   lcCommission: number;
   vat: number;
+  importDuties: number;
+  insurance: number;
   refundableAmount: number;
   refundedAmount: number;
   toBeRefunded: number;
   remarks: string | null;
 };
 
-/** VAT-refund figures shared by both row builders. Refundable Amount is no longer tracked via a
- * per-row margin (that column was removed), so it's always 0 — toBeRefunded is then just the
- * negative of whatever's been refunded so far. */
-const refundFields = (refundedAmount: number) => {
-  const refundableAmount = 0;
-  return {
-    refundableAmount,
-    refundedAmount,
-    toBeRefunded: refundableAmount - refundedAmount,
-  };
-};
+/** VAT-refund figures shared by both row builders — both refundableAmount and refundedAmount are
+ * manually entered per row; toBeRefunded is just the difference. */
+const refundFields = (refundableAmount: number, refundedAmount: number) => ({
+  refundableAmount,
+  refundedAmount,
+  toBeRefunded: refundableAmount - refundedAmount,
+});
 
 /** Per-item Item Procure/Major Cost/Freight/LC/VAT breakdown for one PO — freight/LC/VAT
  * default to the same proration as getItemCostReport (split per item by its share of the PO's
@@ -186,7 +211,11 @@ async function buildPoCostBreakdownRows(po: {
     lcChargeOverride: { toNumber(): number } | null;
     lcCommissionOverride: { toNumber(): number } | null;
     vatOverride: { toNumber(): number } | null;
+    importDutiesOverride: { toNumber(): number } | null;
+    insuranceOverride: { toNumber(): number } | null;
+    refundableAmount: { toNumber(): number } | null;
     refundedAmount: { toNumber(): number } | null;
+    lcAmount: { toNumber(): number } | null;
   }[];
   shipment: { letterOfCredit: { lcNumber: string | null } | null } | null;
 }): Promise<CostBreakdownRow[]> {
@@ -206,10 +235,13 @@ async function buildPoCostBreakdownRows(po: {
       majorCost,
       freight: item.freightOverride != null ? num(item.freightOverride) : costSheet.freight * share,
       lcNumber,
+      lcAmount: num(item.lcAmount),
       lcCharge: item.lcChargeOverride != null ? num(item.lcChargeOverride) : costSheet.lcCharge * share,
       lcCommission: item.lcCommissionOverride != null ? num(item.lcCommissionOverride) : costSheet.lcCommission * share,
       vat,
-      ...refundFields(num(item.refundedAmount)),
+      importDuties: item.importDutiesOverride != null ? num(item.importDutiesOverride) : costSheet.customsDuty * share,
+      insurance: item.insuranceOverride != null ? num(item.insuranceOverride) : costSheet.insurancePremium * share,
+      ...refundFields(num(item.refundableAmount), num(item.refundedAmount)),
       remarks: item.remarks,
     };
   });
@@ -222,9 +254,13 @@ function buildManualCostBreakdownRows(record: {
   itemValue: { toNumber(): number };
   freight: { toNumber(): number } | null;
   lcNumber: string | null;
+  lcAmount: { toNumber(): number } | null;
   lcCharge: { toNumber(): number } | null;
   lcCommission: { toNumber(): number } | null;
   vat: { toNumber(): number } | null;
+  importDuties: { toNumber(): number } | null;
+  insurance: { toNumber(): number } | null;
+  refundableAmount: { toNumber(): number } | null;
   refundedAmount: { toNumber(): number } | null;
   remarks: string | null;
 }): CostBreakdownRow[] {
@@ -236,10 +272,13 @@ function buildManualCostBreakdownRows(record: {
       majorCost: num(record.itemValue),
       freight: num(record.freight),
       lcNumber: record.lcNumber,
+      lcAmount: num(record.lcAmount),
       lcCharge: num(record.lcCharge),
       lcCommission: num(record.lcCommission),
       vat,
-      ...refundFields(num(record.refundedAmount)),
+      importDuties: num(record.importDuties),
+      insurance: num(record.insurance),
+      ...refundFields(num(record.refundableAmount), num(record.refundedAmount)),
       remarks: record.remarks,
     },
   ];
@@ -263,18 +302,26 @@ function validateCostBreakdownRowInput({
   itemName,
   majorCost,
   freight,
+  lcAmount,
   lcCharge,
   lcCommission,
   vat,
+  importDuties,
+  insurance,
+  refundableAmount,
   refundedAmount,
 }: EditCostBreakdownRowDto): string | null {
   if (typeof itemName !== "string" || !itemName.trim()) return "Item name is required";
   const nonNegativeFields: [string, unknown][] = [
     ["major cost", majorCost],
     ["freight", freight],
+    ["LC amount", lcAmount],
     ["LC charge", lcCharge],
     ["LC commission", lcCommission],
     ["VAT", vat],
+    ["import duties", importDuties],
+    ["insurance", insurance],
+    ["refundable amount", refundableAmount],
     ["refunded amount", refundedAmount],
   ];
   for (const [label, value] of nonNegativeFields) {
@@ -284,6 +331,20 @@ function validateCostBreakdownRowInput({
 }
 
 export class FinanceController {
+  /** GET /workspace/finance/exchange-rates — today's USD/INR/RMB -> NPR selling rates (NRB),
+   * used on the cost-breakdown page to show a non-NPR manual record's Refunded amount in NPR. */
+  static getExchangeRates = async (req: AuthRequest, res: Response) => {
+    if (!canViewFinance(req.user!.role)) return res.status(403).json({ message: "Forbidden" });
+
+    try {
+      const rates = await getTodayExchangeRates();
+      return res.status(200).json({ date: new Date().toISOString().slice(0, 10), rates });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   /** GET /workspace/finance/purchase-orders — the main Finance page's ledger table: one row per
    * PO plus one row per manually-entered record, newest first. */
   static getFinanceOverview = async (req: AuthRequest, res: Response) => {
@@ -475,6 +536,9 @@ export class FinanceController {
         poId: po.id,
         poNumber: po.poNumber,
         vendorName: po.vendor?.name ?? null,
+        // PurchaseOrder.currency is a free-text PDF label ("US Dollar"), not a code — no
+        // standardized currency to convert from here, unlike manual records below.
+        currency: null,
         rows,
       });
     } catch (error) {
@@ -497,6 +561,7 @@ export class FinanceController {
         manualRecordId: record.id,
         poNumber: record.referenceNumber,
         vendorName: record.vendor?.name ?? record.vendorName,
+        currency: record.currency,
         rows: buildManualCostBreakdownRows(record),
       });
     } catch (error) {
@@ -547,9 +612,13 @@ export class FinanceController {
           itemName: dto.itemName.trim(),
           unitPrice: dto.majorCost / quantity,
           freightOverride: dto.freight,
+          lcAmount: dto.lcAmount,
           lcChargeOverride: dto.lcCharge,
           lcCommissionOverride: dto.lcCommission,
           vatOverride: dto.vat,
+          importDutiesOverride: dto.importDuties,
+          insuranceOverride: dto.insurance,
+          refundableAmount: dto.refundableAmount,
           refundedAmount: dto.refundedAmount,
           remarks: dto.remarks?.trim() || null,
         },
@@ -592,9 +661,13 @@ export class FinanceController {
           itemValue: dto.majorCost,
           freight: dto.freight,
           lcNumber: dto.lcNumber?.trim() || null,
+          lcAmount: dto.lcAmount,
           lcCharge: dto.lcCharge,
           lcCommission: dto.lcCommission,
           vat: dto.vat,
+          importDuties: dto.importDuties,
+          insurance: dto.insurance,
+          refundableAmount: dto.refundableAmount,
           refundedAmount: dto.refundedAmount,
           remarks: dto.remarks?.trim() || null,
         },
@@ -723,7 +796,7 @@ export class FinanceController {
     if (!(await canEditFinance(req.user!.role))) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
-    const { amount, paidDate, reference, notes }: AddManualRecordPaymentDto = req.body;
+    const { amount, paidDate, exchangeRate, reference, notes }: AddManualRecordPaymentDto = req.body;
 
     if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ message: "A valid amount is required" });
@@ -731,6 +804,9 @@ export class FinanceController {
     const parsedDate = paidDate ? new Date(paidDate) : null;
     if (!parsedDate || Number.isNaN(parsedDate.getTime())) {
       return res.status(400).json({ message: "A valid paid date is required" });
+    }
+    if (exchangeRate != null && (typeof exchangeRate !== "number" || !Number.isFinite(exchangeRate) || exchangeRate <= 0)) {
+      return res.status(400).json({ message: "A valid exchange rate is required" });
     }
 
     try {
@@ -742,6 +818,7 @@ export class FinanceController {
           manualRecordId: existing.id,
           amount,
           paidDate: parsedDate,
+          exchangeRate: exchangeRate ?? null,
           reference: reference?.trim() || null,
           notes: notes?.trim() || null,
           createdById: req.user!.id,

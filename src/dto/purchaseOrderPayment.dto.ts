@@ -2,6 +2,9 @@
 export interface AddPurchaseOrderPaymentDto {
   amount: number;
   paidDate: string;
+  /** NPR per 1 unit of the row's currency, at the time of this payment — only meaningful for a
+   * non-NPR row; omit/null for NPR. */
+  exchangeRate?: number | null;
   reference?: string | null;
   notes?: string | null;
 }
@@ -29,10 +32,16 @@ export interface EditCostBreakdownRowDto {
   majorCost: number;
   freight: number;
   lcNumber?: string | null;
+  lcAmount: number;
   lcCharge: number;
   lcCommission: number;
   vat: number;
-  /** How much VAT has actually been refunded so far. */
+  importDuties: number;
+  insurance: number;
+  /** Manually entered directly in NPR (not this row's own currency) — how much VAT/tax is
+   * refundable on this row. */
+  refundableAmount: number;
+  /** How much VAT has actually been refunded so far, also in NPR. */
   refundedAmount: number;
   remarks?: string | null;
 }
