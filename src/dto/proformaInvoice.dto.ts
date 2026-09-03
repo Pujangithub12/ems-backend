@@ -10,7 +10,7 @@ export interface ProformaInvoiceItemInput {
   taxable?: boolean;
 }
 
-/** Body shape for POST /purchase-orders/:id/proforma-invoices. */
+/** Body shape for POST /purchase-orders/:id/proforma-invoices and POST /workspace/proforma-invoices (PO-less). */
 export interface AddProformaInvoiceDto {
   piNumber?: string;
   piDate?: string;
@@ -21,6 +21,15 @@ export interface AddProformaInvoiceDto {
   taxPercent?: number;
   customerPan?: string;
   vendorPan?: string;
+  /** Only meaningful on the PO-less endpoint — link an existing Vendor and/or override its
+   * stored details on this PI. Ignored when the PI is created against a purchase order (its
+   * vendor comes from the PO). */
+  vendorId?: number;
+  vendorName?: string;
+  vendorContactPerson?: string;
+  vendorAddress?: string;
+  vendorContact?: string;
+  vendorEmail?: string;
   bankBeneficiaryName?: string;
   bankAccountNumber?: string;
   bankName?: string;
@@ -46,6 +55,12 @@ export interface UpdateProformaInvoiceDto {
   taxPercent?: number | null;
   customerPan?: string;
   vendorPan?: string;
+  vendorId?: number | null;
+  vendorName?: string;
+  vendorContactPerson?: string;
+  vendorAddress?: string;
+  vendorContact?: string;
+  vendorEmail?: string;
   bankBeneficiaryName?: string;
   bankAccountNumber?: string;
   bankName?: string;

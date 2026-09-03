@@ -47,10 +47,12 @@ model User {
   purchaseOrdersCreated             PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
   purchaseOrderPaymentsLogged       PurchaseOrderPayment[]
   financeManualRecordsCreated       FinanceManualRecord[]
+  proformaInvoicesCreated           ProformaInvoice[]
   goodsReceiptsReceived             GoodsReceipt[]
   projectAssignments                ProjectAssignee[]
   projectFilesUploaded              ProjectFile[]
-  siteActivityReportsCreated        SiteActivityReport[]
+  siteActivityReportsCreated        SiteActivityReport[]         @relation("SiteActivityReportCreatedBy")
+  siteActivityReportsUpdated        SiteActivityReport[]         @relation("SiteActivityReportUpdatedBy")
   siteVisitRequests                 SiteVisitRequest[]
   stockTransfersRequested           StockTransfer[]
   subTaskComments                   SubTaskComment[]
@@ -100,6 +102,7 @@ model Organization {
   vendors               Vendor[]
   warehouses            Warehouse[]
   financeManualRecords  FinanceManualRecord[]
+  proformaInvoices      ProformaInvoice[]
   memberships           OrganizationMembership[]
   notifications         Notification[]
   plantReportTables     PlantReportTable[]
@@ -573,12 +576,16 @@ model SiteActivityReport {
   /// "draft" | "submitted"
   status         String   @default("submitted") @db.VarChar
   createdById    Int?
+  /// Whoever last saved this report (create or edit) — createdById stays fixed to the original
+  /// author, this is what "last edited by" on the Site Diary page reads from.
+  updatedById    Int?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organization Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   project      Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdBy    User?                     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy    User?                     @relation("SiteActivityReportCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy    User?                     @relation("SiteActivityReportUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   activities   SiteActivityItem[]
   equipment    SiteActivityEquipment[]
   manpower     SiteActivityManpower[]
@@ -871,6 +878,10 @@ model PurchaseOrderPayment {
   id              Int      @id @default(autoincrement())
   amount          Decimal  @db.Decimal
   paidDate        DateTime @db.Date
+  /// NPR per 1 unit of the row's currency at the time this installment was paid — captured so a
+  /// USD/etc. payment's NPR cost can be verified later even as the live rate keeps moving. Null
+  /// for NPR rows (no conversion needed) or older payments logged before this field existed.
+  exchangeRate    Decimal? @db.Decimal
   /// e.g. bank transfer reference / cheque number.
   reference       String?  @db.VarChar
   notes           String?
@@ -890,34 +901,39 @@ model PurchaseOrderPayment {
 /// PurchaseOrder — for tracking payments/balances that don't have (or don't yet have) a PO
 /// behind them. Shares the PurchaseOrderPayment log for its payment history.
 model FinanceManualRecord {
-  id              Int      @id @default(autoincrement())
-  vendorName      String   @db.VarChar
-  itemName        String   @db.VarChar
+  id               Int      @id @default(autoincrement())
+  vendorName       String   @db.VarChar
+  itemName         String   @db.VarChar
   /// Free-text procurement/reference identifier — the manual-record equivalent of PurchaseOrder.poNumber.
-  referenceNumber String?  @db.VarChar
-  itemValue       Decimal  @db.Decimal
+  referenceNumber  String?  @db.VarChar
+  itemValue        Decimal  @db.Decimal
   /// "NPR" | "INR" | "USD" | "RMB" — set on the Finance page's Add/Edit Record form.
-  currency        String   @default("NPR") @db.VarChar
-  paymentTerms    String?  @db.VarChar
+  currency         String   @default("NPR") @db.VarChar
+  paymentTerms     String?  @db.VarChar
   /// The following mirror the Finance cost-breakdown page's columns for a PO row — plain stored
   /// fields here (no shipment/proration behind a manual record, unlike PurchaseOrderItem's
   /// override columns below).
-  freight         Decimal? @db.Decimal
-  lcNumber        String?  @db.VarChar
-  lcCharge        Decimal? @db.Decimal
-  lcCommission    Decimal? @db.Decimal
-  vat             Decimal? @db.Decimal
-  /// VAT-refund tracking (Finance cost-breakdown page): how much of this record's VAT has
-  /// actually been refunded so far. Refundable Amount is no longer tracked per-margin (that
-  /// column was removed), so it's always treated as 0 here.
-  refundedAmount  Decimal? @db.Decimal
+  freight          Decimal? @db.Decimal
+  lcNumber         String?  @db.VarChar
+  /// The Letter of Credit's own principal amount — manually entered, distinct from lcCharge/lcCommission (fees).
+  lcAmount         Decimal? @db.Decimal
+  lcCharge         Decimal? @db.Decimal
+  lcCommission     Decimal? @db.Decimal
+  vat              Decimal? @db.Decimal
+  importDuties     Decimal? @db.Decimal
+  insurance        Decimal? @db.Decimal
+  /// VAT-refund tracking (Finance cost-breakdown page), both manually entered directly in NPR
+  /// (not this record's own currency) since VAT refunds are processed in NPR regardless: how
+  /// much of this record's VAT is refundable, and how much of that has actually been refunded so far.
+  refundableAmount Decimal? @db.Decimal
+  refundedAmount   Decimal? @db.Decimal
   /// Freeform note shown on the record's Finance cost-breakdown page.
-  remarks         String?
-  createdAt       DateTime @default(now())
-  organizationId  Int?
+  remarks          String?
+  createdAt        DateTime @default(now())
+  organizationId   Int?
   /// Optional link to a real Vendor so this record's totals fold into that vendor's Finance drilldown page.
-  vendorId        Int?
-  createdById     Int?
+  vendorId         Int?
+  createdById      Int?
 
   organization Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   vendor       Vendor?                @relation(fields: [vendorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
@@ -939,17 +955,25 @@ model PurchaseOrderItem {
   /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
   hsnCode              String?  @db.VarChar
   /// The following let the Finance cost-breakdown page override this item's computed share of
-  /// the PO's freight/LC charge/LC commission/VAT (normally prorated from Shipment/Customs/
-  /// LetterOfCredit by this item's value share — see computeCostSheet/buildPoCostBreakdownRows).
-  /// Null means "use the computed proration"; a non-null value here wins.
+  /// the PO's freight/LC charge/LC commission/VAT/import duties/insurance (normally prorated
+  /// from Shipment/Customs/Insurance/LetterOfCredit by this item's value share — see
+  /// computeCostSheet/buildPoCostBreakdownRows). Null means "use the computed proration"; a
+  /// non-null value here wins.
   freightOverride      Decimal? @db.Decimal
   lcChargeOverride     Decimal? @db.Decimal
   lcCommissionOverride Decimal? @db.Decimal
   vatOverride          Decimal? @db.Decimal
-  /// VAT-refund tracking (Finance cost-breakdown page): how much of this item's VAT (see
-  /// vatOverride above) has actually been refunded so far. Refundable Amount is no longer
-  /// tracked per-margin (that column was removed), so it's always treated as 0 here.
+  importDutiesOverride Decimal? @db.Decimal
+  insuranceOverride    Decimal? @db.Decimal
+  /// VAT-refund tracking (Finance cost-breakdown page), both manually entered directly in NPR
+  /// (not this item's own currency) since VAT refunds are processed in NPR regardless: how much
+  /// of this item's VAT (see vatOverride above) is refundable, and how much of that has actually
+  /// been refunded so far.
+  refundableAmount     Decimal? @db.Decimal
   refundedAmount       Decimal? @db.Decimal
+  /// The Letter of Credit's own principal amount for this item's share — manually entered, no
+  /// computed baseline to override (unlike freight/vat/importDuties/insurance above).
+  lcAmount             Decimal? @db.Decimal
   /// Freeform note shown on the PO's Finance cost-breakdown page (not printed on the PO PDF).
   remarks              String?
   createdAt            DateTime @default(now())
@@ -1011,8 +1035,24 @@ model ProformaInvoice {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @default(now()) @updatedAt
   purchaseOrderId     Int?
+  /// Set on every PI (including PO-backed ones) so the org-wide list/scoping check doesn't have
+  /// to go through the (now-optional) purchaseOrder relation — mirrors FinanceManualRecord.
+  organizationId      Int?
+  /// Optional link to a real Vendor so a PO-less PI still folds into that vendor's records —
+  /// mirrors FinanceManualRecord.vendorId. Freeform vendor* fields below are used instead when no
+  /// PO and no linked Vendor is picked (or to override the linked Vendor's stored details).
+  vendorId            Int?
+  vendorName          String?   @db.VarChar
+  vendorContactPerson String?   @db.VarChar
+  vendorAddress       String?
+  vendorContact       String?   @db.VarChar
+  vendorEmail         String?   @db.VarChar
+  createdById         Int?
 
   purchaseOrder PurchaseOrder?        @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organization  Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vendor        Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  createdBy     User?                 @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
   items         ProformaInvoiceItem[]
 
   @@map("proforma_invoice")
@@ -1520,6 +1560,7 @@ model Vendor {
   procurementItems     ProcurementItem[]
   purchaseOrders       PurchaseOrder[]
   financeManualRecords FinanceManualRecord[]
+  proformaInvoices     ProformaInvoice[]
   organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_fb0f972eb0ca9c48c227968fd96")
 
   @@map("vendor")

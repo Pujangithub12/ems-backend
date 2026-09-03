@@ -18,6 +18,7 @@
   "dependencies": {
     "@fontsource/caladea": "^5.3.0",
     "@fontsource/carlito": "^5.3.0",
+    "@fontsource/comic-neue": "^5.3.0",
     "@prisma/adapter-pg": "^7.9.0",
     "@prisma/client": "^7.9.0",
     "@supabase/supabase-js": "^2.112.2",
