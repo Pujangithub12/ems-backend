@@ -615,6 +615,7 @@ export class PurchaseOrderController {
         finalDestination: purchaseOrder.finalDestination,
         customerContactPerson: purchaseOrder.customerContactPerson,
         customerPanVatNumber: purchaseOrder.customerPanVatNumber,
+        purchaseType: purchaseOrder.purchaseType,
         currency: purchaseOrder.currency,
         organizationName: purchaseOrder.organization?.name ?? null,
         organizationAddress: purchaseOrder.organization?.address ?? null,
