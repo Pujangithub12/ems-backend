@@ -226,6 +226,7 @@ export class PurchaseOrderController {
     const { id } = req.params;
     const {
       poNumber,
+      poDate,
       paymentTerms,
       incoterms,
       taxPercent,
@@ -233,6 +234,7 @@ export class PurchaseOrderController {
       deliveryPeriod,
       finalDestination,
       customerContactPerson,
+      customerPanVatNumber,
       currency,
       purchaseType,
       status,
@@ -267,6 +269,7 @@ export class PurchaseOrderController {
         }
         data.poNumber = trimmed;
       }
+      if (poDate !== undefined) data.poDate = poDate ? new Date(poDate) : null;
       if (paymentTerms !== undefined) data.paymentTerms = paymentTerms;
       if (incoterms !== undefined) data.incoterms = incoterms;
       if (taxPercent !== undefined) data.taxPercent = taxPercent;
@@ -274,6 +277,7 @@ export class PurchaseOrderController {
       if (deliveryPeriod !== undefined) data.deliveryPeriod = deliveryPeriod;
       if (finalDestination !== undefined) data.finalDestination = finalDestination;
       if (customerContactPerson !== undefined) data.customerContactPerson = customerContactPerson;
+      if (customerPanVatNumber !== undefined) data.customerPanVatNumber = customerPanVatNumber;
       if (currency !== undefined) data.currency = currency;
       if (purchaseType !== undefined) data.purchaseType = purchaseType;
       if (status !== undefined) data.status = status;
@@ -602,6 +606,7 @@ export class PurchaseOrderController {
       const doc = buildPurchaseOrderPdf({
         poNumber: purchaseOrder.poNumber,
         createdAt: purchaseOrder.createdAt,
+        poDate: purchaseOrder.poDate,
         paymentTerms: purchaseOrder.paymentTerms,
         incoterms: purchaseOrder.incoterms,
         taxPercent: purchaseOrder.taxPercent,
@@ -609,6 +614,7 @@ export class PurchaseOrderController {
         deliveryPeriod: purchaseOrder.deliveryPeriod,
         finalDestination: purchaseOrder.finalDestination,
         customerContactPerson: purchaseOrder.customerContactPerson,
+        customerPanVatNumber: purchaseOrder.customerPanVatNumber,
         currency: purchaseOrder.currency,
         organizationName: purchaseOrder.organization?.name ?? null,
         organizationAddress: purchaseOrder.organization?.address ?? null,

@@ -985,7 +985,7 @@ export class InventoryController {
 
   /** POST /organization/vendors — create a vendor. Admin-gated. */
   static createVendor = async (req: AuthRequest, res: Response) => {
-    const { name, code, location, contact, contractExpiryDate, contactPerson, address, email }: AddVendorDto = req.body;
+    const { name, code, location, contact, contractExpiryDate, contactPerson, address, email, panVatNumber }: AddVendorDto = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ message: "Vendor name is required" });
     }
@@ -1001,6 +1001,7 @@ export class InventoryController {
           ...(contactPerson ? { contactPerson } : {}),
           ...(address ? { address } : {}),
           ...(email ? { email } : {}),
+          ...(panVatNumber ? { panVatNumber } : {}),
         },
       });
       return res.status(201).json({ message: "Vendor created", vendor });
@@ -1013,7 +1014,7 @@ export class InventoryController {
   /** PUT /organization/vendors/:vendorId — update a vendor. Admin-gated. */
   static updateVendor = async (req: AuthRequest, res: Response) => {
     const { vendorId } = req.params;
-    const { name, code, location, contact, contractExpiryDate, contactPerson, address, email }: UpdateVendorDto = req.body;
+    const { name, code, location, contact, contractExpiryDate, contactPerson, address, email, panVatNumber }: UpdateVendorDto = req.body;
     try {
       const vendor = await prisma.vendor.findFirst({
         where: { id: parseInt(vendorId as string), organizationId: req.organization!.id },
@@ -1035,6 +1036,7 @@ export class InventoryController {
       if (contactPerson !== undefined) data.contactPerson = contactPerson;
       if (address !== undefined) data.address = address;
       if (email !== undefined) data.email = email;
+      if (panVatNumber !== undefined) data.panVatNumber = panVatNumber;
 
       const updatedVendor = await prisma.vendor.update({
         where: { id: vendor.id },

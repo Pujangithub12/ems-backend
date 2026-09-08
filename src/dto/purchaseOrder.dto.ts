@@ -53,6 +53,8 @@ export interface UpdatePurchaseOrderItemDto {
 export interface UpdatePurchaseOrderDto {
   /** Auto-assigned at creation time (see PurchaseOrderController.createPurchaseOrder) but user-editable afterward — see the uniqueness check in PurchaseOrderController.updatePurchaseOrder. */
   poNumber?: string;
+  /** ISO date string ("YYYY-MM-DD") — pass null to clear back to unset (Overview tab then falls back to displaying today's date). */
+  poDate?: string | null;
   paymentTerms?: string;
   incoterms?: string;
   taxPercent?: number | null;
@@ -60,6 +62,7 @@ export interface UpdatePurchaseOrderDto {
   deliveryPeriod?: string;
   finalDestination?: string;
   customerContactPerson?: string;
+  customerPanVatNumber?: string;
   currency?: string;
   purchaseType?: PurchaseType;
   status?: PurchaseOrderStatus;
