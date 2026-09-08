@@ -832,27 +832,31 @@ model ProcurementStatusHistory {
 // ---------------------------------------------------------------------------
 
 model PurchaseOrder {
-  id                    Int      @id @default(autoincrement())
-  poNumber              String?  @db.VarChar
-  paymentTerms          String?  @db.VarChar
-  incoterms             String?  @db.VarChar
-  taxPercent            Decimal? @db.Decimal
+  id                    Int       @id @default(autoincrement())
+  poNumber              String?   @db.VarChar
+  /// Shown as "Date" next to P.O. Number on the PDF — user-editable, distinct from createdAt (an immutable timestamp). Displays as today's date on the Overview tab until explicitly set.
+  poDate                DateTime? @db.Date
+  paymentTerms          String?   @db.VarChar
+  incoterms             String?   @db.VarChar
+  taxPercent            Decimal?  @db.Decimal
   terms                 String?
   /// Free-text delivery period for the PO PDF (e.g. "Within 6 weeks of submission of PO.").
   deliveryPeriod        String?
   finalDestination      String?
   /// Contact person name for the PDF's CUSTOMER box ("NAME OF CONTACT PERSON") — the buying organization's own contact, distinct from the vendor's contactPerson on the Vendor record.
   customerContactPerson String?
+  /// PAN/VAT registration number for the PDF's CUSTOMER box — the buying organization's own PAN/VAT, distinct from the vendor's panVatNumber on the Vendor record.
+  customerPanVatNumber  String?   @db.VarChar
   /// Free-text currency label for the PDF's "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset, see purchaseOrderPdf.ts.
-  currency              String?  @db.VarChar
+  currency              String?   @db.VarChar
   /// "local" | "international" — drives whether Insurance/Customs apply, see PurchaseType in types/domain.ts
-  purchaseType          String   @default("local") @db.VarChar
-  status                String   @default("created") @db.VarChar
+  purchaseType          String    @default("local") @db.VarChar
+  status                String    @default("created") @db.VarChar
   /// Whoever created this PO — plain admins only see/edit POs they created themselves (see
   /// PurchaseOrderController); finance/super_admin see everything.
   createdById           Int?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @default(now()) @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @default(now()) @updatedAt
   vendorId              Int?
   projectId             Int?
   organizationId        Int?
@@ -1556,6 +1560,8 @@ model Vendor {
   /// Full postal address, for the generated Purchase Order PDF's "VENDOR" box — distinct from the shorter free-text `location`.
   address              String?
   email                String?               @db.VarChar
+  /// PAN/VAT registration number for this vendor, used on generated Purchase Order PDFs.
+  panVatNumber         String?               @db.VarChar
   inventoryItems       InventoryItem[]
   procurementItems     ProcurementItem[]
   purchaseOrders       PurchaseOrder[]

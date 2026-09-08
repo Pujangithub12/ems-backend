@@ -27,11 +27,14 @@ export interface PurchaseOrderPdfVendor {
   location?: string | null;
   contact?: string | null;
   email?: string | null;
+  panVatNumber?: string | null;
 }
 
 export interface PurchaseOrderPdfData {
   poNumber?: string | null;
   createdAt: Date;
+  /** User-editable "Date" shown in the PDF's P.O. NUMBER/DATE box (Overview tab) — falls back to createdAt when unset. */
+  poDate?: Date | null;
   paymentTerms?: string | null;
   /** Also displayed in the PDF's "SHIPPING TERMS" box (see triValues below) — there's no separate shippingTerms field. */
   incoterms?: string | null;
@@ -41,6 +44,8 @@ export interface PurchaseOrderPdfData {
   finalDestination?: string | null;
   /** Contact person name for the PDF's CUSTOMER box — the buying organization's own contact, distinct from the vendor's contactPerson. */
   customerContactPerson?: string | null;
+  /** PAN/VAT registration number for the PDF's CUSTOMER box — the buying organization's own PAN/VAT, distinct from the vendor's panVatNumber. */
+  customerPanVatNumber?: string | null;
   /** Currency label for the "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset. */
   currency?: string | null;
   organizationName?: string | null;
@@ -141,7 +146,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const nameBlockW = (CONTENT_WIDTH * 6797) / 9612;
   const badgeW = CONTENT_WIDTH - nameBlockW;
   const badgeX = MARGIN_LEFT + nameBlockW;
-  const badgeH = 62;
+  const badgeH = 38;
 
   doc
     .fillColor(NAVY)
@@ -150,12 +155,12 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     .text(companyName, MARGIN_LEFT, y + 6, { width: nameBlockW - 8 });
   const nameBottom = doc.y;
 
-  doc.rect(badgeX, y, badgeW, badgeH).fill(BADGE_NAVY);
+  doc.rect(badgeX, y, badgeW, badgeH).fillAndStroke("#ffffff", BADGE_NAVY);
   doc
-    .fillColor("#ffffff")
+    .fillColor(NAVY)
     .font(FONT_BODY_BOLD)
     .fontSize(16)
-    .text("PURCHASE ORDER", badgeX, y + 20, { width: badgeW, align: "center" });
+    .text("PURCHASE ORDER", badgeX, y + (badgeH - 16) / 2, { width: badgeW, align: "center" });
   const badgeBottom = y + badgeH;
 
   // The company name (left column) and the badge (right column) don't share a height — a
@@ -176,19 +181,25 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // ---- P.O. Number / Date box, aligned under the PURCHASE ORDER badge ----
   const metaW = badgeW;
   const metaX = badgeX;
-  sectionBar(doc, metaX, rightY, metaW / 2, 16, "P.O. NUMBER", 7.5);
-  sectionBar(doc, metaX + metaW / 2, rightY, metaW / 2, 16, "DATE", 7.5);
+  doc.rect(metaX, rightY, metaW / 2, 16).fillAndStroke("#ffffff", NAVY);
+  doc.rect(metaX + metaW / 2, rightY, metaW / 2, 16).fillAndStroke("#ffffff", NAVY);
+  doc
+    .fillColor(NAVY)
+    .font(FONT_COMPANY)
+    .fontSize(7.5)
+    .text("P.O. NUMBER", metaX + 6, rightY + (16 - 7.5) / 2, { width: metaW / 2 - 12 })
+    .text("DATE", metaX + metaW / 2 + 6, rightY + (16 - 7.5) / 2, { width: metaW / 2 - 12 });
   doc
     .rect(metaX, rightY + 16, metaW / 2, 18)
-    .stroke(LIGHT_BG)
+    .stroke(NAVY)
     .rect(metaX + metaW / 2, rightY + 16, metaW / 2, 18)
-    .stroke(LIGHT_BG);
+    .stroke(NAVY);
   doc
     .fillColor(BLACK)
     .font(FONT_BODY_BOLD)
     .fontSize(9.5)
     .text(po.poNumber || "--", metaX + 6, rightY + 21, { width: metaW / 2 - 12 })
-    .text(fmtDate(po.createdAt), metaX + metaW / 2 + 6, rightY + 21, { width: metaW / 2 - 12 });
+    .text(fmtDate(po.poDate || po.createdAt), metaX + metaW / 2 + 6, rightY + 21, { width: metaW / 2 - 12 });
   rightY += 16 + 18 + 14;
 
   y = Math.max(leftY, rightY);
@@ -209,6 +220,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     ["NAME OF CONTACT PERSON", vendor?.contactPerson || "--"],
     ["COMPANY NAME", vendor?.name || "--"],
     ["ADDRESS", vendor?.address || vendor?.location || "--"],
+    ["PAN/VAT NO.", vendor?.panVatNumber || "--"],
     ["PHONE", vendor?.contact || "--"],
     ["EMAIL ADDRESS", vendor?.email || "--"],
   ];
@@ -216,6 +228,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     ["NAME OF CONTACT PERSON", po.customerContactPerson || "--"],
     ["COMPANY NAME", companyName],
     ["ADDRESS", po.organizationAddress || "--"],
+    ["PAN/VAT NO.", po.customerPanVatNumber || "--"],
     ["PHONE", po.organizationContact || "--"],
     ["EMAIL ADDRESS", po.organizationEmail || "--"],
   ];
@@ -237,7 +250,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   doc
     .moveTo(customerX, fieldsTop)
     .lineTo(customerX, fieldsBottom)
-    .strokeColor("#ffffff")
+    .strokeColor(NAVY)
     .lineWidth(1)
     .stroke();
 
@@ -458,7 +471,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   doc.fillColor(SIGNATURE_GRAY).font(FONT_BODY_BOLD).fontSize(8).text("Authorized Signatory", MARGIN_LEFT, sigY + 5, { width: 160 });
   if (po.stampImage) {
     try {
-      doc.image(po.stampImage, MARGIN_LEFT + sigW + 24, sigY - 66, { fit: [82, 82] });
+      doc.image(po.stampImage, MARGIN_LEFT + sigW - 20, sigY - 66, { fit: [82, 82] });
     } catch (err) {
       console.error("Failed to embed organization stamp image:", err);
     }

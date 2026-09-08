@@ -9,6 +9,7 @@ export interface AddVendorDto {
   contactPerson?: string;
   address?: string;
   email?: string;
+  panVatNumber?: string;
 }
 
 /** Body shape for PUT /organization/vendors/:vendorId. */
@@ -21,4 +22,5 @@ export interface UpdateVendorDto {
   contactPerson?: string;
   address?: string;
   email?: string;
+  panVatNumber?: string;
 }
