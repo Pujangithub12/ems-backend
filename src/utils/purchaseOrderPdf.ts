@@ -48,6 +48,8 @@ export interface PurchaseOrderPdfData {
   customerPanVatNumber?: string | null;
   /** Currency label for the "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset. */
   currency?: string | null;
+  /** "local" | "international" — when international, the VENDOR box's PAN/VAT field is labeled "GSTIN NO." instead, matching the Overview tab's field-label toggle. */
+  purchaseType?: string | null;
   organizationName?: string | null;
   /** The buying organization's own letterhead details ("CUSTOMER" box + header subtitle) — from Organization.address/contact/email/website. */
   organizationAddress?: string | null;
@@ -216,11 +218,12 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const fieldY = fieldsTop + 8;
 
   const vendor = po.vendor;
+  const vendorPanVatLabel = po.purchaseType === "international" ? "GSTIN NO." : "PAN/VAT NO.";
   const vendorFields: [string, string][] = [
     ["NAME OF CONTACT PERSON", vendor?.contactPerson || "--"],
     ["COMPANY NAME", vendor?.name || "--"],
     ["ADDRESS", vendor?.address || vendor?.location || "--"],
-    ["PAN/VAT NO.", vendor?.panVatNumber || "--"],
+    [vendorPanVatLabel, vendor?.panVatNumber || "--"],
     ["PHONE", vendor?.contact || "--"],
     ["EMAIL ADDRESS", vendor?.email || "--"],
   ];
