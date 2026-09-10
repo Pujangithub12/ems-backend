@@ -388,6 +388,11 @@ model LeaveRequest {
 model DailyGeneration {
   id                Int          @id @default(autoincrement())
   date              DateTime     @db.Date
+  /// Free-text Bikram Sambat date note (e.g. "2083 Bhadra 13") for audit trail / display when
+  /// this entry was entered or uploaded as a BS date — not computed/validated, just a manual
+  /// annotation. `date` (above) is always the authoritative Gregorian value used everywhere
+  /// else; this is never itself parsed back into a date.
+  dateBs            String?      @db.VarChar
   /**
    * = mainMeterFinal - mainMeterInitial, computed server-side on upsert.
    * Check Meter is a secondary displayed figure, never summed.

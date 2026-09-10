@@ -55,6 +55,30 @@ export async function downloadFileFromStorage(key: string): Promise<Buffer> {
   return Buffer.from(arrayBuffer);
 }
 
+// Small in-process cache for small, rarely-changing, repeatedly-fetched objects — currently
+// just organization letterhead signature/stamp images, which every PDF download (Purchase
+// Order, Proforma Invoice) re-fetched from Supabase Storage on every single request, adding a
+// network round-trip to what should be an instant response. Uploads never reuse a key
+// (`upload(..., { upsert: false })` above), so a key's bytes never change once cached — no
+// invalidation needed. Capped defensively so this can't grow unbounded if ever reused for
+// something with many distinct keys.
+const smallFileCache = new Map<string, Buffer>();
+const SMALL_FILE_CACHE_MAX_ENTRIES = 200;
+
+/** Same as downloadFileFromStorage, but caches the result in memory for subsequent calls —
+ * only use this for small, immutable-once-uploaded objects (see comment above), not arbitrary
+ * user documents. */
+export async function downloadFileFromStorageCached(key: string): Promise<Buffer> {
+  const cached = smallFileCache.get(key);
+  if (cached) return cached;
+  const buffer = await downloadFileFromStorage(key);
+  if (smallFileCache.size >= SMALL_FILE_CACHE_MAX_ENTRIES) {
+    smallFileCache.delete(smallFileCache.keys().next().value!);
+  }
+  smallFileCache.set(key, buffer);
+  return buffer;
+}
+
 /** Best-effort delete of a single object — mirrors the old fs.unlink(..., () => {}) "don't care if it fails" cleanup calls. */
 export async function deleteFileFromStorage(key: string): Promise<void> {
   try {

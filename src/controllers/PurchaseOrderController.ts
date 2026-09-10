@@ -13,7 +13,7 @@ import { AddPurchaseOrderPaymentDto } from "../dto/purchaseOrderPayment.dto";
 import { computeCostSheet } from "../utils/costSheet";
 import { buildPurchaseOrderPdf } from "../utils/purchaseOrderPdf";
 import { currentNepaliFiscalYearLabel } from "../utils/nepaliFiscalYear";
-import { downloadFileFromStorage } from "../config/supabaseStorage";
+import { downloadFileFromStorageCached } from "../config/supabaseStorage";
 
 const PDF_INCLUDE = { vendor: true, organization: true, items: true } as const;
 
@@ -579,20 +579,21 @@ export class PurchaseOrderController {
   static downloadPdf = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id as string, req.organization!.id);
-      if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
+      const purchaseOrder = await prisma.purchaseOrder.findFirst({ where: { id: parseInt(id as string) }, include: PDF_INCLUDE });
+      if (
+        !purchaseOrder ||
+        purchaseOrder.organizationId !== req.organization!.id ||
+        !PurchaseOrderController.isVisibleTo(purchaseOrder, req)
+      ) {
         return res.status(404).json({ message: "Purchase order not found" });
       }
-
-      const purchaseOrder = await prisma.purchaseOrder.findUnique({ where: { id: existing.id }, include: PDF_INCLUDE });
-      if (!purchaseOrder) return res.status(404).json({ message: "Purchase order not found" });
 
       // A missing/unreadable letterhead image shouldn't block PDF generation — the template
       // just falls back to a blank signature line.
       const loadOrgImage = async (key: string | null | undefined) => {
         if (!key) return null;
         try {
-          return await downloadFileFromStorage(key);
+          return await downloadFileFromStorageCached(key);
         } catch (error) {
           console.error(`Failed to load organization letterhead image "${key}":`, error);
           return null;

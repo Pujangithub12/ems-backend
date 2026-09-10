@@ -8,7 +8,7 @@ import {
 } from "../dto/proformaInvoice.dto";
 import { ProformaInvoiceStatus } from "../types/domain";
 import { buildProformaInvoicePdf } from "../utils/proformaInvoicePdf";
-import { downloadFileFromStorage } from "../config/supabaseStorage";
+import { downloadFileFromStorageCached } from "../config/supabaseStorage";
 
 const DETAIL_INCLUDE = {
   purchaseOrder: true,
@@ -474,7 +474,7 @@ export class ProformaInvoiceController {
       const loadOrgImage = async (key: string | null | undefined) => {
         if (!key) return null;
         try {
-          return await downloadFileFromStorage(key);
+          return await downloadFileFromStorageCached(key);
         } catch (error) {
           console.error(`Failed to load organization letterhead image "${key}":`, error);
           return null;
