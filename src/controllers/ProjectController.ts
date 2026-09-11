@@ -237,23 +237,6 @@ export class ProjectController {
 
       const project = shapeProject(projectRow);
 
-      console.log(
-        "[ProjectController.getProjectById] Found project:",
-        project?.id,
-        project?.name,
-      );
-      console.log(
-        "[ProjectController.getProjectById] projectTasks length:",
-        project?.projectTasks?.length,
-      );
-      console.log("[ProjectController.getProjectById] headings tasks:");
-      project?.headings?.forEach((h: any) => {
-        console.log(`  - Heading ${h.name}: ${h.tasks?.length} tasks`);
-        h.subHeadings?.forEach((sh: any) => {
-          console.log(`    - Subheading ${sh.name}: ${sh.tasks?.length} tasks`);
-        });
-      });
-
       sanitizeAssignees(project);
 
       return res.status(200).json(project);

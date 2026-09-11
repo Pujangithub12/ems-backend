@@ -34,6 +34,47 @@ export interface CostSheetBreakdown {
   landedCostPerUnit: number;
 }
 
+/** The exact fields computeCostSheetFromData reads off a PurchaseOrder — narrow on purpose so
+ * any caller that already has a PO loaded (with this shape, however it got it) can compute the
+ * cost sheet without a second DB round-trip. Matches the include computeCostSheet itself uses
+ * below, and PO_FINANCE_INCLUDE / getItemCostReport's / getPurchaseOrderCostBreakdown's own
+ * queries in FinanceController.ts. */
+export interface PurchaseOrderForCostSheet {
+  items: { quantity: number; unitPrice: { toNumber(): number } | number | string | null }[];
+  shipment: {
+    freightCost: { toNumber(): number } | number | string | null;
+    loadingCost: { toNumber(): number } | number | string | null;
+    unloadingCost: { toNumber(): number } | number | string | null;
+    fuelCost: { toNumber(): number } | number | string | null;
+    miscellaneousCost: { toNumber(): number } | number | string | null;
+    localTaxCost: { toNumber(): number } | number | string | null;
+    insurance: { premium: { toNumber(): number } | number | string | null } | null;
+    customs: {
+      importDuty: { toNumber(): number } | number | string | null;
+      vat: { toNumber(): number } | number | string | null;
+      excise: { toNumber(): number } | number | string | null;
+      serviceCharge: { toNumber(): number } | number | string | null;
+      documentationCost: { toNumber(): number } | number | string | null;
+      inspectionCost: { toNumber(): number } | number | string | null;
+      warehouseCost: { toNumber(): number } | number | string | null;
+      miscellaneousCost: { toNumber(): number } | number | string | null;
+    } | null;
+    letterOfCredit: {
+      lcCharge: { toNumber(): number } | number | string | null;
+      lcCommission: { toNumber(): number } | number | string | null;
+      /** Not read by the cost-sheet computation itself — included here only so callers that
+       * also need it (buildPoCostBreakdownRows) can use this one shared shipment type instead
+       * of declaring their own overlapping narrower one. */
+      lcNumber: string | null;
+    } | null;
+  } | null;
+  proformaInvoices: {
+    status: string;
+    exchangeRate: { toNumber(): number } | number | string | null;
+    items: { quantity: number; unitPrice: { toNumber(): number } | number | string | null }[];
+  }[];
+}
+
 /**
  * Computes the "Cost Sheet" (spec section 9) for a purchase order — always
  * derived on the fly from PI/Shipment/Insurance/Customs, never stored.
@@ -51,18 +92,13 @@ export interface CostSheetBreakdown {
  * Landed Cost Per Unit = Grand Total / total PO item quantity — this is the
  * figure GoodsReceiptController writes onto InventoryItem.averageCost when a
  * GRN is accepted.
+ *
+ * Pure/synchronous — no DB access. Callers that only have a purchaseOrderId
+ * should use computeCostSheet below instead; callers that already have a
+ * matching PO loaded (e.g. FinanceController's list endpoints, which would
+ * otherwise re-fetch the same PO once per row) call this directly.
  */
-export async function computeCostSheet(purchaseOrderId: number): Promise<CostSheetBreakdown | null> {
-  const purchaseOrder = await prisma.purchaseOrder.findUnique({
-    where: { id: purchaseOrderId },
-    include: {
-      items: true,
-      shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
-      proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" } },
-    },
-  });
-  if (!purchaseOrder) return null;
-
+export function computeCostSheetFromData(purchaseOrder: PurchaseOrderForCostSheet): CostSheetBreakdown {
   const approvedPi = purchaseOrder.proformaInvoices.find((pi) => pi.status === "approved");
   let piValue: number;
   let piSource: CostSheetBreakdown["piSource"];
@@ -142,4 +178,19 @@ export async function computeCostSheet(purchaseOrderId: number): Promise<CostShe
     totalQuantity,
     landedCostPerUnit: grandTotal / totalQuantity,
   };
+}
+
+/** By-id convenience wrapper around computeCostSheetFromData, for callers that don't already
+ * have a matching PO loaded. */
+export async function computeCostSheet(purchaseOrderId: number): Promise<CostSheetBreakdown | null> {
+  const purchaseOrder = await prisma.purchaseOrder.findUnique({
+    where: { id: purchaseOrderId },
+    include: {
+      items: true,
+      shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
+      proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" } },
+    },
+  });
+  if (!purchaseOrder) return null;
+  return computeCostSheetFromData(purchaseOrder);
 }
