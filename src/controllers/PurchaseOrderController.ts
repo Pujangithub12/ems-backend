@@ -30,11 +30,13 @@ const DETAIL_INCLUDE = {
   project: true,
   createdBy: { select: { id: true, fullName: true } },
   items: { include: { item: true } },
-  statusHistory: { include: { changedBy: true }, orderBy: { createdAt: "desc" as const } },
+  // Only .fullName is ever read from either of these (PurchaseOrderDetail.tsx) — same
+  // select-just-what's-used pattern as createdBy above, instead of the full User row.
+  statusHistory: { include: { changedBy: { select: { id: true, fullName: true } } }, orderBy: { createdAt: "desc" as const } },
   proformaInvoices: { include: { items: true }, orderBy: { createdAt: "desc" as const } },
   shipment: { include: { insurance: true, customs: { include: { documents: true } }, letterOfCredit: true } },
   goodsReceipts: {
-    include: { items: true, photos: true, warehouse: true, receivedBy: true },
+    include: { items: true, photos: true, warehouse: true, receivedBy: { select: { id: true, fullName: true } } },
     orderBy: { createdAt: "desc" as const },
   },
 } as const;
@@ -52,6 +54,9 @@ export class PurchaseOrderController {
         },
         include: LIST_INCLUDE,
         orderBy: { createdAt: "desc" },
+        // Safety cap, not real pagination — this endpoint has no page/pageSize UI, so this just
+        // stops unbounded growth from degrading the page further as PO history accumulates.
+        take: 500,
       });
       return res.status(200).json({ purchaseOrders });
     } catch (error) {

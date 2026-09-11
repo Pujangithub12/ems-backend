@@ -108,6 +108,9 @@ export class ProformaInvoiceController {
         where: { organizationId: req.organization!.id },
         include: LIST_INCLUDE,
         orderBy: { createdAt: "desc" },
+        // Safety cap, not real pagination — this endpoint has no page/pageSize UI, so this just
+        // stops unbounded growth from degrading the page further as PI history accumulates.
+        take: 500,
       });
       return res.status(200).json({ proformaInvoices });
     } catch (error) {

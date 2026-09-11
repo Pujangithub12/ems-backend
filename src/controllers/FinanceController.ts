@@ -3,7 +3,7 @@ import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { UserRole } from "../types/enums";
 import { roleHasPermission } from "../utils/permissionService";
-import { computeCostSheet } from "../utils/costSheet";
+import { computeCostSheetFromData, PurchaseOrderForCostSheet } from "../utils/costSheet";
 import { getTodayExchangeRates } from "../utils/exchangeRates";
 import { AddManualRecordPaymentDto, SaveFinanceManualRecordDto, EditCostBreakdownRowDto } from "../dto/purchaseOrderPayment.dto";
 
@@ -96,18 +96,22 @@ const toPaymentEntries = (
     notes: p.notes,
   }));
 
-/** Finance's per-PO row — one entry per real PurchaseOrder. */
-async function buildFinanceRow(po: {
-  id: number;
-  poNumber: string | null;
-  paymentTerms: string | null;
-  createdAt: Date;
-  currency: string | null;
-  vendor: { id: number; name: string } | null;
-  items: { itemName: string }[];
-  payments: { id: number; amount: { toNumber(): number }; paidDate: Date; exchangeRate: { toNumber(): number } | null; reference: string | null; notes: string | null }[];
-}): Promise<FinanceLedgerRow> {
-  const costSheet = await computeCostSheet(po.id);
+/** Finance's per-PO row — one entry per real PurchaseOrder. `po` must already carry everything
+ * computeCostSheetFromData needs (PO_FINANCE_INCLUDE provides it) — avoids a second per-row
+ * fetch that used to re-load the same PO once for every row on this page. */
+async function buildFinanceRow(
+  po: {
+    id: number;
+    poNumber: string | null;
+    paymentTerms: string | null;
+    createdAt: Date;
+    currency: string | null;
+    vendor: { id: number; name: string } | null;
+    items: { itemName: string }[];
+    payments: { id: number; amount: { toNumber(): number }; paidDate: Date; exchangeRate: { toNumber(): number } | null; reference: string | null; notes: string | null }[];
+  } & PurchaseOrderForCostSheet,
+): Promise<FinanceLedgerRow> {
+  const costSheet = computeCostSheetFromData(po);
   const itemValue = costSheet?.grandTotal ?? 0;
   const payments = toPaymentEntries(po.payments);
   const amountPaid = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -199,28 +203,28 @@ const refundFields = (refundableAmount: number, refundedAmount: number) => ({
  * default to the same proration as getItemCostReport (split per item by its share of the PO's
  * item-value subtotal), unless that item has a manual override saved from the Finance
  * cost-breakdown page (see updatePurchaseOrderItemBreakdownRow), which wins. */
-async function buildPoCostBreakdownRows(po: {
-  id: number;
-  items: {
+async function buildPoCostBreakdownRows(
+  po: {
     id: number;
-    itemName: string;
-    quantity: number;
-    unitPrice: { toNumber(): number } | null;
-    remarks: string | null;
-    freightOverride: { toNumber(): number } | null;
-    lcChargeOverride: { toNumber(): number } | null;
-    lcCommissionOverride: { toNumber(): number } | null;
-    vatOverride: { toNumber(): number } | null;
-    importDutiesOverride: { toNumber(): number } | null;
-    insuranceOverride: { toNumber(): number } | null;
-    refundableAmount: { toNumber(): number } | null;
-    refundedAmount: { toNumber(): number } | null;
-    lcAmount: { toNumber(): number } | null;
-  }[];
-  shipment: { letterOfCredit: { lcNumber: string | null } | null } | null;
-}): Promise<CostBreakdownRow[]> {
-  const costSheet = await computeCostSheet(po.id);
-  if (!costSheet) return [];
+    items: {
+      id: number;
+      itemName: string;
+      quantity: number;
+      unitPrice: { toNumber(): number } | null;
+      remarks: string | null;
+      freightOverride: { toNumber(): number } | null;
+      lcChargeOverride: { toNumber(): number } | null;
+      lcCommissionOverride: { toNumber(): number } | null;
+      vatOverride: { toNumber(): number } | null;
+      importDutiesOverride: { toNumber(): number } | null;
+      insuranceOverride: { toNumber(): number } | null;
+      refundableAmount: { toNumber(): number } | null;
+      refundedAmount: { toNumber(): number } | null;
+      lcAmount: { toNumber(): number } | null;
+    }[];
+  } & PurchaseOrderForCostSheet,
+): Promise<CostBreakdownRow[]> {
+  const costSheet = computeCostSheetFromData(po);
 
   const itemsSubtotal = po.items.reduce((sum, item) => sum + item.quantity * num(item.unitPrice), 0);
   const lcNumber = po.shipment?.letterOfCredit?.lcNumber ?? null;
@@ -477,8 +481,7 @@ export class FinanceController {
       }[] = [];
 
       for (const po of purchaseOrders) {
-        const costSheet = await computeCostSheet(po.id);
-        if (!costSheet) continue;
+        const costSheet = computeCostSheetFromData(po);
 
         const itemsSubtotal = po.items.reduce((sum, item) => sum + item.quantity * num(item.unitPrice), 0);
         const lcNumber = po.shipment?.letterOfCredit?.lcNumber ?? null;
@@ -526,6 +529,9 @@ export class FinanceController {
           vendor: true,
           items: true,
           shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
+          // Needed by computeCostSheetFromData (via buildPoCostBreakdownRows) — included here
+          // so that computation doesn't have to re-fetch this same PO a second time.
+          proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" as const } },
         },
       });
       if (!po) return res.status(404).json({ message: "Purchase order not found" });
