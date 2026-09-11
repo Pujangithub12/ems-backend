@@ -14,6 +14,7 @@ const toNum = (value: { toNumber(): number } | null | undefined): number | null 
 
 const shapeRow = (row: {
   date: Date;
+  dateBs: string | null;
   generation: { toNumber(): number } | null;
   checkMeterInitial: { toNumber(): number } | null;
   checkMeterFinal: { toNumber(): number } | null;
@@ -26,6 +27,7 @@ const shapeRow = (row: {
   const mainMeterFinal = toNum(row.mainMeterFinal);
   return {
     date: row.date.toISOString().slice(0, 10),
+    dateBs: row.dateBs,
     generation: toNum(row.generation),
     checkMeterInitial,
     checkMeterFinal,
@@ -81,7 +83,7 @@ export class DailyGenerationController {
   /** PUT /projects/:projectId/performance/daily — upserts (find-or-create) the row for one day. Admin-gated (see routes.ts). */
   static upsertDaily = async (req: AuthRequest, res: Response) => {
     const { projectId } = req.params;
-    const { date, checkMeterInitial, checkMeterFinal, mainMeterInitial, mainMeterFinal }: UpsertDailyGenerationDto =
+    const { date, dateBs, checkMeterInitial, checkMeterFinal, mainMeterInitial, mainMeterFinal }: UpsertDailyGenerationDto =
       req.body;
 
     const parsedDate = parseDateParam(date);
@@ -113,6 +115,10 @@ export class DailyGenerationController {
         checkMeterFinal: checkMeterFinal ?? null,
         mainMeterInitial: mainMeterInitial ?? null,
         mainMeterFinal: mainMeterFinal ?? null,
+        // Only touched when the caller actually sends a BS note (e.g. a BS-format upload) —
+        // omitting it leaves whatever was previously saved untouched, rather than clearing it
+        // every time this day is re-saved from an AD-only entry form.
+        ...(dateBs !== undefined ? { dateBs: dateBs || null } : {}),
       };
 
       let row;

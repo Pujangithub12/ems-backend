@@ -11,9 +11,9 @@ import {
 } from "../dto/purchaseOrder.dto";
 import { AddPurchaseOrderPaymentDto } from "../dto/purchaseOrderPayment.dto";
 import { computeCostSheet } from "../utils/costSheet";
-import { buildPurchaseOrderPdf } from "../utils/purchaseOrderPdf";
+import { buildPurchaseOrderPdf, PurchaseOrderPdfData } from "../utils/purchaseOrderPdf";
 import { currentNepaliFiscalYearLabel } from "../utils/nepaliFiscalYear";
-import { downloadFileFromStorage } from "../config/supabaseStorage";
+import { downloadFileFromStorageCached } from "../config/supabaseStorage";
 
 const PDF_INCLUDE = { vendor: true, organization: true, items: true } as const;
 
@@ -571,6 +571,72 @@ export class PurchaseOrderController {
   };
 
   /**
+   * Shared by downloadPdf and sendPdfEmail — loads the PO (org/visibility-checked) and its
+   * letterhead images, and assembles the PurchaseOrderPdfData the renderer needs. Returns null
+   * when the PO doesn't exist, isn't in the caller's organization, or isn't visible to them, so
+   * both callers can respond 404 the same way.
+   */
+  private static async loadPdfData(
+    id: string,
+    req: AuthRequest,
+  ): Promise<{ pdfData: PurchaseOrderPdfData; downloadName: string } | null> {
+    const purchaseOrder = await prisma.purchaseOrder.findFirst({ where: { id: parseInt(id, 10) }, include: PDF_INCLUDE });
+    if (
+      !purchaseOrder ||
+      purchaseOrder.organizationId !== req.organization!.id ||
+      !PurchaseOrderController.isVisibleTo(purchaseOrder, req)
+    ) {
+      return null;
+    }
+
+    // A missing/unreadable letterhead image shouldn't block PDF generation — the template
+    // just falls back to a blank signature line.
+    const loadOrgImage = async (key: string | null | undefined) => {
+      if (!key) return null;
+      try {
+        return await downloadFileFromStorageCached(key);
+      } catch (error) {
+        console.error(`Failed to load organization letterhead image "${key}":`, error);
+        return null;
+      }
+    };
+    const [signatureImage, stampImage] = await Promise.all([
+      loadOrgImage(purchaseOrder.organization?.signatureImagePath),
+      loadOrgImage(purchaseOrder.organization?.stampImagePath),
+    ]);
+
+    const pdfData: PurchaseOrderPdfData = {
+      poNumber: purchaseOrder.poNumber,
+      createdAt: purchaseOrder.createdAt,
+      poDate: purchaseOrder.poDate,
+      paymentTerms: purchaseOrder.paymentTerms,
+      incoterms: purchaseOrder.incoterms,
+      taxPercent: purchaseOrder.taxPercent,
+      terms: purchaseOrder.terms,
+      deliveryPeriod: purchaseOrder.deliveryPeriod,
+      finalDestination: purchaseOrder.finalDestination,
+      customerContactPerson: purchaseOrder.customerContactPerson,
+      customerPanVatNumber: purchaseOrder.customerPanVatNumber,
+      purchaseType: purchaseOrder.purchaseType,
+      currency: purchaseOrder.currency,
+      organizationName: purchaseOrder.organization?.name ?? null,
+      organizationAddress: purchaseOrder.organization?.address ?? null,
+      organizationContact: purchaseOrder.organization?.contact ?? null,
+      organizationEmail: purchaseOrder.organization?.email ?? null,
+      organizationWebsite: purchaseOrder.organization?.website ?? null,
+      signatureImage,
+      stampImage,
+      vendor: purchaseOrder.vendor,
+      items: purchaseOrder.items,
+    };
+
+    // poNumber can contain "/" (e.g. "1-83/84" — incremental number + Nepali fiscal year),
+    // which isn't safe inside a Content-Disposition/attachment filename, so swap it for "-" there only.
+    const downloadName = (purchaseOrder.poNumber || `PO-${purchaseOrder.id}`).replace(/\//g, "-");
+    return { pdfData, downloadName };
+  }
+
+  /**
    * GET /purchase-orders/:id/pdf — renders the PO on demand and streams it back as an
    * attachment (forces a download rather than an inline view). Always regenerated live from
    * current data rather than any stored snapshot, so edits made afterward (HSN codes, shipping
@@ -579,58 +645,13 @@ export class PurchaseOrderController {
   static downloadPdf = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id as string, req.organization!.id);
-      if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
+      const loaded = await PurchaseOrderController.loadPdfData(id as string, req);
+      if (!loaded) {
         return res.status(404).json({ message: "Purchase order not found" });
       }
+      const { pdfData, downloadName } = loaded;
 
-      const purchaseOrder = await prisma.purchaseOrder.findUnique({ where: { id: existing.id }, include: PDF_INCLUDE });
-      if (!purchaseOrder) return res.status(404).json({ message: "Purchase order not found" });
-
-      // A missing/unreadable letterhead image shouldn't block PDF generation — the template
-      // just falls back to a blank signature line.
-      const loadOrgImage = async (key: string | null | undefined) => {
-        if (!key) return null;
-        try {
-          return await downloadFileFromStorage(key);
-        } catch (error) {
-          console.error(`Failed to load organization letterhead image "${key}":`, error);
-          return null;
-        }
-      };
-      const [signatureImage, stampImage] = await Promise.all([
-        loadOrgImage(purchaseOrder.organization?.signatureImagePath),
-        loadOrgImage(purchaseOrder.organization?.stampImagePath),
-      ]);
-
-      const doc = buildPurchaseOrderPdf({
-        poNumber: purchaseOrder.poNumber,
-        createdAt: purchaseOrder.createdAt,
-        poDate: purchaseOrder.poDate,
-        paymentTerms: purchaseOrder.paymentTerms,
-        incoterms: purchaseOrder.incoterms,
-        taxPercent: purchaseOrder.taxPercent,
-        terms: purchaseOrder.terms,
-        deliveryPeriod: purchaseOrder.deliveryPeriod,
-        finalDestination: purchaseOrder.finalDestination,
-        customerContactPerson: purchaseOrder.customerContactPerson,
-        customerPanVatNumber: purchaseOrder.customerPanVatNumber,
-        purchaseType: purchaseOrder.purchaseType,
-        currency: purchaseOrder.currency,
-        organizationName: purchaseOrder.organization?.name ?? null,
-        organizationAddress: purchaseOrder.organization?.address ?? null,
-        organizationContact: purchaseOrder.organization?.contact ?? null,
-        organizationEmail: purchaseOrder.organization?.email ?? null,
-        organizationWebsite: purchaseOrder.organization?.website ?? null,
-        signatureImage,
-        stampImage,
-        vendor: purchaseOrder.vendor,
-        items: purchaseOrder.items,
-      });
-
-      // poNumber can contain "/" (e.g. "1-83/84" — incremental number + Nepali fiscal year),
-      // which isn't safe inside a Content-Disposition filename, so swap it for "-" there only.
-      const downloadName = (purchaseOrder.poNumber || `PO-${purchaseOrder.id}`).replace(/\//g, "-");
+      const doc = buildPurchaseOrderPdf(pdfData);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="${downloadName}.pdf"`);
       doc.pipe(res);
@@ -640,6 +661,7 @@ export class PurchaseOrderController {
       return res.status(500).json({ message: "Internal server error" });
     }
   };
+
 
   /** GET /purchase-orders/:id/cost-sheet — spec section 9's landed-cost breakdown, always computed on the fly. */
   static getCostSheet = async (req: AuthRequest, res: Response) => {

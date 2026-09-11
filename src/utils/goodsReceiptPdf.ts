@@ -78,7 +78,7 @@ export function buildGoodsReceiptPdf(gr: GoodsReceiptPdfData): PDFKit.PDFDocumen
   // ---- Supplier / Date / Advice Note Number ----
   doc.font("Helvetica").fontSize(10);
   doc.text(
-    `Supplier: ${gr.supplierName || "--"}     Date: ${fmtDate(gr.createdAt)}     Advice Note Number: ${gr.grnNumber || "--"}`,
+    `Supplier: ${gr.supplierName || "--"}          Date: ${fmtDate(gr.createdAt)}          Advice Note Number: ${gr.grnNumber || "--"}`,
     MARGIN,
     y,
     { width: CONTENT_WIDTH },
@@ -87,7 +87,7 @@ export function buildGoodsReceiptPdf(gr: GoodsReceiptPdfData): PDFKit.PDFDocumen
 
   // ---- Order Number / Delivery Location / Cost-Centre ----
   doc.text(
-    `Order Number: ${gr.poNumber || "--"}     Delivery Location: ${gr.deliveryLocation || "--"}     Cost-Centre: ${gr.costCentre || "--"}`,
+    `Order Number: ${gr.poNumber || "--"}          Delivery Location: ${gr.deliveryLocation || "--"}          Cost-Centre: ${gr.costCentre || "--"}`,
     MARGIN,
     y,
     { width: CONTENT_WIDTH },
