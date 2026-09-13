@@ -105,6 +105,20 @@ app.use("/uploads", authMiddleware, verifyUploadAccess, async (req, res) => {
   }
 });
 
+// Cloudflare fronts the Render deployment and automatically re-compresses (br/gzip) any
+// response the origin doesn't already mark otherwise — for some larger, dynamic JSON payloads
+// (e.g. /api/tasks, /api/users, /api/hierarchy, /api/dashboard right after login) that
+// re-compression has been observed to hand the browser a body it can't decode
+// (net::ERR_CONTENT_DECODING_FAILED), because these responses were never meant to be cached or
+// transformed by an intermediary in the first place — every one of them is a fresh,
+// per-request, per-user API response. `no-transform` is the standard HTTP directive (RFC 7234
+// §5.2.2.4) that tells a compliant proxy/CDN — Cloudflare included — to pass the response
+// through byte-for-byte instead of re-encoding it; `no-store` additionally stops it from ever
+// being cached, which these authenticated responses shouldn't be regardless.
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-transform");
+  next();
+});
 app.use("/api", routes);
 
 // Turns a rejected upload (blocked file type, size-limit) into a clean 400
