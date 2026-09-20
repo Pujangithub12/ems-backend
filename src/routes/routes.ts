@@ -5,6 +5,10 @@ import { UserController } from "../controllers/UserController";
 import { InviteController } from "../controllers/InviteController";
 import { AnnouncementController } from "../controllers/AnnouncementController";
 import { PlantReportTableController } from "../controllers/PlantReportTableController";
+import { MaterialController } from "../controllers/MaterialController";
+import { MaterialCustomTableController } from "../controllers/MaterialCustomTableController";
+import { MaterialFieldController } from "../controllers/MaterialFieldController";
+import { PurchaseBillController } from "../controllers/PurchaseBillController";
 import { SiteActivityController } from "../controllers/SiteActivityController";
 import { NotificationController } from "../controllers/NotificationController";
 import { ProjectController } from "../controllers/ProjectController";
@@ -216,6 +220,117 @@ router.post("/plant-report-tables/:id/rows", authMiddleware, PlantReportTableCon
 router.put("/plant-report-rows/:id", authMiddleware, PlantReportTableController.updateRow);
 router.delete("/plant-report-rows/:id", authMiddleware, PlantReportTableController.removeRow);
 router.post("/plant-report-tables/:id/import", authMiddleware, PlantReportTableController.importSheet);
+
+// Materials page — a project-scoped material stock/receipt ledger. Reads +
+// recording a receive/use transaction are open to any org member (data
+// entry); editing the material master list and deleting a transaction
+// (correction only) are admin-gated. See MaterialController.
+router.get("/materials", authMiddleware, MaterialController.list);
+router.post(
+  "/materials",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialController.create,
+);
+router.put(
+  "/materials/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialController.update,
+);
+router.delete(
+  "/materials/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialController.remove,
+);
+router.post("/materials/:id/transactions", authMiddleware, MaterialController.addTransaction);
+router.delete(
+  "/materials/transactions/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialController.deleteTransaction,
+);
+
+// Materials page — optional custom spreadsheet tabs, identical mechanic to
+// Plant Report's tables (see above): any org member can read/add/edit/delete
+// rows (data entry); creating/renaming/deleting a tab or its columns is
+// admin-gated.
+router.get("/material-custom-tables", authMiddleware, MaterialCustomTableController.list);
+router.get("/material-custom-tables/:id", authMiddleware, MaterialCustomTableController.getById);
+router.post(
+  "/material-custom-tables",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialCustomTableController.create,
+);
+router.put(
+  "/material-custom-tables/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialCustomTableController.update,
+);
+router.delete(
+  "/material-custom-tables/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialCustomTableController.remove,
+);
+router.post(
+  "/material-custom-tables/:id/columns",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialCustomTableController.createColumn,
+);
+router.put(
+  "/material-custom-columns/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialCustomTableController.updateColumn,
+);
+router.delete(
+  "/material-custom-columns/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialCustomTableController.removeColumn,
+);
+router.post("/material-custom-tables/:id/rows", authMiddleware, MaterialCustomTableController.createRow);
+router.put("/material-custom-rows/:id", authMiddleware, MaterialCustomTableController.updateRow);
+router.delete("/material-custom-rows/:id", authMiddleware, MaterialCustomTableController.removeRow);
+router.post("/material-custom-tables/:id/import", authMiddleware, MaterialCustomTableController.importSheet);
+
+// Materials page — custom field definitions shown as extra columns on the
+// Material Stock table (distinct from the custom tabs above, which live on
+// the Material master row itself). Reads are open to any org member;
+// defining/renaming/deleting a field is a structural change, admin-gated.
+router.get("/material-fields", authMiddleware, MaterialFieldController.list);
+router.post(
+  "/material-fields",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialFieldController.create,
+);
+router.put(
+  "/material-fields/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialFieldController.update,
+);
+router.delete(
+  "/material-fields/:id",
+  authMiddleware,
+  roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  MaterialFieldController.remove,
+);
+
+// Purchase page — a purchase-bill ledger. Any org member can read and record
+// bills (data entry, including Excel import) and edit them; deleting a bill is
+// admin-gated. See PurchaseBillController.
+router.get("/purchase-bills", authMiddleware, PurchaseBillController.list);
+router.post("/purchase-bills", authMiddleware, PurchaseBillController.create);
+router.post("/purchase-bills/import", authMiddleware, PurchaseBillController.importBills);
+router.put("/purchase-bills/:id", authMiddleware, PurchaseBillController.update);
+router.delete("/purchase-bills/:id", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), PurchaseBillController.remove);
 
 // Site Activities page — one fixed-shape daily report per (project, date):
 // work activities, equipment, manpower, photos. Any org member can read and
