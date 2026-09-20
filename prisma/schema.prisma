@@ -38,6 +38,8 @@ model User {
   inventoryAttachmentsUploaded      InventoryAttachment[]
   inventoryItemsUpdated             InventoryItem[]
   inventoryTransactionsPerformed    InventoryTransaction[]
+  materialTransactionsCreated       MaterialTransaction[]
+  purchaseBillsCreated              PurchaseBill[]
   leaveRequests                     LeaveRequest[]
   myTasks                           MyTask[]
   procurementAttachmentsUploaded    ProcurementAttachment[]
@@ -106,6 +108,10 @@ model Organization {
   memberships           OrganizationMembership[]
   notifications         Notification[]
   plantReportTables     PlantReportTable[]
+  materials             Material[]
+  materialCustomTables  MaterialCustomTable[]
+  materialFields        MaterialField[]
+  purchaseBills         PurchaseBill[]
   siteActivityReports   SiteActivityReport[]
   siteActivityWorkTypes SiteActivityWorkType[]
 
@@ -557,6 +563,193 @@ model PlantReportRow {
   table PlantReportTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
   @@map("plant_report_row")
+}
+
+/// A material tracked on one project's Materials page — the master row
+/// (name/category/unit/reorder threshold/default vendor). Current stock,
+/// valuation, and status are never stored here — always computed live from
+/// this material's MaterialTransaction rows (same "derive, don't store"
+/// convention as costSheet.ts's Cost Sheet), so there's nothing to keep in
+/// sync when a transaction is added, edited, or deleted.
+model Material {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  projectId      Int
+  name           String   @db.VarChar
+  code           String?  @db.VarChar
+  category       String?  @db.VarChar
+  unit           String   @db.VarChar
+  /// Reorder threshold — computed current stock at or below this (but > 0)
+  /// shows "Low Stock" on the frontend; 0 stock always shows "Out of Stock"
+  /// regardless. 0 (the default) disables the Low Stock badge entirely.
+  minStock       Float    @default(0)
+  /// Default/most-recently-used vendor — a convenience default for the next
+  /// "Receive Material" entry, not authoritative (each MaterialTransaction
+  /// records its own vendor).
+  vendorId       Int?
+  /// User-defined extra field values for this material, keyed by
+  /// MaterialField id (as a string key) — same loose JSON-keyed-by-column-id
+  /// convention as PlantReportRow.values. A deleted field just leaves an
+  /// orphaned, ignored key behind instead of a migration.
+  customFields   Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  vendor       Vendor?               @relation(fields: [vendorId], references: [id], onUpdate: NoAction)
+  transactions MaterialTransaction[]
+
+  @@map("material")
+}
+
+/// A project-scoped custom field definition for the Materials page's master
+/// list (e.g. "Brand", "Storage Location", "HS Code") — shown as extra
+/// columns on the Material Stock table. dataType is enforced in the DTO
+/// layer (customTableCells.dto.ts), not the DB, same as MaterialCustomColumn.
+model MaterialField {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  projectId      Int
+  name           String   @db.VarChar
+  /// "text" | "number" | "date" | "boolean"
+  dataType       String   @db.VarChar
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("material_field")
+}
+
+/// One receive-or-use event against a Material — the ledger a project's
+/// current stock/value/status are always computed from.
+model MaterialTransaction {
+  id          Int      @id @default(autoincrement())
+  materialId  Int
+  /// "received" | "used"
+  type        String   @db.VarChar
+  quantity    Float
+  date        DateTime @db.Date
+  /// received-only — which vendor this batch was purchased from.
+  vendorId    Int?
+  /// received-only — unit price paid for this batch; the most recent
+  /// received transaction's price is what the frontend uses for current
+  /// stock valuation.
+  unitPrice   Float?
+  /// used-only — free-text work area/task this material was consumed on.
+  workArea    String?  @db.VarChar
+  /// used-only — who it was issued to.
+  issuedTo    String?  @db.VarChar
+  reference   String?  @db.VarChar
+  remarks     String?
+  createdById Int?
+  createdAt   DateTime @default(now())
+
+  material  Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  vendor    Vendor?  @relation(fields: [vendorId], references: [id], onUpdate: NoAction)
+  createdBy User?    @relation(fields: [createdById], references: [id], onUpdate: NoAction)
+
+  @@map("material_transaction")
+}
+
+/// A project-scoped, user-defined spreadsheet tab on the Materials page —
+/// identical mechanic to PlantReportTable (custom columns + rows, Excel
+/// import), just a separate namespace since Materials already owns the
+/// fixed stock-ledger tables above and these are an unrelated, freeform
+/// addition alongside them.
+model MaterialCustomTable {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  projectId      Int
+  name           String   @db.VarChar
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  columns      MaterialCustomColumn[]
+  rows         MaterialCustomRow[]
+
+  @@map("material_custom_table")
+}
+
+/// One user-defined column on a MaterialCustomTable. dataType is enforced in
+/// the DTO layer (customTableCells.dto.ts), not the DB.
+model MaterialCustomColumn {
+  id        Int    @id @default(autoincrement())
+  tableId   Int
+  name      String @db.VarChar
+  /// "text" | "number" | "date" | "boolean"
+  dataType  String @db.VarChar
+  sortOrder Int    @default(0)
+  target    Float?
+
+  table MaterialCustomTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@map("material_custom_column")
+}
+
+/// One row of a MaterialCustomTable. Cell values are stored loosely as JSON
+/// keyed by column id (as a string key) — see PlantReportRow for the same
+/// convention and its rationale.
+model MaterialCustomRow {
+  id        Int      @id @default(autoincrement())
+  tableId   Int
+  sortOrder Int      @default(0)
+  values    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  table MaterialCustomTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@map("material_custom_row")
+}
+
+/// One purchase-bill line on the Purchase page (a single material bought on
+/// one bill). Amount / VAT amount / total / payment status are never stored —
+/// always derived from quantity, rate, vatRate and actualAmount, same "derive,
+/// don't store" convention as Material and costSheet.ts.
+model PurchaseBill {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  projectId      Int
+  date           DateTime @db.Date
+  billNo         String?  @db.VarChar
+  challanNo      String?  @db.VarChar
+  /// Linked vendor when one matches by name; vendorName is always kept so an
+  /// imported bill from an unknown supplier still displays.
+  vendorId       Int?
+  vendorName     String   @db.VarChar
+  /// Material / particulars purchased.
+  material       String   @db.VarChar
+  unit           String?  @db.VarChar
+  quantity       Float
+  rate           Float
+  /// VAT percentage applied to quantity * rate (Nepal standard 13).
+  vatRate        Float    @default(13)
+  /// Amount actually paid so far — payment status is derived from this vs the total.
+  actualAmount   Float    @default(0)
+  vehicleNo      String?  @db.VarChar
+  /// "cash" | "credit"
+  paymentMode    String   @default("credit") @db.VarChar
+  paidBy         String?  @db.VarChar
+  /// "pending" | "partial" | "paid"
+  billStatus     String   @default("pending") @db.VarChar
+  site           String?  @db.VarChar
+  remarks        String?
+  createdById    Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  vendor       Vendor?      @relation(fields: [vendorId], references: [id], onUpdate: NoAction)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onUpdate: NoAction)
+
+  @@index([organizationId, projectId, date])
+  @@map("purchase_bill")
 }
 
 /// One project's daily site report ("Site Activities" page/sidebar link) —
@@ -1253,21 +1446,25 @@ model Project {
   estimatedTotalCost Decimal?  @db.Decimal
   sellingPrice       Decimal?  @db.Decimal
 
-  dailyGeneration     DailyGeneration[]
-  inventoryItems      InventoryItem[]
-  monthlyPerformance  MonthlyPerformance[]
-  plantReportTables   PlantReportTable[]
-  procurementItems    ProcurementItem[]
-  purchaseOrders      PurchaseOrder[]
-  siteActivityReports SiteActivityReport[]
-  organization        Organization?        @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_c224ab17df530651e53a398ed92")
-  assignees           ProjectAssignee[]
-  files               ProjectFile[]
-  headings            ProjectHeading[]
-  scheduleTasks       ScheduleTask[]
-  scheduleTaskLinks   ScheduleTaskLink[]
-  projectTasks        Task[]
-  taskLinks           TaskLink[]
+  dailyGeneration      DailyGeneration[]
+  inventoryItems       InventoryItem[]
+  monthlyPerformance   MonthlyPerformance[]
+  plantReportTables    PlantReportTable[]
+  materials            Material[]
+  materialCustomTables MaterialCustomTable[]
+  materialFields       MaterialField[]
+  purchaseBills        PurchaseBill[]
+  procurementItems     ProcurementItem[]
+  purchaseOrders       PurchaseOrder[]
+  siteActivityReports  SiteActivityReport[]
+  organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_c224ab17df530651e53a398ed92")
+  assignees            ProjectAssignee[]
+  files                ProjectFile[]
+  headings             ProjectHeading[]
+  scheduleTasks        ScheduleTask[]
+  scheduleTaskLinks    ScheduleTaskLink[]
+  projectTasks         Task[]
+  taskLinks            TaskLink[]
 
   @@map("project")
 }
@@ -1572,6 +1769,9 @@ model Vendor {
   purchaseOrders       PurchaseOrder[]
   financeManualRecords FinanceManualRecord[]
   proformaInvoices     ProformaInvoice[]
+  materials            Material[]
+  materialTransactions MaterialTransaction[]
+  purchaseBills        PurchaseBill[]
   organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_fb0f972eb0ca9c48c227968fd96")
 
   @@map("vendor")
