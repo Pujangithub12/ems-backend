@@ -6,6 +6,7 @@ import type { OrganizationModel as Organization } from "../generated/prisma/mode
 import { PermissionKey } from "../config/permissions";
 import { roleHasPermission } from "../utils/permissionService";
 import { JWT_SECRET } from "../config/jwt";
+import { getAuthUser } from "../utils/authCache";
 
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 
@@ -40,10 +41,7 @@ export const authMiddleware = async (
       role: "",
     };
 
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      include: { memberships: { include: { organization: true } } },
-    });
+    const user = await getAuthUser(req.user.id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }

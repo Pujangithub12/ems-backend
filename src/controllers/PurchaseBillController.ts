@@ -238,6 +238,25 @@ export class PurchaseBillController {
     }
   };
 
+  /** POST /purchase-bills/bulk-delete — deletes several bills at once (admin-only,
+   * scoped to the caller's organization; ids from other orgs are ignored). */
+  static bulkRemove = async (req: AuthRequest, res: Response) => {
+    const ids: number[] = Array.isArray(req.body?.ids)
+      ? [...new Set<number>(req.body.ids.map(Number).filter((n: number) => Number.isInteger(n)))]
+      : [];
+    if (ids.length === 0) return res.status(400).json({ message: "No bills selected" });
+    if (ids.length > MAX_LIST) return res.status(400).json({ message: `Too many bills (max ${MAX_LIST})` });
+
+    try {
+      const organizationId = req.organization!.id;
+      const result = await prisma.purchaseBill.deleteMany({ where: { id: { in: ids }, organizationId } });
+      return res.status(200).json({ message: "Bills deleted", count: result.count });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   /** POST /purchase-bills/import — bulk-creates bills from a spreadsheet parsed
    * client-side (any org member, same level as recording one bill). Invalid
    * rows are skipped and reported rather than failing the whole file. */
