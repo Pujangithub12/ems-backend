@@ -99,7 +99,7 @@ export const computeAverageLeafProgress = (tree: any[]): number => {
 export const saveSubTasks = async (
   parsedSubTasks: any[],
   taskId: number,
-  tx: Prisma.TransactionClient | typeof prisma = prisma,
+  tx: Pick<typeof prisma, "subTask"> = prisma,
   parentSubTaskId?: number,
 ): Promise<void> => {
   for (const subTaskData of parsedSubTasks) {

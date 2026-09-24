@@ -8,6 +8,7 @@ import { PlantReportTableController } from "../controllers/PlantReportTableContr
 import { MaterialController } from "../controllers/MaterialController";
 import { MaterialCustomTableController } from "../controllers/MaterialCustomTableController";
 import { MaterialFieldController } from "../controllers/MaterialFieldController";
+import { redis, isRedisReady } from "../config/redis";
 import { PurchaseBillController } from "../controllers/PurchaseBillController";
 import { SiteActivityController } from "../controllers/SiteActivityController";
 import { NotificationController } from "../controllers/NotificationController";
@@ -68,7 +69,7 @@ router.get("/me", authMiddleware, AuthController.getMe);
 router.put("/me", authMiddleware, AuthController.updateMe);
 router.put("/me/password", authMiddleware, AuthController.changePassword);
 router.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+  res.status(200).json({ status: "ok", redis: redis ? (isRedisReady() ? "connected" : "unavailable") : "disabled", timestamp: new Date().toISOString() });
 });
 
 // Organization routes
@@ -330,6 +331,7 @@ router.get("/purchase-bills", authMiddleware, PurchaseBillController.list);
 router.post("/purchase-bills", authMiddleware, PurchaseBillController.create);
 router.post("/purchase-bills/import", authMiddleware, PurchaseBillController.importBills);
 router.put("/purchase-bills/:id", authMiddleware, PurchaseBillController.update);
+router.post("/purchase-bills/bulk-delete", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), PurchaseBillController.bulkRemove);
 router.delete("/purchase-bills/:id", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), PurchaseBillController.remove);
 
 // Site Activities page — one fixed-shape daily report per (project, date):
