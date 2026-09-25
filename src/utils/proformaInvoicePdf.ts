@@ -27,24 +27,27 @@ export interface ProformaInvoicePdfData {
   paymentTerms?: string | null;
   notes?: string | null;
 
-  // CUSTOMER box — the buying organization (this app's org), mirrors purchaseOrderPdf.ts.
+  // CUSTOMER box — the party being invoiced, entered per invoice.
+  customerName?: string | null;
   customerContactPerson?: string | null;
+  customerAddress?: string | null;
   customerPan?: string | null;
+  customerEmail?: string | null;
+  customerContact?: string | null;
+
+  // VENDOR box — us: this app's own organization (also the letterhead).
   organizationName?: string | null;
   organizationAddress?: string | null;
   organizationContact?: string | null;
   organizationEmail?: string | null;
-
-  // VENDOR box — the external vendor supplying the goods.
+  organizationContactPerson?: string | null;
+  /** Per-invoice overrides for the VENDOR (us) box; blank falls back to the organization's details. */
+  vendorName?: string | null;
+  vendorContactPerson?: string | null;
+  vendorAddress?: string | null;
+  vendorEmail?: string | null;
+  vendorContact?: string | null;
   vendorPan?: string | null;
-  vendor?: {
-    name: string;
-    contactPerson?: string | null;
-    address?: string | null;
-    location?: string | null;
-    contact?: string | null;
-    email?: string | null;
-  } | null;
 
   // Bank Details box.
   bankBeneficiaryName?: string | null;
@@ -216,22 +219,21 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
   const fieldsTop = y + 16;
   const fieldY = fieldsTop + 8;
 
-  const vendor = pi.vendor;
   const customerFields: [string, string][] = [
     ["NAME OF CONTACT PERSON", pi.customerContactPerson || "--"],
-    ["COMPANY NAME", companyName],
-    ["ADDRESS", pi.organizationAddress || "--"],
+    ["COMPANY NAME", pi.customerName || "--"],
+    ["ADDRESS", pi.customerAddress || "--"],
     ["PAN NO.", pi.customerPan || "--"],
-    ["EMAIL ID", pi.organizationEmail || "--"],
-    ["CONTACT NO.", pi.organizationContact || "--"],
+    ["EMAIL ID", pi.customerEmail || "--"],
+    ["CONTACT NO.", pi.customerContact || "--"],
   ];
   const vendorFields: [string, string][] = [
-    ["NAME OF CONTACT PERSON", vendor?.contactPerson || "--"],
-    ["COMPANY NAME", vendor?.name || "--"],
-    ["ADDRESS", vendor?.address || vendor?.location || "--"],
+    ["NAME OF CONTACT PERSON", pi.vendorContactPerson || pi.organizationContactPerson || "--"],
+    ["COMPANY NAME", pi.vendorName || companyName],
+    ["ADDRESS", pi.vendorAddress || pi.organizationAddress || "--"],
     ["PAN NO.", pi.vendorPan || "--"],
-    ["EMAIL ID", vendor?.email || "--"],
-    ["CONTACT NO.", vendor?.contact || "--"],
+    ["EMAIL ID", pi.vendorEmail || pi.organizationEmail || "--"],
+    ["CONTACT NO.", pi.vendorContact || pi.organizationContact || "--"],
   ];
 
   const measure = (fields: [string, string][], w: number) => {

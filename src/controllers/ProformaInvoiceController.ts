@@ -17,9 +17,8 @@ const DETAIL_INCLUDE = {
 } as const;
 
 const PDF_INCLUDE = {
-  purchaseOrder: { include: { vendor: true, organization: true } },
+  purchaseOrder: { include: { organization: true } },
   organization: true,
-  vendor: true,
   items: true,
 } as const;
 
@@ -28,30 +27,6 @@ const LIST_INCLUDE = {
   vendor: true,
   items: true,
 } as const;
-
-/** Resolves the PDF's VENDOR box: a PO-backed PI always uses the PO's vendor; a PO-less PI uses
- * its own freeform vendor* fields, falling back to the linked Vendor's stored details for any
- * field left blank. */
-function resolvePdfVendor(pi: {
-  purchaseOrder?: { vendor: { name: string; contactPerson: string | null; address: string | null; location: string | null; contact: string | null; email: string | null } | null } | null;
-  vendor?: { name: string; contactPerson: string | null; address: string | null; location: string | null; contact: string | null; email: string | null } | null;
-  vendorName?: string | null;
-  vendorContactPerson?: string | null;
-  vendorAddress?: string | null;
-  vendorContact?: string | null;
-  vendorEmail?: string | null;
-}) {
-  if (pi.purchaseOrder) return pi.purchaseOrder.vendor ?? null;
-  if (!pi.vendorName && !pi.vendor) return null;
-  return {
-    name: pi.vendorName || pi.vendor?.name || "",
-    contactPerson: pi.vendorContactPerson || pi.vendor?.contactPerson || null,
-    address: pi.vendorAddress || pi.vendor?.address || null,
-    location: pi.vendor?.location ?? null,
-    contact: pi.vendorContact || pi.vendor?.contact || null,
-    email: pi.vendorEmail || pi.vendor?.email || null,
-  };
-}
 
 /** Resolves item-name/catalog-item pairs for a proforma invoice's line items — prefers the catalog reference when given. Tolerates an empty/undefined list. */
 async function resolveItemInputs(rawItems: ProformaInvoiceItemInput[] | undefined, organizationId: number) {
@@ -131,7 +106,17 @@ export class ProformaInvoiceController {
       validityDate,
       taxPercent,
       customerPan,
+      customerName,
+      customerContactPerson,
+      customerAddress,
+      customerEmail,
+      customerContact,
       vendorPan,
+      vendorName,
+      vendorContactPerson,
+      vendorAddress,
+      vendorContact,
+      vendorEmail,
       bankBeneficiaryName,
       bankAccountNumber,
       bankName,
@@ -171,7 +156,17 @@ export class ProformaInvoiceController {
           ...(validityDate ? { validityDate: new Date(validityDate) } : {}),
           ...(taxPercent !== undefined ? { taxPercent } : {}),
           ...(customerPan ? { customerPan } : {}),
+          ...(customerName ? { customerName } : {}),
+          ...(customerContactPerson ? { customerContactPerson } : {}),
+          ...(customerAddress ? { customerAddress } : {}),
+          ...(customerEmail ? { customerEmail } : {}),
+          ...(customerContact ? { customerContact } : {}),
           ...(vendorPan ? { vendorPan } : {}),
+          ...(vendorName ? { vendorName } : {}),
+          ...(vendorContactPerson ? { vendorContactPerson } : {}),
+          ...(vendorAddress ? { vendorAddress } : {}),
+          ...(vendorContact ? { vendorContact } : {}),
+          ...(vendorEmail ? { vendorEmail } : {}),
           ...(bankBeneficiaryName ? { bankBeneficiaryName } : {}),
           ...(bankAccountNumber ? { bankAccountNumber } : {}),
           ...(bankName ? { bankName } : {}),
@@ -215,6 +210,11 @@ export class ProformaInvoiceController {
       validityDate,
       taxPercent,
       customerPan,
+      customerName,
+      customerContactPerson,
+      customerAddress,
+      customerEmail,
+      customerContact,
       vendorPan,
       vendorId,
       vendorName,
@@ -241,8 +241,8 @@ export class ProformaInvoiceController {
         linkedVendor = await prisma.vendor.findFirst({ where: { id: vendorId, organizationId: req.organization!.id } });
         if (!linkedVendor) return res.status(404).json({ message: "Selected vendor not found" });
       }
-      if (!linkedVendor && !vendorName?.trim()) {
-        return res.status(400).json({ message: "Select a vendor or enter a vendor name" });
+      if (!customerName?.trim()) {
+        return res.status(400).json({ message: "Enter the customer name" });
       }
 
       let resolvedItems;
@@ -265,6 +265,11 @@ export class ProformaInvoiceController {
           ...(validityDate ? { validityDate: new Date(validityDate) } : {}),
           ...(taxPercent !== undefined ? { taxPercent } : {}),
           ...(customerPan ? { customerPan } : {}),
+          ...(customerName ? { customerName } : {}),
+          ...(customerContactPerson ? { customerContactPerson } : {}),
+          ...(customerAddress ? { customerAddress } : {}),
+          ...(customerEmail ? { customerEmail } : {}),
+          ...(customerContact ? { customerContact } : {}),
           ...(vendorPan ? { vendorPan } : {}),
           ...(vendorName ? { vendorName } : {}),
           ...(vendorContactPerson ? { vendorContactPerson } : {}),
@@ -313,6 +318,11 @@ export class ProformaInvoiceController {
       status,
       taxPercent,
       customerPan,
+      customerName,
+      customerContactPerson,
+      customerAddress,
+      customerEmail,
+      customerContact,
       vendorPan,
       vendorId,
       vendorName,
@@ -347,6 +357,11 @@ export class ProformaInvoiceController {
       if (validityDate !== undefined) data.validityDate = validityDate ? new Date(validityDate) : null;
       if (taxPercent !== undefined) data.taxPercent = taxPercent;
       if (customerPan !== undefined) data.customerPan = customerPan;
+      if (customerName !== undefined) data.customerName = customerName;
+      if (customerContactPerson !== undefined) data.customerContactPerson = customerContactPerson;
+      if (customerAddress !== undefined) data.customerAddress = customerAddress;
+      if (customerEmail !== undefined) data.customerEmail = customerEmail;
+      if (customerContact !== undefined) data.customerContact = customerContact;
       if (vendorPan !== undefined) data.vendorPan = vendorPan;
       if (vendorId !== undefined) {
         if (vendorId) {
@@ -495,14 +510,23 @@ export class ProformaInvoiceController {
         currency: proformaInvoice.currency,
         paymentTerms: proformaInvoice.paymentTerms,
         notes: proformaInvoice.notes,
-        customerContactPerson: proformaInvoice.purchaseOrder?.customerContactPerson ?? null,
+        customerName: proformaInvoice.customerName,
+        customerContactPerson: proformaInvoice.customerContactPerson,
+        customerAddress: proformaInvoice.customerAddress,
         customerPan: proformaInvoice.customerPan,
+        customerEmail: proformaInvoice.customerEmail,
+        customerContact: proformaInvoice.customerContact,
+        organizationContactPerson: proformaInvoice.purchaseOrder?.customerContactPerson ?? null,
+        vendorName: proformaInvoice.vendorName,
+        vendorContactPerson: proformaInvoice.vendorContactPerson,
+        vendorAddress: proformaInvoice.vendorAddress,
+        vendorEmail: proformaInvoice.vendorEmail,
+        vendorContact: proformaInvoice.vendorContact,
         organizationName: organization?.name ?? null,
         organizationAddress: organization?.address ?? null,
         organizationContact: organization?.contact ?? null,
         organizationEmail: organization?.email ?? null,
         vendorPan: proformaInvoice.vendorPan,
-        vendor: resolvePdfVendor(proformaInvoice),
         bankBeneficiaryName: proformaInvoice.bankBeneficiaryName,
         bankAccountNumber: proformaInvoice.bankAccountNumber,
         bankName: proformaInvoice.bankName,

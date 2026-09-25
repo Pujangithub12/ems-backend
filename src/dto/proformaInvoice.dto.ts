@@ -20,10 +20,14 @@ export interface AddProformaInvoiceDto {
   validityDate?: string;
   taxPercent?: number;
   customerPan?: string;
+  customerName?: string;
+  customerContactPerson?: string;
+  customerAddress?: string;
+  customerEmail?: string;
+  customerContact?: string;
   vendorPan?: string;
-  /** Only meaningful on the PO-less endpoint — link an existing Vendor and/or override its
-   * stored details on this PI. Ignored when the PI is created against a purchase order (its
-   * vendor comes from the PO). */
+  /** Legacy: link an existing Vendor. The VENDOR box on the PDF is now this app's own
+   * organization — vendorName/vendorContactPerson/... below override its details per invoice. */
   vendorId?: number;
   vendorName?: string;
   vendorContactPerson?: string;
@@ -54,6 +58,11 @@ export interface UpdateProformaInvoiceDto {
   status?: ProformaInvoiceStatus;
   taxPercent?: number | null;
   customerPan?: string;
+  customerName?: string;
+  customerContactPerson?: string;
+  customerAddress?: string;
+  customerEmail?: string;
+  customerContact?: string;
   vendorPan?: string;
   vendorId?: number | null;
   vendorName?: string;
