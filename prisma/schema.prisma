@@ -1270,7 +1270,7 @@ model ProformaInvoice {
 model ProformaInvoiceItem {
   id                Int      @id @default(autoincrement())
   itemName          String   @db.VarChar
-  quantity          Int      @default(1)
+  quantity          Float    @default(1)
   unit              String?  @db.VarChar
   unitPrice         Decimal? @db.Decimal
   /// HS (Harmonized System) customs code for the PI PDF's line-item table.
