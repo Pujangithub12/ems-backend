@@ -9,6 +9,7 @@ import { MaterialController } from "../controllers/MaterialController";
 import { MaterialCustomTableController } from "../controllers/MaterialCustomTableController";
 import { MaterialFieldController } from "../controllers/MaterialFieldController";
 import { redis, isRedisReady } from "../config/redis";
+import { cacheResponse } from "../middlewares/responseCache";
 import { PurchaseBillController } from "../controllers/PurchaseBillController";
 import { SiteActivityController } from "../controllers/SiteActivityController";
 import { NotificationController } from "../controllers/NotificationController";
@@ -127,7 +128,7 @@ router.delete(
 
 // Permission routes — matrix is viewable by anyone, but only a super admin
 // can edit it (hardcoded, not itself a toggleable permission).
-router.get("/permissions", authMiddleware, PermissionController.getMatrix);
+router.get("/permissions", authMiddleware, cacheResponse("permissions", 300, { perUser: false }), PermissionController.getMatrix);
 router.put(
   "/permissions",
   authMiddleware,
@@ -142,7 +143,7 @@ router.post(
   permissionMiddleware("members.manage"),
   InviteController.sendInvite,
 );
-router.get("/users", authMiddleware, UserController.getAllUsers);
+router.get("/users", authMiddleware, cacheResponse("users", 120, { perUser: false }), UserController.getAllUsers);
 
 // Invite accept flow — public, the invitee isn't logged in yet.
 router.get("/invites/:token", InviteController.getInvite);
@@ -226,7 +227,7 @@ router.post("/plant-report-tables/:id/import", authMiddleware, PlantReportTableC
 // recording a receive/use transaction are open to any org member (data
 // entry); editing the material master list and deleting a transaction
 // (correction only) are admin-gated. See MaterialController.
-router.get("/materials", authMiddleware, MaterialController.list);
+router.get("/materials", authMiddleware, cacheResponse("materials", 60, { perUser: false }), MaterialController.list);
 router.post(
   "/materials",
   authMiddleware,
@@ -327,7 +328,7 @@ router.delete(
 // Purchase page — a purchase-bill ledger. Any org member can read and record
 // bills (data entry, including Excel import) and edit them; deleting a bill is
 // admin-gated. See PurchaseBillController.
-router.get("/purchase-bills", authMiddleware, PurchaseBillController.list);
+router.get("/purchase-bills", authMiddleware, cacheResponse("purchaseBills", 60, { perUser: false }), PurchaseBillController.list);
 router.post("/purchase-bills", authMiddleware, PurchaseBillController.create);
 router.post("/purchase-bills/import", authMiddleware, PurchaseBillController.importBills);
 router.put("/purchase-bills/:id", authMiddleware, PurchaseBillController.update);
@@ -377,7 +378,7 @@ router.post(
   permissionMiddleware("projects.manage"),
   ProjectController.createProject,
 );
-router.get("/projects", authMiddleware, ProjectController.getAllProjects);
+router.get("/projects", authMiddleware, cacheResponse("projects", 60), ProjectController.getAllProjects);
 router.get("/projects/:id", authMiddleware, ProjectController.getProjectById);
 router.put(
   "/projects/:id",
@@ -888,7 +889,7 @@ router.delete(
 
 // Shared item catalog (name + code) — keeps item naming consistent between
 // the Inventory and Procurement "Add item" forms.
-router.get("/workspace/items", authMiddleware, CatalogItemController.getOrganizationItems);
+router.get("/workspace/items", authMiddleware, cacheResponse("catalogItems", 300, { perUser: false }), CatalogItemController.getOrganizationItems);
 router.post(
   "/workspace/items",
   authMiddleware,
@@ -947,7 +948,7 @@ router.post(
 );
 router.get("/tasks", authMiddleware, TaskController.getAllTasks);
 router.get("/tasks/:id", authMiddleware, TaskController.getTaskById);
-router.get("/dashboard", authMiddleware, DashboardController.getDashboard);
+router.get("/dashboard", authMiddleware, cacheResponse("dashboard", 30), DashboardController.getDashboard);
 router.put(
   "/tasks/:id/progress",
   authMiddleware,

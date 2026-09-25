@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import { PrismaClient } from "../generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { getDatabaseUrl } from "./database-url";
-import { invalidateAllAuthUsers, invalidateAuthUser } from "../utils/authCache";
+import { onModelWrite } from "../utils/cacheInvalidation";
 
 dotenv.config();
 
@@ -18,41 +18,19 @@ const basePrisma = new PrismaClient({
   log: isProduction ? [] : ["error", "warn"],
 });
 
-const isWrite = (operation: string) => /^(create|update|upsert|delete)/.test(operation);
-
 /**
- * authMiddleware caches each user's memberships/organizations in Redis (see
- * utils/authCache.ts). Any write to the models that cache is built from clears
- * it here, in one place, instead of at every call site — so a role change,
- * removed member, password/tokenVersion bump or renamed organization can't be
- * served stale. User writes that name a single id only clear that user; the
- * rest (memberships, organizations) clear everyone, which is fine because
- * those writes are rare.
+ * One hook for every model: after any write, clear the Redis entries built from
+ * that model — the per-user auth cache (utils/authCache.ts) and cached GET
+ * responses (middlewares/responseCache.ts). The model -> cache mapping lives in
+ * utils/cacheInvalidation.ts, so controllers never invalidate by hand and a new
+ * write path can't forget to.
  */
 export const prisma = basePrisma.$extends({
   query: {
-    user: {
-      async $allOperations({ operation, args, query }) {
+    $allModels: {
+      async $allOperations({ model, operation, args, query }) {
         const result = await query(args);
-        if (isWrite(operation)) {
-          const id = (args as { where?: { id?: unknown } }).where?.id;
-          if (typeof id === "number") await invalidateAuthUser(id);
-          else await invalidateAllAuthUsers();
-        }
-        return result;
-      },
-    },
-    organizationMembership: {
-      async $allOperations({ operation, args, query }) {
-        const result = await query(args);
-        if (isWrite(operation)) await invalidateAllAuthUsers();
-        return result;
-      },
-    },
-    organization: {
-      async $allOperations({ operation, args, query }) {
-        const result = await query(args);
-        if (isWrite(operation)) await invalidateAllAuthUsers();
+        await onModelWrite(model, operation, args);
         return result;
       },
     },

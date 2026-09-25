@@ -58,3 +58,23 @@ export async function getOrSet<T>(key: string, ttlSeconds: number, loader: () =>
   if (fresh !== null && fresh !== undefined) await cacheSet(key, fresh, ttlSeconds);
   return fresh;
 }
+
+/** Raw-string variants for cached HTTP response bodies: stored and replayed
+ * byte-for-byte, so (unlike cacheGet) nothing is parsed or date-revived. */
+export async function cacheGetRaw(key: string): Promise<string | null> {
+  if (!redis || !isRedisReady()) return null;
+  try {
+    return await redis.get(key);
+  } catch {
+    return null;
+  }
+}
+
+export async function cacheSetRaw(key: string, value: string, ttlSeconds: number): Promise<void> {
+  if (!redis || !isRedisReady()) return;
+  try {
+    await redis.set(key, value, "EX", ttlSeconds);
+  } catch {
+    /* best effort */
+  }
+}

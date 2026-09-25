@@ -1205,51 +1205,58 @@ model PurchaseOrderStatusHistory {
 }
 
 model ProformaInvoice {
-  id                  Int       @id @default(autoincrement())
-  piNumber            String?   @db.VarChar
-  piDate              DateTime? @db.Date
-  currency            String    @default("NPR") @db.VarChar
-  exchangeRate        Decimal   @default(1) @db.Decimal
-  paymentTerms        String?   @db.VarChar
-  validityDate        DateTime? @db.Date
+  id                    Int       @id @default(autoincrement())
+  piNumber              String?   @db.VarChar
+  piDate                DateTime? @db.Date
+  currency              String    @default("NPR") @db.VarChar
+  exchangeRate          Decimal   @default(1) @db.Decimal
+  paymentTerms          String?   @db.VarChar
+  validityDate          DateTime? @db.Date
   /// Single PDF attachment per spec ("Attachment (PDF)") — not a join table since only one file is expected.
-  fileName            String?   @db.VarChar
-  filePath            String?   @db.VarChar
-  status              String    @default("waiting") @db.VarChar
+  fileName              String?   @db.VarChar
+  filePath              String?   @db.VarChar
+  status                String    @default("waiting") @db.VarChar
   /// VAT % applied to taxable line items only (see ProformaInvoiceItem.taxable) on the generated PDF — falls back to 13 when unset.
-  taxPercent          Decimal?  @db.Decimal
+  taxPercent            Decimal?  @db.Decimal
   /// PAN fields for the PDF's CUSTOMER/VENDOR boxes — kept on the PI itself (not Vendor/Organization master data) since they're filled in per-invoice.
-  customerPan         String?   @db.VarChar
-  vendorPan           String?   @db.VarChar
+  customerPan           String?   @db.VarChar
+  /// The customer being invoiced (the CUSTOMER box on the PDF). The VENDOR box is always
+  /// this app's own organization, so it has no per-invoice fields beyond vendorPan.
+  customerName          String?   @db.VarChar
+  customerContactPerson String?   @db.VarChar
+  customerAddress       String?
+  customerEmail         String?   @db.VarChar
+  customerContact       String?   @db.VarChar
+  vendorPan             String?   @db.VarChar
   /// Bank Details box on the PDF.
-  bankBeneficiaryName String?   @db.VarChar
-  bankAccountNumber   String?   @db.VarChar
-  bankName            String?   @db.VarChar
-  bankSwiftCode       String?   @db.VarChar
-  bankAddress         String?
+  bankBeneficiaryName   String?   @db.VarChar
+  bankAccountNumber     String?   @db.VarChar
+  bankName              String?   @db.VarChar
+  bankSwiftCode         String?   @db.VarChar
+  bankAddress           String?
   /// Terms of Delivery box on the PDF.
-  deliveryTerms       String?   @db.VarChar
-  placeOfLoading      String?   @db.VarChar
-  placeOfDischarge    String?   @db.VarChar
-  modeOfShipment      String?   @db.VarChar
+  deliveryTerms         String?   @db.VarChar
+  placeOfLoading        String?   @db.VarChar
+  placeOfDischarge      String?   @db.VarChar
+  modeOfShipment        String?   @db.VarChar
   /// Free-text NOTES section on the PDF.
-  notes               String?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @default(now()) @updatedAt
-  purchaseOrderId     Int?
+  notes                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @default(now()) @updatedAt
+  purchaseOrderId       Int?
   /// Set on every PI (including PO-backed ones) so the org-wide list/scoping check doesn't have
   /// to go through the (now-optional) purchaseOrder relation — mirrors FinanceManualRecord.
-  organizationId      Int?
+  organizationId        Int?
   /// Optional link to a real Vendor so a PO-less PI still folds into that vendor's records —
   /// mirrors FinanceManualRecord.vendorId. Freeform vendor* fields below are used instead when no
   /// PO and no linked Vendor is picked (or to override the linked Vendor's stored details).
-  vendorId            Int?
-  vendorName          String?   @db.VarChar
-  vendorContactPerson String?   @db.VarChar
-  vendorAddress       String?
-  vendorContact       String?   @db.VarChar
-  vendorEmail         String?   @db.VarChar
-  createdById         Int?
+  vendorId              Int?
+  vendorName            String?   @db.VarChar
+  vendorContactPerson   String?   @db.VarChar
+  vendorAddress         String?
+  vendorContact         String?   @db.VarChar
+  vendorEmail           String?   @db.VarChar
+  createdById           Int?
 
   purchaseOrder PurchaseOrder?        @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   organization  Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
