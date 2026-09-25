@@ -90,12 +90,13 @@ const FONT_COMPANY = "Company";
 const FONT_BODY = "Body";
 const FONT_BODY_BOLD = "Body-Bold";
 const FONT_BODY_BOLD_ITALIC = "Body-BoldItalic";
-// Comic Neue — a free, metric-compatible substitute for Comic Sans MS (which is a proprietary
-// Microsoft font that can't be redistributed/embedded), used throughout this PDF per request.
-const FONT_COMPANY_PATH = require.resolve("@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff");
-const FONT_BODY_PATH = require.resolve("@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff");
-const FONT_BODY_BOLD_PATH = require.resolve("@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff");
-const FONT_BODY_BOLD_ITALIC_PATH = require.resolve("@fontsource/comic-neue/files/comic-neue-latin-700-italic.woff");
+// Carlito — a free, metric-compatible substitute for Calibri (which is a proprietary Microsoft
+// font that can't be redistributed/embedded): same glyph widths, so text wraps and lays out
+// exactly as it would in Calibri.
+const FONT_COMPANY_PATH = require.resolve("@fontsource/carlito/files/carlito-latin-700-normal.woff");
+const FONT_BODY_PATH = require.resolve("@fontsource/carlito/files/carlito-latin-400-normal.woff");
+const FONT_BODY_BOLD_PATH = require.resolve("@fontsource/carlito/files/carlito-latin-700-normal.woff");
+const FONT_BODY_BOLD_ITALIC_PATH = require.resolve("@fontsource/carlito/files/carlito-latin-700-italic.woff");
 
 const fmtDate = (d?: Date | null) => (d ? d.toLocaleDateString("en-US") : "--");
 const fmtAmount = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -375,21 +376,6 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
     });
   y += wordsH + 12;
 
-  // ---- Payment Terms ----
-  const paymentTermsText = (pi.paymentTerms || "").trim();
-  const paymentTermsH = paymentTermsText
-    ? doc.font(FONT_BODY).fontSize(8.5).heightOfString(paymentTermsText, { width: CONTENT_WIDTH }) + 10
-    : 4;
-  ensureSpace(16 + 8 + paymentTermsH);
-  sectionBar(doc, MARGIN_LEFT, y, CONTENT_WIDTH, 16, "PAYMENT TERMS");
-  y += 16 + 8;
-  if (paymentTermsText) {
-    doc.fillColor(BLACK).font(FONT_BODY).fontSize(8.5).text(paymentTermsText, MARGIN_LEFT, y, { width: CONTENT_WIDTH });
-    y = doc.y + 10;
-  } else {
-    y += 4;
-  }
-
   // ---- Bank Details / Terms of Delivery, side by side ----
   const colGap = 10;
   const halfW = (CONTENT_WIDTH - colGap) / 2;
@@ -444,18 +430,22 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
   doc.rect(bankX, boxTop, halfW, boxBottom - boxTop).stroke(LIGHT_BG);
   doc.rect(deliveryX, boxTop, halfW, boxBottom - boxTop).stroke(LIGHT_BG);
 
-  // ---- Notes + Signature, side by side in one row so the signature/stamp always lands on the
-  // same page as Notes whenever the two fit together (rather than Notes being able to fit while
-  // the signature spills to a fresh page below it). ----
+  // ---- Payment Terms + Notes (stacked, Payment Terms on top) beside the Signature, in one row so
+  // the signature/stamp always lands on the same page as them whenever they fit together (rather
+  // than the text fitting while the signature spills to a fresh page below it). ----
+  const paymentTermsText = (pi.paymentTerms || "").trim();
   const hasNotes = !!pi.notes;
   const sigColW = 210;
-  const notesSigGap = 16;
-  const notesColW = hasNotes ? CONTENT_WIDTH - sigColW - notesSigGap : 0;
-  const sigColX = hasNotes ? MARGIN_LEFT + notesColW + notesSigGap : MARGIN_LEFT;
+  const rowGap = 16;
+  const leftColW = CONTENT_WIDTH - sigColW - rowGap;
+  const sigColX = MARGIN_LEFT + leftColW + rowGap;
 
-  const notesBlockH = hasNotes ? 16 + 6 + doc.font(FONT_BODY).fontSize(8.5).heightOfString(pi.notes!, { width: notesColW }) : 0;
+  const bodyH = (text: string) => (text ? doc.font(FONT_BODY).fontSize(8.5).heightOfString(text, { width: leftColW }) : 0);
+  const paymentBlockH = 16 + 6 + bodyH(paymentTermsText) + 10;
+  const notesBlockH = hasNotes ? 16 + 6 + bodyH(pi.notes!) : 0;
+  const leftBlockH = paymentBlockH + notesBlockH;
   const sigBlockH = 90; // signature line + label, plus headroom for the stamp above it
-  const rowH = Math.max(notesBlockH, sigBlockH);
+  const rowH = Math.max(leftBlockH, sigBlockH);
 
   // Prefer a clean gap below the Bank Details/Terms of Delivery box; if that would push this row
   // to a fresh page, pack it tightly against — or a little into — that box instead, since landing
@@ -475,13 +465,14 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
   }
   y = rowTop;
 
+  sectionBar(doc, MARGIN_LEFT, rowTop, leftColW, 16, "PAYMENT TERMS");
+  if (paymentTermsText) {
+    doc.fillColor(BLACK).font(FONT_BODY).fontSize(8.5).text(paymentTermsText, MARGIN_LEFT, rowTop + 16 + 6, { width: leftColW });
+  }
   if (hasNotes) {
-    sectionBar(doc, MARGIN_LEFT, rowTop, notesColW, 16, "NOTES");
-    doc
-      .fillColor(BLACK)
-      .font(FONT_BODY)
-      .fontSize(8.5)
-      .text(pi.notes!, MARGIN_LEFT, rowTop + 16 + 6, { width: notesColW });
+    const notesTop = rowTop + paymentBlockH;
+    sectionBar(doc, MARGIN_LEFT, notesTop, leftColW, 16, "NOTES");
+    doc.fillColor(BLACK).font(FONT_BODY).fontSize(8.5).text(pi.notes!, MARGIN_LEFT, notesTop + 16 + 6, { width: leftColW });
   }
 
   const sigY = rowTop + 70;
