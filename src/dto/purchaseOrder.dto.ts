@@ -55,14 +55,14 @@ export interface UpdatePurchaseOrderDto {
   poNumber?: string;
   /** ISO date string ("YYYY-MM-DD") — pass null to clear back to unset (Overview tab then falls back to displaying today's date). */
   poDate?: string | null;
-  paymentTerms?: string;
-  incoterms?: string;
+  paymentTerms?: string | null;
+  incoterms?: string | null;
   taxPercent?: number | null;
-  terms?: string;
-  deliveryPeriod?: string;
-  finalDestination?: string;
-  customerContactPerson?: string;
-  customerPanVatNumber?: string;
+  terms?: string | null;
+  deliveryPeriod?: string | null;
+  finalDestination?: string | null;
+  customerContactPerson?: string | null;
+  customerPanVatNumber?: string | null;
   currency?: string;
   purchaseType?: PurchaseType;
   status?: PurchaseOrderStatus;

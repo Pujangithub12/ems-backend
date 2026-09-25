@@ -266,6 +266,22 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
   }
   y = Math.max(customerY, vendorY) + 8;
 
+  // White cell with a black border. Strokes are centered on their path, so a border drawn on the
+  // table's outer left/right edge would stick out past the header/total bars (which are filled
+  // exactly to the edge) — outer verticals are inset by half a line width to stay flush with them.
+  const cellBox = (x: number, cy: number, w: number, h: number, outerLeft: boolean, outerRight: boolean) => {
+    const lw = 0.75;
+    const half = lw / 2;
+    doc.rect(x, cy, w, h).fill("#ffffff");
+    doc.lineWidth(lw).strokeColor(BLACK);
+    doc.moveTo(x, cy).lineTo(x + w, cy).stroke();
+    doc.moveTo(x, cy + h).lineTo(x + w, cy + h).stroke();
+    const leftX = outerLeft ? x + half : x;
+    const rightX = outerRight ? x + w - half : x + w;
+    doc.moveTo(leftX, cy).lineTo(leftX, cy + h).stroke();
+    doc.moveTo(rightX, cy).lineTo(rightX, cy + h).stroke();
+  };
+
   // ---- Items table (H.S. Code, Commodity & Specification, Qty, Unit, Unit Price, Amount) ----
   const colW = (twips: number) => (CONTENT_WIDTH * twips) / 9644;
   const cols = [
@@ -313,8 +329,7 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
     colX = MARGIN_LEFT;
     for (let i = 0; i < cols.length; i++) {
       const col = cols[i]!;
-      doc.rect(colX, y, col.width, rowHeight).fill(LIGHT_BG);
-      doc.rect(colX, y, col.width, rowHeight).stroke("#ffffff");
+      cellBox(colX, y, col.width, rowHeight, i === 0, i === cols.length - 1);
       doc
         .fillColor(BLACK)
         .font(i === 1 ? FONT_BODY_BOLD : FONT_BODY)
@@ -337,8 +352,8 @@ export function buildProformaInvoicePdf(pi: ProformaInvoicePdfData): PDFKit.PDFD
   ensureSpace(3 * 18 + 22);
   const summaryRow = (label: string, value: number, opts?: { bold?: boolean }) => {
     const rowH = 18;
-    doc.rect(MARGIN_LEFT, y, labelW, rowH).fill(LIGHT_BG);
-    doc.rect(MARGIN_LEFT + labelW, y, amountW, rowH).fill(LIGHT_BG);
+    cellBox(MARGIN_LEFT, y, labelW, rowH, true, false);
+    cellBox(MARGIN_LEFT + labelW, y, amountW, rowH, false, true);
     doc
       .fillColor(BLACK)
       .font(opts?.bold ? FONT_BODY_BOLD : FONT_BODY)

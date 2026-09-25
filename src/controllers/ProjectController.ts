@@ -491,10 +491,9 @@ export class ProjectController {
       const data: any = {};
       if (name) data.name = name;
       if (description !== undefined) data.description = description;
-      // Only set when truthy — mirrors the pre-Prisma behavior of leaving the
-      // column untouched (rather than nulling it) for a falsy dueDate.
-      if (dueDate) {
-        data.dueDate = new Date(dueDate);
+      // Omitted (undefined) leaves it untouched; an empty value/null clears it.
+      if (dueDate !== undefined) {
+        data.dueDate = dueDate ? new Date(dueDate) : null;
       }
       if (status && Object.values(ProjectStatus).includes(status as ProjectStatus)) {
         data.status = status as ProjectStatus;
