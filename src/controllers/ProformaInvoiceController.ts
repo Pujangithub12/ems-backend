@@ -55,7 +55,7 @@ async function resolveItemInputs(rawItems: ProformaInvoiceItemInput[] | undefine
     resolved.push({
       itemName,
       itemId: catalogItem?.id ?? null,
-      quantity: raw.quantity && raw.quantity > 0 ? Math.round(raw.quantity) : 1,
+      quantity: raw.quantity && raw.quantity > 0 ? raw.quantity : 1,
       unit: raw.unit ?? null,
       unitPrice: raw.unitPrice ?? null,
       hsnCode: raw.hsnCode ?? null,
