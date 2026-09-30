@@ -483,7 +483,7 @@ export class OrganizationController {
     return true;
   }
 
-  private static async uploadImage(req: AuthRequest, res: Response, field: "signatureImagePath" | "stampImagePath") {
+  private static async uploadImage(req: AuthRequest, res: Response, field: "signatureImagePath" | "stampImagePath" | "logoImagePath") {
     try {
       if (!(await OrganizationController.assertCanManageCurrentOrganization(req, res))) return;
 
@@ -509,7 +509,7 @@ export class OrganizationController {
     }
   }
 
-  private static async deleteImage(req: AuthRequest, res: Response, field: "signatureImagePath" | "stampImagePath") {
+  private static async deleteImage(req: AuthRequest, res: Response, field: "signatureImagePath" | "stampImagePath" | "logoImagePath") {
     try {
       if (!(await OrganizationController.assertCanManageCurrentOrganization(req, res))) return;
 
@@ -541,4 +541,9 @@ export class OrganizationController {
     OrganizationController.uploadImage(req, res, "stampImagePath");
   static deleteStamp = (req: AuthRequest, res: Response) =>
     OrganizationController.deleteImage(req, res, "stampImagePath");
+  // Company logo, shown at the top-left of generated Quotation PDFs (see quotationPdf.ts).
+  static uploadLogo = (req: AuthRequest, res: Response) =>
+    OrganizationController.uploadImage(req, res, "logoImagePath");
+  static deleteLogo = (req: AuthRequest, res: Response) =>
+    OrganizationController.deleteImage(req, res, "logoImagePath");
 }

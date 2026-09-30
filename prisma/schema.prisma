@@ -50,6 +50,7 @@ model User {
   purchaseOrderPaymentsLogged       PurchaseOrderPayment[]
   financeManualRecordsCreated       FinanceManualRecord[]
   proformaInvoicesCreated           ProformaInvoice[]
+  quotationsCreated                 Quotation[]
   goodsReceiptsReceived             GoodsReceipt[]
   projectAssignments                ProjectAssignee[]
   projectFilesUploaded              ProjectFile[]
@@ -80,6 +81,8 @@ model Organization {
   signatureImagePath String?  @db.VarChar
   /// Storage key for the company seal/stamp image used on generated Purchase Order PDFs.
   stampImagePath     String?  @db.VarChar
+  /// Storage key for the company logo, shown at the top-left of generated Quotation PDFs (see quotationPdf.ts).
+  logoImagePath      String?  @db.VarChar
 
   activities            Activity[]
   announcements         Announcement[]
@@ -105,6 +108,7 @@ model Organization {
   warehouses            Warehouse[]
   financeManualRecords  FinanceManualRecord[]
   proformaInvoices      ProformaInvoice[]
+  quotations            Quotation[]
   memberships           OrganizationMembership[]
   notifications         Notification[]
   plantReportTables     PlantReportTable[]
@@ -1045,6 +1049,10 @@ model PurchaseOrder {
   customerContactPerson String?
   /// PAN/VAT registration number for the PDF's CUSTOMER box — the buying organization's own PAN/VAT, distinct from the vendor's panVatNumber on the Vendor record.
   customerPanVatNumber  String?   @db.VarChar
+  /// Email shown in the PDF's CUSTOMER box — overrides Organization.email (which moved up to the
+  /// letterhead line next to the address/phone) for just this PO. Falls back to Organization.email
+  /// when unset, see purchaseOrderPdf.ts.
+  customerEmail         String?   @db.VarChar
   /// Free-text currency label for the PDF's "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset, see purchaseOrderPdf.ts.
   currency              String?   @db.VarChar
   /// "local" | "international" — drives whether Insurance/Customs apply, see PurchaseType in types/domain.ts
@@ -1285,6 +1293,72 @@ model ProformaInvoiceItem {
   item            CatalogItem?     @relation(fields: [itemId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@map("proforma_invoice_item")
+}
+
+/// A standalone price quotation sent to a prospective customer (spec: "Quotations" sidebar link,
+/// right below Proforma Invoices) — no purchase order behind it, since it's sent before any order
+/// exists. Fields mirror the "PRICE QUOTATION" document layout: a FROM box (this app's own
+/// organization, plus a per-quotation PAN/Reg No since neither is stored on Organization), a TO
+/// box (the prospective customer, freeform per quotation), a flat items table, and the standard
+/// Terms and Conditions block (Price Basis / Delivery Period / Payment Terms / Validity).
+/// Amount/VAT/Total are always derived from the items + taxPercent at render time, never stored.
+model Quotation {
+  id                   Int       @id @default(autoincrement())
+  /// Freeform (e.g. "QT-007", or a custom scheme like "02-83/84") — auto-suggested as the next
+  /// "QT-<n>" in sequence when left blank at creation (see QuotationController.nextQuotationNumber),
+  /// but never enforced, so a custom format is never overwritten or rejected.
+  quotationNumber      String?   @db.VarChar
+  quotationDate        DateTime? @db.Date
+  /// The subject line under the "PRICE QUOTATION" heading, e.g. "Quotation for Biomass Pellet ( Ex-Factory Price)".
+  title                String?   @db.VarChar
+  currency             String    @default("NPR") @db.VarChar
+  /// FROM box — this app's own organization. Name/address/contact/email come from Organization at
+  /// render time; PAN and the letterhead's Reg No. aren't stored on Organization, so they're kept
+  /// here per quotation instead (mirrors ProformaInvoice.vendorPan).
+  fromPan              String?   @db.VarChar
+  regNo                String?   @db.VarChar
+  /// TO box — the prospective customer, entered per quotation (no Vendor/Customer master record).
+  customerName         String?   @db.VarChar
+  customerAddress      String?
+  customerContact      String?   @db.VarChar
+  customerEmail        String?   @db.VarChar
+  customerPan          String?   @db.VarChar
+  /// Terms and Conditions box.
+  priceBasis           String?   @db.VarChar
+  deliveryPeriod       String?   @db.VarChar
+  paymentTerms         String?   @db.VarChar
+  validityPeriod       String?   @db.VarChar
+  /// VAT % applied to the items subtotal on the generated PDF — falls back to 13 when unset.
+  taxPercent           Decimal?  @db.Decimal
+  /// Signature block ("For <company>" / signature+stamp images from Organization / name / designation).
+  signatoryName        String?   @db.VarChar
+  signatoryDesignation String?   @db.VarChar
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @default(now()) @updatedAt
+  organizationId       Int?
+  createdById          Int?
+
+  organization Organization?   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdBy    User?           @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  items        QuotationItem[]
+
+  @@map("quotation")
+}
+
+model QuotationItem {
+  id          Int      @id @default(autoincrement())
+  itemName    String   @db.VarChar
+  /// Multi-line free text shown in italics under the item name (e.g. spec bullets like "GCV>4100 kcal").
+  description String?
+  quantity    Float    @default(1)
+  unit        String?  @db.VarChar
+  rate        Decimal? @db.Decimal
+  createdAt   DateTime @default(now())
+  quotationId Int?
+
+  quotation Quotation? @relation(fields: [quotationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("quotation_item")
 }
 
 /// Serves both Local and International purchases (spec: "everything afterwards depends on [purchase type]") — Local just never gets an Insurance/Customs child row.
@@ -1664,6 +1738,11 @@ model Task {
   createdAt                  DateTime        @default(now()) @db.Timestamp(6)
   priority                   String          @default("medium") @db.VarChar
   status                     String          @default("to_do") @db.VarChar
+  /// Set/cleared whenever status transitions to/from "completed" (see
+  /// TaskController.updateTaskStatus/updateTask) — lets the dashboard's
+  /// high-priority list keep a just-completed task visible for a short
+  /// grace period instead of it vanishing the instant it's checked off.
+  completedAt                DateTime?       @db.Timestamp(6)
   projectId                  Int?
   progress                   Int             @default(0)
   projectHeadingId           Int?

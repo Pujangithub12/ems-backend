@@ -617,8 +617,14 @@ EMS Management
       if (title) data.title = title;
       if (description !== undefined) data.description = description;
       if (priority) data.priority = priority as TaskPriority;
-      if (status && Object.values(TaskStatus).includes(status as TaskStatus))
+      if (status && Object.values(TaskStatus).includes(status as TaskStatus)) {
         data.status = status as TaskStatus;
+        if (data.status === TaskStatus.COMPLETED && task.status !== TaskStatus.COMPLETED) {
+          data.completedAt = new Date();
+        } else if (data.status !== TaskStatus.COMPLETED && task.status === TaskStatus.COMPLETED) {
+          data.completedAt = null;
+        }
+      }
       if (dueDate) data.dueDate = new Date(dueDate);
       if (progress !== undefined) data.progress = parseInt(progress as string);
       if (projectName !== undefined) data.projectName = projectName;
@@ -872,9 +878,18 @@ EMS Management
       )
         return res.status(403).json({ message: "Forbidden" });
 
+      const statusData: { status: TaskStatus; completedAt?: Date | null } = {
+        status: normalized as TaskStatus,
+      };
+      if (normalized === TaskStatus.COMPLETED && task.status !== TaskStatus.COMPLETED) {
+        statusData.completedAt = new Date();
+      } else if (normalized !== TaskStatus.COMPLETED && task.status === TaskStatus.COMPLETED) {
+        statusData.completedAt = null;
+      }
+
       const updated = await prisma.task.update({
         where: { id: task.id },
-        data: { status: normalized as TaskStatus },
+        data: statusData,
       });
 
       if (normalized === TaskStatus.COMPLETED && task.status !== TaskStatus.COMPLETED) {

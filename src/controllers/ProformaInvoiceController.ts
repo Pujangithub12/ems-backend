@@ -28,6 +28,26 @@ const LIST_INCLUDE = {
   items: true,
 } as const;
 
+const PI_NUMBER_RE = /^PI-(\d+)$/i;
+
+/** Next default PI Number for an organization: PI-<n+1>, zero-padded to at least 3 digits, where
+ * n is the highest number found among the organization's existing "PI-###"-style numbers
+ * (anything not matching that shape, e.g. a fully custom number, is ignored for this). Respects
+ * manual edits — editing a PI's number to PI-025 makes the next default PI-026, since an edited
+ * value is picked up here the same way as a previously auto-generated one. */
+async function nextPiNumber(organizationId: number): Promise<string> {
+  const rows = await prisma.proformaInvoice.findMany({
+    where: { organizationId, piNumber: { not: null } },
+    select: { piNumber: true },
+  });
+  let max = 0;
+  for (const row of rows) {
+    const match = row.piNumber?.match(PI_NUMBER_RE);
+    if (match) max = Math.max(max, parseInt(match[1]!, 10));
+  }
+  return `PI-${String(max + 1).padStart(3, "0")}`;
+}
+
 /** Resolves item-name/catalog-item pairs for a proforma invoice's line items — prefers the catalog reference when given. Tolerates an empty/undefined list. */
 async function resolveItemInputs(rawItems: ProformaInvoiceItemInput[] | undefined, organizationId: number) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
@@ -143,6 +163,8 @@ export class ProformaInvoiceController {
         return res.status(400).json({ message: (validationError as Error).message });
       }
 
+      const finalPiNumber = piNumber?.trim() || (await nextPiNumber(req.organization!.id));
+
       const created = await prisma.proformaInvoice.create({
         data: {
           purchaseOrderId: purchaseOrder.id,
@@ -150,7 +172,7 @@ export class ProformaInvoiceController {
           createdById: req.user!.id,
           currency: currency ?? "NPR",
           exchangeRate: exchangeRate ?? 1,
-          ...(piNumber ? { piNumber } : {}),
+          piNumber: finalPiNumber,
           ...(piDate ? { piDate: new Date(piDate) } : {}),
           ...(paymentTerms ? { paymentTerms } : {}),
           ...(validityDate ? { validityDate: new Date(validityDate) } : {}),
@@ -180,9 +202,6 @@ export class ProformaInvoiceController {
           items: { create: resolvedItems },
         },
       });
-
-      const generatedPiNumber = `PI-${String(created.id).padStart(6, "0")}`;
-      await prisma.proformaInvoice.update({ where: { id: created.id }, data: { piNumber: generatedPiNumber } });
 
       const proformaInvoice = await prisma.proformaInvoice.findUnique({
         where: { id: created.id },
@@ -252,6 +271,8 @@ export class ProformaInvoiceController {
         return res.status(400).json({ message: (validationError as Error).message });
       }
 
+      const finalPiNumber = piNumber?.trim() || (await nextPiNumber(req.organization!.id));
+
       const created = await prisma.proformaInvoice.create({
         data: {
           organizationId: req.organization!.id,
@@ -259,7 +280,7 @@ export class ProformaInvoiceController {
           ...(vendorId ? { vendorId } : {}),
           currency: currency ?? "NPR",
           exchangeRate: exchangeRate ?? 1,
-          ...(piNumber ? { piNumber } : {}),
+          piNumber: finalPiNumber,
           ...(piDate ? { piDate: new Date(piDate) } : {}),
           ...(paymentTerms ? { paymentTerms } : {}),
           ...(validityDate ? { validityDate: new Date(validityDate) } : {}),
@@ -289,9 +310,6 @@ export class ProformaInvoiceController {
           items: { create: resolvedItems },
         },
       });
-
-      const generatedPiNumber = `PI-${String(created.id).padStart(6, "0")}`;
-      await prisma.proformaInvoice.update({ where: { id: created.id }, data: { piNumber: generatedPiNumber } });
 
       const proformaInvoice = await prisma.proformaInvoice.findUnique({
         where: { id: created.id },

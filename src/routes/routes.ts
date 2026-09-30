@@ -18,6 +18,7 @@ import { ProjectFileController } from "../controllers/ProjectFileController";
 import { PurchaseOrderController } from "../controllers/PurchaseOrderController";
 import { FinanceController } from "../controllers/FinanceController";
 import { ProformaInvoiceController } from "../controllers/ProformaInvoiceController";
+import { QuotationController } from "../controllers/QuotationController";
 import { ShipmentController } from "../controllers/ShipmentController";
 import { GoodsReceiptController } from "../controllers/GoodsReceiptController";
 import { MonthlyPerformanceController } from "../controllers/MonthlyPerformanceController";
@@ -47,6 +48,7 @@ import {
   uploadOrganizationFile,
   uploadOrganizationSignature,
   uploadOrganizationStamp,
+  uploadOrganizationLogo,
   uploadInventoryFile,
   uploadProformaInvoiceFile,
   uploadCustomsFile,
@@ -103,6 +105,14 @@ router.post(
   OrganizationController.uploadStamp,
 );
 router.delete("/workspace/stamp", authMiddleware, OrganizationController.deleteStamp);
+router.post(
+  "/workspace/logo",
+  authMiddleware,
+  requireCsrfHeader,
+  ...uploadOrganizationLogo,
+  OrganizationController.uploadLogo,
+);
+router.delete("/workspace/logo", authMiddleware, OrganizationController.deleteLogo);
 
 // Cross-organization member access matrix (Settings > Organization tab) — lets a
 // caller who belongs to more than one of their own organizations manage which
@@ -615,6 +625,28 @@ router.post(
   ProformaInvoiceController.addAttachment,
 );
 router.get("/proforma-invoices/:id/pdf", authMiddleware, ProformaInvoiceController.downloadPdf);
+
+// Quotations
+router.get("/workspace/quotations", authMiddleware, QuotationController.getAllQuotations);
+router.post(
+  "/workspace/quotations",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  QuotationController.addQuotation,
+);
+router.put(
+  "/quotations/:id",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  QuotationController.updateQuotation,
+);
+router.delete(
+  "/quotations/:id",
+  authMiddleware,
+  permissionMiddleware("projects.procurement"),
+  QuotationController.deleteQuotation,
+);
+router.get("/quotations/:id/pdf", authMiddleware, QuotationController.downloadPdf);
 
 // Shipment (Local + International) + Insurance + Customs
 router.post(

@@ -46,6 +46,8 @@ export interface PurchaseOrderPdfData {
   customerContactPerson?: string | null;
   /** PAN/VAT registration number for the PDF's CUSTOMER box — the buying organization's own PAN/VAT, distinct from the vendor's panVatNumber. */
   customerPanVatNumber?: string | null;
+  /** Overrides organizationEmail in the CUSTOMER box's "EMAIL ADDRESS" field for just this PO — organizationEmail itself now only appears in the letterhead line next to the address/phone. */
+  customerEmail?: string | null;
   /** Currency label for the "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset. */
   currency?: string | null;
   /** "local" | "international" — when international, the VENDOR box's PAN/VAT field is labeled "GSTIN NO." instead, matching the Overview tab's field-label toggle. */
@@ -171,7 +173,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   let leftY = nameBottom + 8;
   let rightY = badgeBottom + 8;
 
-  const letterheadLine = [po.organizationAddress, po.organizationContact]
+  const letterheadLine = [po.organizationAddress, po.organizationContact, po.organizationEmail]
     .filter((v): v is string => !!v && v.trim().length > 0)
     .join(" | ");
   if (letterheadLine) {
@@ -233,7 +235,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     ["ADDRESS", po.organizationAddress || "--"],
     ["PAN/VAT NO.", po.customerPanVatNumber || "--"],
     ["PHONE", po.organizationContact || "--"],
-    ["EMAIL ADDRESS", po.organizationEmail || "--"],
+    ["EMAIL ADDRESS", po.customerEmail || po.organizationEmail || "--"],
   ];
 
   // Measure both columns first so the shared light-blue-gray background can be drawn as one

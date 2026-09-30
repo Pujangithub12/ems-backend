@@ -4,6 +4,8 @@ import { TaskPriority, TaskStatus } from "../types/enums";
 import { AuthRequest } from "../middlewares/auth";
 import { toSimpleArray } from "../utils/simpleArray";
 
+const COMPLETED_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
+
 /** Aggregated stats for the main dashboard (task counts, high priority list, pending leave requests). */
 export class DashboardController {
   static getDashboard = async (req: AuthRequest, res: Response) => {
@@ -13,6 +15,19 @@ export class DashboardController {
         req.user?.role === "admin" || req.user?.role === "super_admin";
       const userId = req.user?.id;
       const organization = req.organization!;
+
+      // The high-priority list keeps a just-completed task visible for a
+      // short grace period (so marking one done doesn't instantly yank it
+      // out from under the user), then drops it once completedAt is more
+      // than 24h old. A task completed before this field existed has a null
+      // completedAt — treated as stale so it doesn't linger indefinitely.
+      const gracePeriodCutoff = new Date(Date.now() - COMPLETED_GRACE_PERIOD_MS);
+      const NOT_STALE_COMPLETED = {
+        OR: [
+          { status: { not: TaskStatus.COMPLETED } },
+          { status: TaskStatus.COMPLETED, completedAt: { gte: gracePeriodCutoff } },
+        ],
+      };
 
       // Admins (and super admins) review every pending leave request in the
       // organization; regular users only see the status of their own.
@@ -53,6 +68,7 @@ export class DashboardController {
           where: {
             priority: TaskPriority.HIGH,
             organizationId: organization.id,
+            ...NOT_STALE_COMPLETED,
           },
           include: { assignedUsers: { include: { user: true } } },
           orderBy: { createdAt: "desc" },
@@ -95,7 +111,10 @@ export class DashboardController {
       // relations — filtering directly on the joined "assignedUsers" alias
       // would silently truncate that relation to just the caller's own row.
       const highPriorityRowIds = await prisma.task.findMany({
-        where: { ...baseVisibleWhere, priority: TaskPriority.HIGH },
+        // baseVisibleWhere and NOT_STALE_COMPLETED each have their own top-level
+        // `OR`, so they're combined via `AND` instead of a spread — spreading both
+        // into one object would let the second `OR` silently clobber the first.
+        where: { AND: [baseVisibleWhere, { priority: TaskPriority.HIGH }, NOT_STALE_COMPLETED] },
         select: { id: true },
         distinct: ["id"],
       });
