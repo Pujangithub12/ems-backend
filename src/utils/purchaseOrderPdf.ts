@@ -67,6 +67,19 @@ export interface PurchaseOrderPdfData {
   stampImage?: Buffer | null;
   vendor?: PurchaseOrderPdfVendor | null;
   items: PurchaseOrderPdfItem[];
+  /** Any number of free-form tables shown right above Payment Terms (e.g. "Technical
+   * Specification", "Electricity Requirement", "Electrical Motor data...") — each with its own
+   * title, column headers and rows. `columns`/`cells` come back from Prisma as JsonValue, hence
+   * `unknown` here; buildPurchaseOrderPdf coerces them to string[] defensively. Omitted from the
+   * PDF entirely when there are none. */
+  specTables?:
+    | {
+        title: string;
+        columns: unknown;
+        footerNote?: string | null;
+        rows: { cells: unknown }[];
+      }[]
+    | null;
 }
 
 // ---- Colors, lifted directly from the reference template's docx (three distinct navy
@@ -442,6 +455,73 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     });
 
   y += totalRowH + 14;
+
+  // ---- Any number of free-form spec tables (Technical Specification, Electricity Requirement,
+  // Electrical Motor data, ...) — each with its own title, column headers and rows, admin-defined
+  // on the Overview tab. Rendered as a numbered plain-text list under a section title bar
+  // (matching the Payment Terms section's own numbered-line style below) rather than a bordered
+  // grid — one line per row: "N. <first column>: <remaining columns, comma-joined>", dropping only
+  // the row's own S.N./No. column since the "N." prefix already numbers it. A table with no rows
+  // is never passed in (PurchaseOrderController.updatePurchaseOrder already drops those), so
+  // nothing renders here at all for a PO that hasn't set any.
+  //
+  // These tables can run arbitrarily long (any number of tables, any number of rows), unlike the
+  // rest of this template which was built assuming everything fits on one page — so this is the
+  // one section that explicitly paginates. `ensureSpace` must run before every single text call
+  // that uses `y`: PDFKit's own automatic page-break (triggered the moment a `.text()` call would
+  // land past the bottom margin) fires in the middle of a line if left to its own devices, which
+  // desyncs it from this manually-tracked `y`. Proactively reserving space keeps `y` far enough
+  // from the bottom that PDFKit's own trigger never fires. ----
+  const ensureSpace = (height: number) => {
+    if (y + height > doc.page.height - MARGIN_BOTTOM) {
+      doc.addPage();
+      y = MARGIN_TOP;
+    }
+  };
+
+  for (const table of po.specTables || []) {
+    const columns = (Array.isArray(table.columns) ? table.columns : []).map((c) => String(c ?? ""));
+    const rows = (table.rows || []).map((r) => (Array.isArray(r.cells) ? r.cells : []).map((c) => String(c ?? "")));
+    if (columns.length === 0 || rows.length === 0) continue;
+
+    ensureSpace(16 + 8);
+    sectionBar(doc, MARGIN_LEFT, y, CONTENT_WIDTH, 16, table.title.toUpperCase());
+    y += 16 + 8;
+
+    rows.forEach((cells, rowIdx) => {
+      // Column 0 is assumed to be a S.N./No. row-position column — the "N." prefix below already
+      // numbers the line, so it's dropped rather than repeated. Everything after the first
+      // remaining value is comma-joined onto the same line after a colon.
+      const rest = columns.length > 1 ? cells.slice(1) : cells;
+      const label = (rest[0] || "").trim();
+      const extra = rest
+        .slice(1)
+        .map((v) => v.trim())
+        .filter((v) => v)
+        .join(", ");
+      // "N." and the label (Particulars) are bold; the rest of the line stays regular weight.
+      const boldPart = `${rowIdx + 1}. ${label}${extra ? ":" : ""}`;
+      const line = extra ? `${boldPart} ${extra}` : boldPart;
+
+      const lineH = doc.font(FONT_BODY_BOLD).fontSize(9).heightOfString(line, { width: CONTENT_WIDTH }) + 4;
+      ensureSpace(lineH);
+      doc.fillColor(BLACK).font(FONT_BODY_BOLD).fontSize(9).text(boldPart, MARGIN_LEFT, y, { width: CONTENT_WIDTH, continued: !!extra });
+      if (extra) {
+        doc.font(FONT_BODY).fontSize(9).text(` ${extra}`);
+      }
+      y += lineH;
+    });
+
+    const footerNote = (table.footerNote || "").trim();
+    if (footerNote) {
+      const footerH = doc.font(FONT_BODY_BOLD).fontSize(8.5).heightOfString(footerNote, { width: CONTENT_WIDTH }) + 4;
+      ensureSpace(footerH);
+      doc.fillColor(BLACK).font(FONT_BODY_BOLD).fontSize(8.5).text(footerNote, MARGIN_LEFT, y, { width: CONTENT_WIDTH });
+      y += footerH;
+    }
+
+    y += 10;
+  }
 
   // ---- Payment Terms ----
   sectionBar(doc, MARGIN_LEFT, y, CONTENT_WIDTH, 16, "PAYMENT TERMS");

@@ -49,6 +49,23 @@ export interface UpdatePurchaseOrderItemDto {
   hsnCode?: string | null;
 }
 
+/** One free-form row of a PurchaseOrderSpecTableDto — `cells` is positional, same order/length as
+ * the parent table's `columns`. */
+export interface PurchaseOrderSpecTableRowDto {
+  cells: string[];
+}
+
+/** One free-form spec table on the PDF, right above Payment Terms (e.g. "Technical
+ * Specification", "Electricity Requirement", "Electrical Motor data...") — title, column headers
+ * and rows are all admin-defined, so it can match any spec sheet shape. */
+export interface PurchaseOrderSpecTableDto {
+  title: string;
+  columns: string[];
+  /** Optional line shown as a merged full-width row at the bottom of the table. */
+  footerNote?: string | null;
+  rows: PurchaseOrderSpecTableRowDto[];
+}
+
 /** Body shape for PUT /purchase-orders/:id. */
 export interface UpdatePurchaseOrderDto {
   /** Auto-assigned at creation time (see PurchaseOrderController.createPurchaseOrder) but user-editable afterward — see the uniqueness check in PurchaseOrderController.updatePurchaseOrder. */
@@ -73,4 +90,8 @@ export interface UpdatePurchaseOrderDto {
   purchaseType?: PurchaseType;
   status?: PurchaseOrderStatus;
   items?: UpdatePurchaseOrderItemDto[];
+  /** Full replace when present — omit to leave existing tables untouched, pass an empty array to
+   * clear all of them. Any table missing a title or ending up with no non-blank rows is dropped
+   * before saving, see PurchaseOrderController.updatePurchaseOrder. */
+  specTables?: PurchaseOrderSpecTableDto[];
 }

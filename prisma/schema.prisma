@@ -1081,8 +1081,44 @@ model PurchaseOrder {
   shipment         Shipment?
   goodsReceipts    GoodsReceipt[]
   payments         PurchaseOrderPayment[]
+  specTables       PurchaseOrderSpecTable[]
 
   @@map("purchase_order")
+}
+
+/// A free-form table on the PO PDF, right above Payment Terms — any number of these can be added
+/// (e.g. "Technical Specification", "Electricity Requirement", "Electrical Motor data..."), each
+/// with its own title, column headers and rows, so it can match whatever spec sheet the vendor's
+/// machine needs (fixed label/value pairs, or a wider multi-column table with its own footer
+/// note). Full-replaced on every save (see PurchaseOrderController.updatePurchaseOrder), same as
+/// PurchaseOrderItem/QuotationItem. A table with no title or no rows is dropped before saving, so
+/// the PDF only ever shows tables the admin actually filled in — see purchaseOrderPdf.ts.
+model PurchaseOrderSpecTable {
+  id              Int                         @id @default(autoincrement())
+  title           String
+  /// Column headers, in order — Json string[] (e.g. ["S.N.", "Particulars", "Description"]).
+  columns         Json
+  /// Optional line shown as a merged full-width row at the bottom of the table (e.g. "Motors Make – Havells (RPM 1440)").
+  footerNote      String?
+  orderIndex      Int                         @default(0)
+  createdAt       DateTime                    @default(now())
+  purchaseOrderId Int
+  purchaseOrder   PurchaseOrder               @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  rows            PurchaseOrderSpecTableRow[]
+
+  @@map("purchase_order_spec_table")
+}
+
+/// One row of a PurchaseOrderSpecTable — `cells` is a Json string[] in the same order as, and
+/// same length as, the parent table's `columns`.
+model PurchaseOrderSpecTableRow {
+  id          Int                    @id @default(autoincrement())
+  cells       Json
+  orderIndex  Int                    @default(0)
+  specTableId Int
+  specTable   PurchaseOrderSpecTable @relation(fields: [specTableId], references: [id], onDelete: Cascade)
+
+  @@map("purchase_order_spec_table_row")
 }
 
 /// Finance's payment log against a PO or a manual finance record — a PO/record can be paid in
