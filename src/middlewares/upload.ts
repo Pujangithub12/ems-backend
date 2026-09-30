@@ -170,6 +170,16 @@ export const uploadOrganizationStamp = makeUploadMiddleware({
     return organizationId == null ? null : `workspaces/${organizationId}/stamp`;
   },
 });
+export const uploadOrganizationLogo = makeUploadMiddleware({
+  field: "file",
+  mode: "single",
+  fileSizeLimit: 200 * 1024,
+  imagesOnly: true,
+  resolveDir: (req) => {
+    const organizationId = parsePositiveIntParam(req.organization?.id);
+    return organizationId == null ? null : `workspaces/${organizationId}/logo`;
+  },
+});
 
 // Inventory item attachments (drawer Documents section), stored under uploads/inventory/<itemId>/
 export const uploadInventoryFile = makeUploadMiddleware({

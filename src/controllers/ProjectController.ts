@@ -182,7 +182,11 @@ export class ProjectController {
         ];
       }
       if (paginated && status && status !== "all") {
-        where.status = status;
+        // Supports a comma-separated list (e.g. "in_progress,pending") so the frontend's default
+        // "Active & Pending" filter can match more than one status in a single query.
+        const statuses = status.split(",").map((s) => s.trim()).filter(Boolean);
+        if (statuses.length > 1) where.status = { in: statuses };
+        else if (statuses.length === 1) where.status = statuses[0];
       }
 
       if (!paginated) {

@@ -240,6 +240,7 @@ export class PurchaseOrderController {
       finalDestination,
       customerContactPerson,
       customerPanVatNumber,
+      customerEmail,
       currency,
       purchaseType,
       status,
@@ -283,6 +284,7 @@ export class PurchaseOrderController {
       if (finalDestination !== undefined) data.finalDestination = finalDestination;
       if (customerContactPerson !== undefined) data.customerContactPerson = customerContactPerson;
       if (customerPanVatNumber !== undefined) data.customerPanVatNumber = customerPanVatNumber;
+      if (customerEmail !== undefined) data.customerEmail = customerEmail;
       if (currency !== undefined) data.currency = currency;
       if (purchaseType !== undefined) data.purchaseType = purchaseType;
       if (status !== undefined) data.status = status;
@@ -622,6 +624,7 @@ export class PurchaseOrderController {
       finalDestination: purchaseOrder.finalDestination,
       customerContactPerson: purchaseOrder.customerContactPerson,
       customerPanVatNumber: purchaseOrder.customerPanVatNumber,
+      customerEmail: purchaseOrder.customerEmail,
       purchaseType: purchaseOrder.purchaseType,
       currency: purchaseOrder.currency,
       organizationName: purchaseOrder.organization?.name ?? null,
