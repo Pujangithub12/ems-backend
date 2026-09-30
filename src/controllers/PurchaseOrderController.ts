@@ -15,7 +15,9 @@ import { buildPurchaseOrderPdf, PurchaseOrderPdfData } from "../utils/purchaseOr
 import { currentNepaliFiscalYearLabel } from "../utils/nepaliFiscalYear";
 import { downloadFileFromStorageCached } from "../config/supabaseStorage";
 
-const PDF_INCLUDE = { vendor: true, organization: true, items: true } as const;
+const SPEC_TABLES_INCLUDE = { orderBy: { orderIndex: "asc" as const }, include: { rows: { orderBy: { orderIndex: "asc" as const } } } };
+
+const PDF_INCLUDE = { vendor: true, organization: true, items: true, specTables: SPEC_TABLES_INCLUDE } as const;
 
 const LIST_INCLUDE = {
   vendor: true,
@@ -30,6 +32,7 @@ const DETAIL_INCLUDE = {
   project: true,
   createdBy: { select: { id: true, fullName: true } },
   items: { include: { item: true } },
+  specTables: SPEC_TABLES_INCLUDE,
   // Only .fullName is ever read from either of these (PurchaseOrderDetail.tsx) — same
   // select-just-what's-used pattern as createdBy above, instead of the full User row.
   statusHistory: { include: { changedBy: { select: { id: true, fullName: true } } }, orderBy: { createdAt: "desc" as const } },
@@ -246,6 +249,7 @@ export class PurchaseOrderController {
       purchaseType,
       status,
       items,
+      specTables,
     }: UpdatePurchaseOrderDto = req.body;
 
     try {
@@ -290,6 +294,34 @@ export class PurchaseOrderController {
       if (currency !== undefined) data.currency = currency;
       if (purchaseType !== undefined) data.purchaseType = purchaseType;
       if (status !== undefined) data.status = status;
+      if (specTables !== undefined) {
+        const resolvedTables = (Array.isArray(specTables) ? specTables : [])
+          .map((table, tableIndex) => {
+            const title = (table?.title || "").trim();
+            const columns = (Array.isArray(table?.columns) ? table.columns : []).map((c) => (c || "").trim());
+            const footerNote = (table?.footerNote || "").trim();
+            const rows = (Array.isArray(table?.rows) ? table.rows : [])
+              .map((row) => ({ cells: (Array.isArray(row?.cells) ? row.cells : []).map((c) => (c ?? "").toString().trim()) }))
+              .filter((row) => row.cells.some((c) => c));
+            return { title, columns, footerNote, rows, orderIndex: tableIndex };
+          })
+          .filter((table) => table.title && table.columns.length > 0 && table.rows.length > 0);
+
+        data.specTables = {
+          deleteMany: {},
+          ...(resolvedTables.length > 0
+            ? {
+                create: resolvedTables.map((table) => ({
+                  title: table.title,
+                  columns: table.columns,
+                  footerNote: table.footerNote || null,
+                  orderIndex: table.orderIndex,
+                  rows: { create: table.rows.map((row, rowIndex) => ({ cells: row.cells, orderIndex: rowIndex })) },
+                })),
+              }
+            : {}),
+        };
+      }
 
       await prisma.purchaseOrder.update({ where: { id: existing.id }, data });
 
@@ -639,6 +671,7 @@ export class PurchaseOrderController {
       stampImage,
       vendor: purchaseOrder.vendor,
       items: purchaseOrder.items,
+      specTables: purchaseOrder.specTables,
     };
 
     // poNumber can contain "/" (e.g. "1-83/84" — incremental number + Nepali fiscal year),
