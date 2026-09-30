@@ -1053,6 +1053,10 @@ model PurchaseOrder {
   /// letterhead line next to the address/phone) for just this PO. Falls back to Organization.email
   /// when unset, see purchaseOrderPdf.ts.
   customerEmail         String?   @db.VarChar
+  /// Phone shown in the PDF's CUSTOMER box — overrides Organization.contact (which stays in the
+  /// letterhead line next to the address) for just this PO. Falls back to Organization.contact
+  /// when unset, see purchaseOrderPdf.ts.
+  customerPhone         String?   @db.VarChar
   /// Free-text currency label for the PDF's "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset, see purchaseOrderPdf.ts.
   currency              String?   @db.VarChar
   /// "local" | "international" — drives whether Insurance/Customs apply, see PurchaseType in types/domain.ts

@@ -48,6 +48,8 @@ export interface PurchaseOrderPdfData {
   customerPanVatNumber?: string | null;
   /** Overrides organizationEmail in the CUSTOMER box's "EMAIL ADDRESS" field for just this PO — organizationEmail itself now only appears in the letterhead line next to the address/phone. */
   customerEmail?: string | null;
+  /** Overrides organizationContact in the CUSTOMER box's "PHONE" field for just this PO — organizationContact itself still also appears in the letterhead line next to the address/email. */
+  customerPhone?: string | null;
   /** Currency label for the "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset. */
   currency?: string | null;
   /** "local" | "international" — when international, the VENDOR box's PAN/VAT field is labeled "GSTIN NO." instead, matching the Overview tab's field-label toggle. */
@@ -234,7 +236,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     ["COMPANY NAME", companyName],
     ["ADDRESS", po.organizationAddress || "--"],
     ["PAN/VAT NO.", po.customerPanVatNumber || "--"],
-    ["PHONE", po.organizationContact || "--"],
+    ["PHONE", po.customerPhone || po.organizationContact || "--"],
     ["EMAIL ADDRESS", po.customerEmail || po.organizationEmail || "--"],
   ];
 
