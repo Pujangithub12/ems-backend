@@ -66,6 +66,9 @@ export interface UpdatePurchaseOrderDto {
   /** Overrides Organization.email in the PDF's CUSTOMER box for just this PO — falls back to
    * Organization.email (shown in the letterhead line) when unset. */
   customerEmail?: string | null;
+  /** Overrides Organization.contact in the PDF's CUSTOMER box for just this PO — falls back to
+   * Organization.contact (shown in the letterhead line) when unset. */
+  customerPhone?: string | null;
   currency?: string;
   purchaseType?: PurchaseType;
   status?: PurchaseOrderStatus;
