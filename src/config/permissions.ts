@@ -56,15 +56,17 @@ export type PermissionRole = (typeof ALL_PERMISSION_ROLES)[number];
  * was previously a hardcoded admin+super_admin-only roleMiddleware check) —
  * this is what a role gets before any super admin ever edits the matrix.
  *
- * Finance is a narrower, in-between role: it only gets the one existing gate
- * that maps to something in its remit (uploading/managing project documents).
- * A super admin can grant it more of the keys above from the Roles &
- * Permissions matrix at any time — this is just the starting default.
+ * Finance is a narrower, in-between role: it only gets the gates that map to
+ * something in its remit (uploading/managing project documents, and editing
+ * the Schedule/Gantt tab — ProjectScheduleTab.tsx edits directly for
+ * admin/super_admin/finance, no separate "Edit Schedule" toggle). A super
+ * admin can grant it more of the keys above from the Roles & Permissions
+ * matrix at any time — this is just the starting default.
  */
 export const DEFAULT_ROLE_PERMISSIONS: Record<PermissionRole, PermissionKey[]> = {
   super_admin: [...ALL_PERMISSION_KEYS],
   admin: [...ALL_PERMISSION_KEYS],
-  finance: ["projects.documents", "expense.manage"],
+  finance: ["projects.documents", "expense.manage", "projects.schedule"],
   user: [],
 };
 
