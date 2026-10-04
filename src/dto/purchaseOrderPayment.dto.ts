@@ -38,6 +38,10 @@ export interface EditCostBreakdownRowDto {
   vat: number;
   importDuties: number;
   insurance: number;
+  /** Manually entered, no computed baseline behind either (same as lcAmount) — shown just left
+   * of Refundable Amount on the cost-breakdown page. */
+  bibini: number;
+  otherMargin: number;
   /** Manually entered directly in NPR (not this row's own currency) — how much VAT/tax is
    * refundable on this row. */
   refundableAmount: number;

@@ -30,7 +30,7 @@ export const prisma = basePrisma.$extends({
     $allModels: {
       async $allOperations({ model, operation, args, query }) {
         const result = await query(args);
-        await onModelWrite(model, operation, args);
+        await onModelWrite(model, operation, args, result);
         return result;
       },
     },
