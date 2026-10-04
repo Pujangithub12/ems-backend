@@ -521,12 +521,32 @@ model PlantReportTable {
   isDefault      Boolean  @default(false)
   createdAt      DateTime @default(now())
 
-  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  project      Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  columns      PlantReportColumn[]
-  rows         PlantReportRow[]
+  organization    Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project         Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  columns         PlantReportColumn[]
+  rows            PlantReportRow[]
+  importTemplates PlantReportImportTemplate[]
 
   @@map("plant_report_table")
+}
+
+/// A saved column-mapping from a previous Excel import on this table — lets a
+/// repeated daily/weekly report file go from upload straight to import
+/// without re-mapping columns every time. `headers` is the file's header row
+/// as uploaded (used to recognize the same file format again, by exact set
+/// match); `mapping` is that header list keyed to the PlantReportColumn id it
+/// was mapped to (headers mapped to "Don't Import" are simply absent here).
+model PlantReportImportTemplate {
+  id        Int      @id @default(autoincrement())
+  tableId   Int
+  name      String   @db.VarChar
+  headers   Json
+  mapping   Json
+  createdAt DateTime @default(now())
+
+  table PlantReportTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@map("plant_report_import_template")
 }
 
 /// One user-defined column on a PlantReportTable. dataType is enforced in

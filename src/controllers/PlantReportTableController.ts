@@ -6,6 +6,7 @@ import {
   SavePlantReportColumnDto,
   SavePlantReportRowDto,
   SaveImportSheetDto,
+  SavePlantReportImportTemplateDto,
   VALID_COLUMN_DATA_TYPES,
   coerceRowValues,
 } from "../dto/plantReport.dto";
@@ -397,6 +398,112 @@ export class PlantReportTableController {
       });
 
       return res.status(200).json(result);
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** GET /plant-report-tables/:id/import-templates — saved column mappings
+   * for this table, so a repeated upload of the same file format can be
+   * recognized automatically (any org member — same level as importing). */
+  static listImportTemplates = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const tableId = parseInt(id as string, 10);
+    if (!Number.isInteger(tableId)) return res.status(400).json({ message: "Invalid table id" });
+
+    try {
+      const organizationId = req.organization!.id;
+      const table = await prisma.plantReportTable.findFirst({ where: { id: tableId, organizationId } });
+      if (!table) return res.status(404).json({ message: "Table not found" });
+
+      const templates = await prisma.plantReportImportTemplate.findMany({
+        where: { tableId },
+        orderBy: { createdAt: "desc" },
+      });
+      return res.status(200).json({
+        templates: templates.map((t) => ({
+          id: t.id,
+          name: t.name,
+          headers: (t.headers as string[] | null) ?? [],
+          mapping: (t.mapping as Record<string, number> | null) ?? {},
+        })),
+      });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** POST /plant-report-tables/:id/import-templates — saves the column
+   * mapping just used for an import (any org member). */
+  static createImportTemplate = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const tableId = parseInt(id as string, 10);
+    if (!Number.isInteger(tableId)) return res.status(400).json({ message: "Invalid table id" });
+
+    const body: SavePlantReportImportTemplateDto = req.body;
+    const name = (body.name || "").trim();
+    if (!name) return res.status(400).json({ message: "Template name is required" });
+    if (!Array.isArray(body.headers) || body.headers.length === 0) {
+      return res.status(400).json({ message: "headers are required" });
+    }
+    if (!body.mapping || typeof body.mapping !== "object") {
+      return res.status(400).json({ message: "mapping is required" });
+    }
+
+    try {
+      const organizationId = req.organization!.id;
+      const table = await prisma.plantReportTable.findFirst({
+        where: { id: tableId, organizationId },
+        include: { columns: true },
+      });
+      if (!table) return res.status(404).json({ message: "Table not found" });
+
+      const validColumnIds = new Set(table.columns.map((c) => c.id));
+      const mapping: Record<string, number> = {};
+      for (const [header, columnId] of Object.entries(body.mapping)) {
+        const colId = Number(columnId);
+        if (Number.isInteger(colId) && validColumnIds.has(colId)) mapping[header] = colId;
+      }
+
+      const template = await prisma.plantReportImportTemplate.create({
+        data: {
+          tableId,
+          name,
+          headers: body.headers.map((h) => String(h)),
+          mapping,
+        },
+      });
+      return res.status(201).json({
+        template: {
+          id: template.id,
+          name: template.name,
+          headers: (template.headers as string[] | null) ?? [],
+          mapping: (template.mapping as Record<string, number> | null) ?? {},
+        },
+      });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** DELETE /plant-report-import-templates/:id (any org member). */
+  static removeImportTemplate = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const templateId = parseInt(id as string, 10);
+    if (!Number.isInteger(templateId)) return res.status(400).json({ message: "Invalid template id" });
+
+    try {
+      const organizationId = req.organization!.id;
+      const existing = await prisma.plantReportImportTemplate.findFirst({
+        where: { id: templateId, table: { organizationId } },
+      });
+      if (!existing) return res.status(404).json({ message: "Template not found" });
+
+      await prisma.plantReportImportTemplate.delete({ where: { id: templateId } });
+      return res.status(200).json({ message: "Template deleted" });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
