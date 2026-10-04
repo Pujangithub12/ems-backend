@@ -43,3 +43,14 @@ export interface SaveImportSheetDto {
 }
 
 export type PlantReportCellValue = CustomTableCellValue;
+
+/** Body shape for POST /plant-report-tables/:id/import-templates — saves the
+ * column mapping just used for an import so a repeated file (same header
+ * row) can be recognized and mapped automatically next time. */
+export interface SavePlantReportImportTemplateDto {
+  name: string;
+  headers: string[];
+  /** Header text -> PlantReportColumn id. A header the user set to "Don't
+   * Import" is simply absent here. */
+  mapping: Record<string, number>;
+}

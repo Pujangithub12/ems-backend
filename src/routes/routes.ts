@@ -170,6 +170,12 @@ router.put(
   permissionMiddleware("members.manage"),
   UserController.updateUser,
 );
+router.put(
+  "/users/:id/role-everywhere",
+  authMiddleware,
+  permissionMiddleware("members.manage"),
+  UserController.updateUserRoleEverywhere,
+);
 
 // Announcement routes - Admin only for creating and deleting
 router.post(
@@ -232,6 +238,21 @@ router.post("/plant-report-tables/:id/rows", authMiddleware, PlantReportTableCon
 router.put("/plant-report-rows/:id", authMiddleware, PlantReportTableController.updateRow);
 router.delete("/plant-report-rows/:id", authMiddleware, PlantReportTableController.removeRow);
 router.post("/plant-report-tables/:id/import", authMiddleware, PlantReportTableController.importSheet);
+router.get(
+  "/plant-report-tables/:id/import-templates",
+  authMiddleware,
+  PlantReportTableController.listImportTemplates,
+);
+router.post(
+  "/plant-report-tables/:id/import-templates",
+  authMiddleware,
+  PlantReportTableController.createImportTemplate,
+);
+router.delete(
+  "/plant-report-import-templates/:id",
+  authMiddleware,
+  PlantReportTableController.removeImportTemplate,
+);
 
 // Materials page — a project-scoped material stock/receipt ledger. Reads +
 // recording a receive/use transaction are open to any org member (data
