@@ -49,6 +49,7 @@ model User {
   purchaseOrdersCreated             PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
   purchaseOrderPaymentsLogged       PurchaseOrderPayment[]
   financeManualRecordsCreated       FinanceManualRecord[]
+  shipmentTrackingRecordsCreated    ShipmentTrackingRecord[]
   proformaInvoicesCreated           ProformaInvoice[]
   quotationsCreated                 Quotation[]
   goodsReceiptsReceived             GoodsReceipt[]
@@ -84,40 +85,41 @@ model Organization {
   /// Storage key for the company logo, shown at the top-left of generated Quotation PDFs (see quotationPdf.ts).
   logoImagePath      String?  @db.VarChar
 
-  activities            Activity[]
-  announcements         Announcement[]
-  calendarEvents        CalendarEvent[]
-  catalogItems          CatalogItem[]
-  dailyGeneration       DailyGeneration[]
-  expenseRequests       ExpenseRequest[]
-  fileAccess            FileAccess[]
-  hierarchyNodes        HierarchyNode[]
-  inventoryItems        InventoryItem[]
-  inventoryTransactions InventoryTransaction[]
-  leaveRequests         LeaveRequest[]
-  monthlyPerformance    MonthlyPerformance[]
-  myTasks               MyTask[]
-  procurementItems      ProcurementItem[]
-  purchaseOrders        PurchaseOrder[]
-  projects              Project[]
-  projectFiles          ProjectFile[]
-  projectHeadings       ProjectHeading[]
-  siteVisitRequests     SiteVisitRequest[]
-  tasks                 Task[]
-  vendors               Vendor[]
-  warehouses            Warehouse[]
-  financeManualRecords  FinanceManualRecord[]
-  proformaInvoices      ProformaInvoice[]
-  quotations            Quotation[]
-  memberships           OrganizationMembership[]
-  notifications         Notification[]
-  plantReportTables     PlantReportTable[]
-  materials             Material[]
-  materialCustomTables  MaterialCustomTable[]
-  materialFields        MaterialField[]
-  purchaseBills         PurchaseBill[]
-  siteActivityReports   SiteActivityReport[]
-  siteActivityWorkTypes SiteActivityWorkType[]
+  activities              Activity[]
+  announcements           Announcement[]
+  calendarEvents          CalendarEvent[]
+  catalogItems            CatalogItem[]
+  dailyGeneration         DailyGeneration[]
+  expenseRequests         ExpenseRequest[]
+  fileAccess              FileAccess[]
+  hierarchyNodes          HierarchyNode[]
+  inventoryItems          InventoryItem[]
+  inventoryTransactions   InventoryTransaction[]
+  leaveRequests           LeaveRequest[]
+  monthlyPerformance      MonthlyPerformance[]
+  myTasks                 MyTask[]
+  procurementItems        ProcurementItem[]
+  purchaseOrders          PurchaseOrder[]
+  projects                Project[]
+  projectFiles            ProjectFile[]
+  projectHeadings         ProjectHeading[]
+  siteVisitRequests       SiteVisitRequest[]
+  tasks                   Task[]
+  vendors                 Vendor[]
+  warehouses              Warehouse[]
+  financeManualRecords    FinanceManualRecord[]
+  proformaInvoices        ProformaInvoice[]
+  quotations              Quotation[]
+  memberships             OrganizationMembership[]
+  notifications           Notification[]
+  plantReportTables       PlantReportTable[]
+  materials               Material[]
+  materialCustomTables    MaterialCustomTable[]
+  materialFields          MaterialField[]
+  purchaseBills           PurchaseBill[]
+  siteActivityReports     SiteActivityReport[]
+  siteActivityWorkTypes   SiteActivityWorkType[]
+  shipmentTrackingRecords ShipmentTrackingRecord[]
 
   @@map("workspace")
 }
@@ -1197,6 +1199,10 @@ model FinanceManualRecord {
   /// much of this record's VAT is refundable, and how much of that has actually been refunded so far.
   refundableAmount Decimal? @db.Decimal
   refundedAmount   Decimal? @db.Decimal
+  /// Manually entered figures shown just left of Refundable Amount on the Finance cost-breakdown
+  /// page — no computed baseline behind either, unlike freight/vat/insurance above.
+  bibini           Decimal? @db.Decimal
+  otherMargin      Decimal? @db.Decimal
   /// Freeform note shown on the record's Finance cost-breakdown page.
   remarks          String?
   createdAt        DateTime @default(now())
@@ -1211,6 +1217,36 @@ model FinanceManualRecord {
   payments     PurchaseOrderPayment[]
 
   @@map("finance_manual_record")
+}
+
+/// A freeform shipping/logistics tracking log, shown as a second tab on the Finance page
+/// (admin/super_admin/finance) — org-wide, not tied to any specific PurchaseOrder/Shipment
+/// (which already tracks per-PO transport/customs detail; this is a separate, simpler
+/// at-a-glance log the procurement team fills in by hand for jobs in transit).
+model ShipmentTrackingRecord {
+  id             Int       @id @default(autoincrement())
+  blNumber       String?   @db.VarChar
+  carrierName    String?   @db.VarChar
+  dispatchDate   DateTime? @db.Date
+  eta            DateTime? @db.Date
+  /// Port of Loading.
+  pol            String?   @db.VarChar
+  /// Port of Discharge.
+  pod            String?   @db.VarChar
+  containerType  String?   @db.VarChar
+  containerCount Int?
+  dispatchedFrom String?   @db.VarChar
+  documentStatus String?   @db.VarChar
+  remarks        String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+  organizationId Int
+  createdById    Int?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("shipment_tracking_record")
 }
 
 /// Snapshot copy of the selected PurchaseRequestItem rows at PO-generation time — not a live reference, so the PO stays stable if the PR is later edited.
@@ -1244,6 +1280,10 @@ model PurchaseOrderItem {
   /// The Letter of Credit's own principal amount for this item's share — manually entered, no
   /// computed baseline to override (unlike freight/vat/importDuties/insurance above).
   lcAmount             Decimal? @db.Decimal
+  /// Manually entered figures shown just left of Refundable Amount on the Finance cost-breakdown
+  /// page — no computed baseline behind either, same as lcAmount above.
+  bibini               Decimal? @db.Decimal
+  otherMargin          Decimal? @db.Decimal
   /// Freeform note shown on the PO's Finance cost-breakdown page (not printed on the PO PDF).
   remarks              String?
   createdAt            DateTime @default(now())

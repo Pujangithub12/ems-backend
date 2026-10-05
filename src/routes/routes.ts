@@ -17,6 +17,7 @@ import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
 import { PurchaseOrderController } from "../controllers/PurchaseOrderController";
 import { FinanceController } from "../controllers/FinanceController";
+import { ShipmentTrackingController } from "../controllers/ShipmentTrackingController";
 import { ProformaInvoiceController } from "../controllers/ProformaInvoiceController";
 import { QuotationController } from "../controllers/QuotationController";
 import { ShipmentController } from "../controllers/ShipmentController";
@@ -184,7 +185,7 @@ router.post(
   permissionMiddleware("announcements.manage"),
   AnnouncementController.createAnnouncement,
 );
-router.get("/announcements", authMiddleware, AnnouncementController.getHistory);
+router.get("/announcements", authMiddleware, cacheResponse("announcements", 30), AnnouncementController.getHistory);
 router.delete(
   "/announcements/:id",
   authMiddleware,
@@ -539,8 +540,8 @@ router.put(
 // every other view endpoint here.
 
 // Purchase Orders + Cost Sheet
-router.get("/workspace/purchase-orders", authMiddleware, PurchaseOrderController.getOrganizationPurchaseOrders);
-router.get("/projects/:projectId/purchase-orders", authMiddleware, PurchaseOrderController.getPurchaseOrders);
+router.get("/workspace/purchase-orders", authMiddleware, cacheResponse("procurement", 30), PurchaseOrderController.getOrganizationPurchaseOrders);
+router.get("/projects/:projectId/purchase-orders", authMiddleware, cacheResponse("procurement", 30), PurchaseOrderController.getPurchaseOrders);
 router.post(
   "/projects/:projectId/purchase-orders",
   authMiddleware,
@@ -555,7 +556,7 @@ router.post(
   roleMiddleware([UserRole.ADMIN, UserRole.FINANCE, UserRole.SUPER_ADMIN]),
   PurchaseOrderController.createPurchaseOrder,
 );
-router.get("/purchase-orders/:id/detail", authMiddleware, PurchaseOrderController.getPurchaseOrderDetail);
+router.get("/purchase-orders/:id/detail", authMiddleware, cacheResponse("procurement", 30), PurchaseOrderController.getPurchaseOrderDetail);
 router.put(
   "/purchase-orders/:id",
   authMiddleware,
@@ -586,27 +587,39 @@ router.delete(
   authMiddleware,
   PurchaseOrderController.deletePurchaseOrderPayment,
 );
-router.get("/purchase-orders/:id/cost-sheet", authMiddleware, PurchaseOrderController.getCostSheet);
+router.get("/purchase-orders/:id/cost-sheet", authMiddleware, cacheResponse("procurement", 30), PurchaseOrderController.getCostSheet);
 router.get("/purchase-orders/:id/pdf", authMiddleware, PurchaseOrderController.downloadPdf);
 
 // Finance — payment ledger layered on top of the Cost Sheet above (role-gated inline in
 // FinanceController, not via permissionMiddleware, since it must include finance).
-router.get("/workspace/finance/purchase-orders", authMiddleware, FinanceController.getFinanceOverview);
+router.get("/workspace/finance/purchase-orders", authMiddleware, cacheResponse("procurement", 30), FinanceController.getFinanceOverview);
+// Exchange rates are already memoized in-process for the calendar day (see utils/exchangeRates.ts)
+// — a Redis layer on top wouldn't save anything further.
 router.get("/workspace/finance/exchange-rates", authMiddleware, FinanceController.getExchangeRates);
-router.get("/workspace/finance/vendors/:vendorId", authMiddleware, FinanceController.getVendorFinanceSummary);
-router.get("/workspace/finance/items", authMiddleware, FinanceController.getItemCostReport);
+router.get("/workspace/finance/vendors/:vendorId", authMiddleware, cacheResponse("procurement", 30), FinanceController.getVendorFinanceSummary);
+router.get("/workspace/finance/items", authMiddleware, cacheResponse("procurement", 30), FinanceController.getItemCostReport);
 router.post("/workspace/finance/manual-records", authMiddleware, FinanceController.createManualRecord);
 router.put("/workspace/finance/manual-records/:id", authMiddleware, FinanceController.updateManualRecord);
 router.delete("/workspace/finance/manual-records/:id", authMiddleware, FinanceController.deleteManualRecord);
 router.post("/workspace/finance/manual-records/:id/payments", authMiddleware, FinanceController.addManualRecordPayment);
 router.delete("/workspace/finance/manual-records/:id/payments/:paymentId", authMiddleware, FinanceController.deleteManualRecordPayment);
-router.get("/workspace/finance/purchase-orders/:id/cost-breakdown", authMiddleware, FinanceController.getPurchaseOrderCostBreakdown);
-router.get("/workspace/finance/manual-records/:id/cost-breakdown", authMiddleware, FinanceController.getManualRecordCostBreakdown);
+router.get("/workspace/finance/purchase-orders/:id/cost-breakdown", authMiddleware, cacheResponse("procurement", 30), FinanceController.getPurchaseOrderCostBreakdown);
+router.get("/workspace/finance/manual-records/:id/cost-breakdown", authMiddleware, cacheResponse("procurement", 30), FinanceController.getManualRecordCostBreakdown);
+router.get("/workspace/finance/purchase-orders/:id/cost-breakdown/pdf", authMiddleware, FinanceController.exportPurchaseOrderCostBreakdownPdf);
+router.get("/workspace/finance/manual-records/:id/cost-breakdown/pdf", authMiddleware, FinanceController.exportManualRecordCostBreakdownPdf);
 router.put("/workspace/finance/purchase-orders/:poId/items/:itemId", authMiddleware, FinanceController.updatePurchaseOrderItemBreakdownRow);
 router.put("/workspace/finance/manual-records/:id/breakdown", authMiddleware, FinanceController.updateManualRecordBreakdownRow);
 
+// Shipment Tracking — Finance page's second tab, a freeform logistics log (org-wide,
+// admin/super_admin/finance; gated inline in the controller, same as the rest of Finance).
+router.get("/workspace/shipment-tracking", authMiddleware, cacheResponse("procurement", 30, { perUser: false }), ShipmentTrackingController.list);
+router.get("/workspace/shipment-tracking/pdf", authMiddleware, ShipmentTrackingController.exportPdf);
+router.post("/workspace/shipment-tracking", authMiddleware, ShipmentTrackingController.create);
+router.put("/workspace/shipment-tracking/:id", authMiddleware, ShipmentTrackingController.update);
+router.delete("/workspace/shipment-tracking/:id", authMiddleware, ShipmentTrackingController.remove);
+
 // Proforma Invoices
-router.get("/workspace/proforma-invoices", authMiddleware, ProformaInvoiceController.getAllProformaInvoices);
+router.get("/workspace/proforma-invoices", authMiddleware, cacheResponse("procurement", 30, { perUser: false }), ProformaInvoiceController.getAllProformaInvoices);
 router.post(
   "/purchase-orders/:id/proforma-invoices",
   authMiddleware,
@@ -648,7 +661,7 @@ router.post(
 router.get("/proforma-invoices/:id/pdf", authMiddleware, ProformaInvoiceController.downloadPdf);
 
 // Quotations
-router.get("/workspace/quotations", authMiddleware, QuotationController.getAllQuotations);
+router.get("/workspace/quotations", authMiddleware, cacheResponse("procurement", 30, { perUser: false }), QuotationController.getAllQuotations);
 router.post(
   "/workspace/quotations",
   authMiddleware,
@@ -732,6 +745,7 @@ router.delete(
 router.get(
   "/workspace/goods-receipts",
   authMiddleware,
+  cacheResponse("procurement", 30, { perUser: false }),
   GoodsReceiptController.getOrganizationGoodsReceipts,
 );
 router.post(
@@ -919,6 +933,7 @@ router.delete(
 router.get(
   "/workspace/vendors",
   authMiddleware,
+  cacheResponse("procurement", 30, { perUser: false }),
   InventoryController.getOrganizationVendors,
 );
 router.post(
@@ -999,7 +1014,7 @@ router.post(
   ...upload,
   TaskController.createTask,
 );
-router.get("/tasks", authMiddleware, TaskController.getAllTasks);
+router.get("/tasks", authMiddleware, cacheResponse("tasks", 30), TaskController.getAllTasks);
 router.get("/tasks/:id", authMiddleware, TaskController.getTaskById);
 router.get("/dashboard", authMiddleware, cacheResponse("dashboard", 30), DashboardController.getDashboard);
 router.put(
@@ -1096,6 +1111,7 @@ router.post(
 router.get(
   "/leaverequest",
   authMiddleware,
+  cacheResponse("leaveRequests", 30),
   LeaveRequestController.getAllLeaveRequests,
 );
 
@@ -1135,6 +1151,7 @@ router.post(
 router.get(
   "/sitevisit",
   authMiddleware,
+  cacheResponse("siteVisitRequests", 30),
   SiteVisitRequestController.getAllSiteVisitRequests,
 );
 
@@ -1174,6 +1191,7 @@ router.post(
 router.get(
   "/expense",
   authMiddleware,
+  cacheResponse("expenseRequests", 30),
   ExpenseRequestController.getAllExpenseRequests,
 );
 
@@ -1219,7 +1237,7 @@ router.delete(
 );
 
 // Hierarchy routes
-router.get("/hierarchy", authMiddleware, HierarchyController.getHierarchy);
+router.get("/hierarchy", authMiddleware, cacheResponse("hierarchy", 30), HierarchyController.getHierarchy);
 router.put(
   "/hierarchy",
   authMiddleware,

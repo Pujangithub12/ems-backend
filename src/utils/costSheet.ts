@@ -183,14 +183,21 @@ export function computeCostSheetFromData(purchaseOrder: PurchaseOrderForCostShee
 /** By-id convenience wrapper around computeCostSheetFromData, for callers that don't already
  * have a matching PO loaded. */
 export async function computeCostSheet(purchaseOrderId: number): Promise<CostSheetBreakdown | null> {
-  const purchaseOrder = await prisma.purchaseOrder.findUnique({
-    where: { id: purchaseOrderId },
-    include: {
-      items: true,
-      shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
-      proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" } },
-    },
-  });
+  // items and proformaInvoices are fetched as separate queries rather than both combined into
+  // one `include` below — two sibling one-to-many relations joined into the same query makes
+  // Postgres/Prisma fan the join out across both (row counts multiply together before Prisma can
+  // reassemble them), which measurably slows this down as either list grows. Splitting them into
+  // their own `WHERE purchaseOrderId = ?` queries avoids that; shipment stays in the main query
+  // since its own nested relations (insurance/customs/letterOfCredit) are a single nested path,
+  // not a sibling one-to-many, so they don't cause the same fan-out.
+  const [purchaseOrder, items, proformaInvoices] = await Promise.all([
+    prisma.purchaseOrder.findUnique({
+      where: { id: purchaseOrderId },
+      include: { shipment: { include: { insurance: true, customs: true, letterOfCredit: true } } },
+    }),
+    prisma.purchaseOrderItem.findMany({ where: { purchaseOrderId } }),
+    prisma.proformaInvoice.findMany({ where: { purchaseOrderId }, include: { items: true }, orderBy: { updatedAt: "desc" } }),
+  ]);
   if (!purchaseOrder) return null;
-  return computeCostSheetFromData(purchaseOrder);
+  return computeCostSheetFromData({ ...purchaseOrder, items, proformaInvoices });
 }

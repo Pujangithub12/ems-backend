@@ -6,6 +6,7 @@ import { roleHasPermission } from "../utils/permissionService";
 import { computeCostSheetFromData, PurchaseOrderForCostSheet } from "../utils/costSheet";
 import { getTodayExchangeRates } from "../utils/exchangeRates";
 import { AddManualRecordPaymentDto, SaveFinanceManualRecordDto, EditCostBreakdownRowDto } from "../dto/purchaseOrderPayment.dto";
+import { buildTablePdf } from "../utils/tablePdf";
 
 /** Postgres `numeric` columns come back as Prisma's Decimal wrapper or null — coerce for arithmetic (same convention as costSheet.ts). */
 const num = (value: { toNumber(): number } | number | string | null | undefined): number => {
@@ -185,6 +186,8 @@ type CostBreakdownRow = {
   vat: number;
   importDuties: number;
   insurance: number;
+  bibini: number;
+  otherMargin: number;
   refundableAmount: number;
   refundedAmount: number;
   toBeRefunded: number;
@@ -198,6 +201,48 @@ const refundFields = (refundableAmount: number, refundedAmount: number) => ({
   refundedAmount,
   toBeRefunded: refundableAmount - refundedAmount,
 });
+
+const fmtAmount = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** Column defs for the cost-breakdown PDF export — same columns/order as the Finance
+ * cost-breakdown page's table (see FinanceCostBreakdown.tsx). */
+const costBreakdownPdfColumns = [
+  { header: "Item Procure", width: 1.6 },
+  { header: "Major Cost", align: "right" as const },
+  { header: "Freight", align: "right" as const },
+  { header: "LC Number" },
+  { header: "LC Amount", align: "right" as const },
+  { header: "LC Charge", align: "right" as const },
+  { header: "LC Commission", align: "right" as const },
+  { header: "VAT", align: "right" as const },
+  { header: "Import Duties", align: "right" as const },
+  { header: "Insurance", align: "right" as const },
+  { header: "Bibini", align: "right" as const },
+  { header: "Other Margin", align: "right" as const },
+  { header: "Refundable (NPR)", align: "right" as const },
+  { header: "Refunded (NPR)", align: "right" as const },
+  { header: "To Be Refunded (NPR)", align: "right" as const },
+  { header: "Remarks", width: 1.6 },
+];
+
+const costBreakdownRowToCells = (r: CostBreakdownRow): string[] => [
+  r.itemName,
+  fmtAmount(r.majorCost),
+  fmtAmount(r.freight),
+  r.lcNumber || "--",
+  fmtAmount(r.lcAmount),
+  fmtAmount(r.lcCharge),
+  fmtAmount(r.lcCommission),
+  fmtAmount(r.vat),
+  fmtAmount(r.importDuties),
+  fmtAmount(r.insurance),
+  fmtAmount(r.bibini),
+  fmtAmount(r.otherMargin),
+  fmtAmount(r.refundableAmount),
+  fmtAmount(r.refundedAmount),
+  fmtAmount(r.toBeRefunded),
+  r.remarks || "--",
+];
 
 /** Per-item Item Procure/Major Cost/Freight/LC/VAT breakdown for one PO — freight/LC/VAT
  * default to the same proration as getItemCostReport (split per item by its share of the PO's
@@ -221,6 +266,8 @@ async function buildPoCostBreakdownRows(
       refundableAmount: { toNumber(): number } | null;
       refundedAmount: { toNumber(): number } | null;
       lcAmount: { toNumber(): number } | null;
+      bibini: { toNumber(): number } | null;
+      otherMargin: { toNumber(): number } | null;
     }[];
   } & PurchaseOrderForCostSheet,
 ): Promise<CostBreakdownRow[]> {
@@ -245,6 +292,8 @@ async function buildPoCostBreakdownRows(
       vat,
       importDuties: item.importDutiesOverride != null ? num(item.importDutiesOverride) : costSheet.customsDuty * share,
       insurance: item.insuranceOverride != null ? num(item.insuranceOverride) : costSheet.insurancePremium * share,
+      bibini: num(item.bibini),
+      otherMargin: num(item.otherMargin),
       ...refundFields(num(item.refundableAmount), num(item.refundedAmount)),
       remarks: item.remarks,
     };
@@ -264,6 +313,8 @@ function buildManualCostBreakdownRows(record: {
   vat: { toNumber(): number } | null;
   importDuties: { toNumber(): number } | null;
   insurance: { toNumber(): number } | null;
+  bibini: { toNumber(): number } | null;
+  otherMargin: { toNumber(): number } | null;
   refundableAmount: { toNumber(): number } | null;
   refundedAmount: { toNumber(): number } | null;
   remarks: string | null;
@@ -282,6 +333,8 @@ function buildManualCostBreakdownRows(record: {
       vat,
       importDuties: num(record.importDuties),
       insurance: num(record.insurance),
+      bibini: num(record.bibini),
+      otherMargin: num(record.otherMargin),
       ...refundFields(num(record.refundableAmount), num(record.refundedAmount)),
       remarks: record.remarks,
     },
@@ -312,6 +365,8 @@ function validateCostBreakdownRowInput({
   vat,
   importDuties,
   insurance,
+  bibini,
+  otherMargin,
   refundableAmount,
   refundedAmount,
 }: EditCostBreakdownRowDto): string | null {
@@ -325,6 +380,8 @@ function validateCostBreakdownRowInput({
     ["VAT", vat],
     ["import duties", importDuties],
     ["insurance", insurance],
+    ["Bibini", bibini],
+    ["other margin", otherMargin],
     ["refundable amount", refundableAmount],
     ["refunded amount", refundedAmount],
   ];
@@ -576,6 +633,75 @@ export class FinanceController {
     }
   };
 
+  /** GET /workspace/finance/purchase-orders/:id/cost-breakdown/pdf — the Export button's PDF
+   * option, same rows as getPurchaseOrderCostBreakdown rendered as a report instead of JSON. */
+  static exportPurchaseOrderCostBreakdownPdf = async (req: AuthRequest, res: Response) => {
+    if (!canViewFinance(req.user!.role)) return res.status(403).json({ message: "Forbidden" });
+
+    const { id } = req.params;
+    try {
+      const po = await prisma.purchaseOrder.findFirst({
+        where: {
+          id: parseInt(id as string),
+          organizationId: req.organization!.id,
+          ...(req.user!.role === UserRole.ADMIN ? { createdById: req.user!.id } : {}),
+        },
+        include: {
+          vendor: true,
+          items: true,
+          shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
+          proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" as const } },
+        },
+      });
+      if (!po) return res.status(404).json({ message: "Purchase order not found" });
+
+      const rows = await buildPoCostBreakdownRows(po);
+      const doc = buildTablePdf({
+        title: "Cost Breakdown",
+        subtitle: [po.poNumber, po.vendor?.name].filter(Boolean).join(" — ") || null,
+        organizationName: req.organization!.name,
+        columns: costBreakdownPdfColumns,
+        rows: rows.map(costBreakdownRowToCells),
+      });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="cost-breakdown-${(po.poNumber || `PO-${po.id}`).replace(/\//g, "-")}.pdf"`);
+      doc.pipe(res);
+      doc.end();
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** GET /workspace/finance/manual-records/:id/cost-breakdown/pdf — same for a "manual"-source row. */
+  static exportManualRecordCostBreakdownPdf = async (req: AuthRequest, res: Response) => {
+    if (!canViewFinance(req.user!.role)) return res.status(403).json({ message: "Forbidden" });
+
+    const { id } = req.params;
+    try {
+      const record = await loadOwnedManualRecord(id as string, req.organization!.id);
+      if (!record) return res.status(404).json({ message: "Record not found" });
+
+      const rows = buildManualCostBreakdownRows(record);
+      const doc = buildTablePdf({
+        title: "Cost Breakdown",
+        subtitle: [record.referenceNumber, record.vendor?.name ?? record.vendorName].filter(Boolean).join(" — ") || null,
+        organizationName: req.organization!.name,
+        columns: costBreakdownPdfColumns,
+        rows: rows.map(costBreakdownRowToCells),
+      });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="cost-breakdown-${(record.referenceNumber || `record-${record.id}`).replace(/\//g, "-")}.pdf"`);
+      doc.pipe(res);
+      doc.end();
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   /** PUT /workspace/finance/purchase-orders/:poId/items/:itemId — full row edit from the Finance
    * cost-breakdown page. Item name/major cost write straight through to the real
    * PurchaseOrderItem (so they also show up on the PO's own Overview tab); freight/LC
@@ -624,6 +750,8 @@ export class FinanceController {
           vatOverride: dto.vat,
           importDutiesOverride: dto.importDuties,
           insuranceOverride: dto.insurance,
+          bibini: dto.bibini,
+          otherMargin: dto.otherMargin,
           refundableAmount: dto.refundableAmount,
           refundedAmount: dto.refundedAmount,
           remarks: dto.remarks?.trim() || null,
@@ -673,6 +801,8 @@ export class FinanceController {
           vat: dto.vat,
           importDuties: dto.importDuties,
           insurance: dto.insurance,
+          bibini: dto.bibini,
+          otherMargin: dto.otherMargin,
           refundableAmount: dto.refundableAmount,
           refundedAmount: dto.refundedAmount,
           remarks: dto.remarks?.trim() || null,
