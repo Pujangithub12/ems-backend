@@ -46,6 +46,7 @@ export interface QuotationPdfData {
   // Terms and Conditions box.
   priceBasis?: string | null;
   deliveryPeriod?: string | null;
+  deliveryAddress?: string | null;
   paymentTerms?: string | null;
   validityPeriod?: string | null;
 
@@ -133,7 +134,7 @@ export function buildQuotationPdf(q: QuotationPdfData): PDFKit.PDFDocument {
   };
   // ---- Letterhead: logo (if any) + company name/address on the left, Reg No. at the right ----
   const companyName = q.organizationName || "Quotation";
-  const logoSize = 94;
+  const logoSize = 70;
   const logoGap = 10;
   const hasLogo = !!q.logoImage;
   const textX = hasLogo ? MARGIN_LEFT + logoSize + logoGap : MARGIN_LEFT;
@@ -145,7 +146,14 @@ export function buildQuotationPdf(q: QuotationPdfData): PDFKit.PDFDocument {
       console.error("Failed to embed organization logo image:", err);
     }
   }
-  doc.fillColor(BLACK).font(FONT_COMPANY).fontSize(18).text(companyName, textX, y, { width: textW });
+  // Shrinks the font just enough to keep the company name on one line, rather than a fixed size
+  // that wraps once the name gets long enough — `lineBreak: false` below is then just a backstop.
+  doc.font(FONT_COMPANY);
+  let companyFontSize = 18;
+  while (companyFontSize > 10 && doc.fontSize(companyFontSize).widthOfString(companyName) > textW) {
+    companyFontSize -= 0.5;
+  }
+  doc.fillColor(BLACK).font(FONT_COMPANY).fontSize(companyFontSize).text(companyName, textX, y, { width: textW, lineBreak: false });
   const nameBottom = doc.y;
   let addressBottom = nameBottom;
   if (q.organizationAddress) {
@@ -359,6 +367,7 @@ export function buildQuotationPdf(q: QuotationPdfData): PDFKit.PDFDocument {
   const termsRows: [string, string][] = [
     ["Price Basis:", q.priceBasis || "--"],
     ["Delivery Period:-", q.deliveryPeriod || "--"],
+    ["Delivery Address:-", q.deliveryAddress || "--"],
     ["Payment Terms:-", q.paymentTerms || "--"],
     ["Validity of Quotation:-", q.validityPeriod || "--"],
   ];

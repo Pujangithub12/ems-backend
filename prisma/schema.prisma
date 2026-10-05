@@ -1426,6 +1426,7 @@ model Quotation {
   /// Terms and Conditions box.
   priceBasis           String?   @db.VarChar
   deliveryPeriod       String?   @db.VarChar
+  deliveryAddress      String?
   paymentTerms         String?   @db.VarChar
   validityPeriod       String?   @db.VarChar
   /// VAT % applied to the items subtotal on the generated PDF — falls back to 13 when unset.
