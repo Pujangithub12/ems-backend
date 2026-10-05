@@ -92,6 +92,7 @@ export class QuotationController {
       customerPan,
       priceBasis,
       deliveryPeriod,
+      deliveryAddress,
       paymentTerms,
       validityPeriod,
       taxPercent,
@@ -134,6 +135,7 @@ export class QuotationController {
           ...(customerPan ? { customerPan } : {}),
           ...(priceBasis ? { priceBasis } : {}),
           ...(deliveryPeriod ? { deliveryPeriod } : {}),
+          ...(deliveryAddress ? { deliveryAddress } : {}),
           ...(paymentTerms ? { paymentTerms } : {}),
           ...(validityPeriod ? { validityPeriod } : {}),
           ...(taxPercent !== undefined ? { taxPercent } : {}),
@@ -168,6 +170,7 @@ export class QuotationController {
       customerPan,
       priceBasis,
       deliveryPeriod,
+      deliveryAddress,
       paymentTerms,
       validityPeriod,
       taxPercent,
@@ -197,6 +200,7 @@ export class QuotationController {
       if (customerPan !== undefined) data.customerPan = customerPan;
       if (priceBasis !== undefined) data.priceBasis = priceBasis;
       if (deliveryPeriod !== undefined) data.deliveryPeriod = deliveryPeriod;
+      if (deliveryAddress !== undefined) data.deliveryAddress = deliveryAddress;
       if (paymentTerms !== undefined) data.paymentTerms = paymentTerms;
       if (validityPeriod !== undefined) data.validityPeriod = validityPeriod;
       if (taxPercent !== undefined) data.taxPercent = taxPercent;
@@ -288,6 +292,7 @@ export class QuotationController {
         customerPan: quotation.customerPan,
         priceBasis: quotation.priceBasis,
         deliveryPeriod: quotation.deliveryPeriod,
+        deliveryAddress: quotation.deliveryAddress,
         paymentTerms: quotation.paymentTerms,
         validityPeriod: quotation.validityPeriod,
         signatoryName: quotation.signatoryName,
