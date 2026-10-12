@@ -6,7 +6,8 @@ import { roleHasPermission } from "../utils/permissionService";
 import { computeCostSheetFromData, PurchaseOrderForCostSheet } from "../utils/costSheet";
 import { getTodayExchangeRates } from "../utils/exchangeRates";
 import { AddManualRecordPaymentDto, SaveFinanceManualRecordDto, EditCostBreakdownRowDto } from "../dto/purchaseOrderPayment.dto";
-import { buildTablePdf } from "../utils/tablePdf";
+import { buildCostBreakdownStatementPdf, StatementRowCell } from "../utils/costBreakdownStatementPdf";
+import { downloadFileFromStorageCached } from "../config/supabaseStorage";
 
 /** Postgres `numeric` columns come back as Prisma's Decimal wrapper or null — coerce for arithmetic (same convention as costSheet.ts). */
 const num = (value: { toNumber(): number } | number | string | null | undefined): number => {
@@ -40,7 +41,9 @@ const PO_FINANCE_INCLUDE = {
 
 const MANUAL_RECORD_INCLUDE = {
   vendor: true,
+  project: { select: { id: true, name: true } },
   payments: { orderBy: { paidDate: "desc" as const } },
+  lines: { orderBy: { id: "asc" as const } },
 } as const;
 
 /** Currency options offered on the Finance page's Add/Edit Record form. */
@@ -67,6 +70,8 @@ type FinanceLedgerRow = {
   poNumber: string | null;
   vendor: { id: number; name: string } | null;
   vendorName: string | null;
+  project: { id: number; name: string } | null;
+  lcNumber: string | null;
   itemNames: string[];
   itemValue: number;
   paymentTerms: string | null;
@@ -125,6 +130,8 @@ async function buildFinanceRow(
     poNumber: po.poNumber,
     vendor: po.vendor ? { id: po.vendor.id, name: po.vendor.name } : null,
     vendorName: po.vendor?.name ?? null,
+    project: null,
+    lcNumber: po.shipment?.letterOfCredit?.lcNumber ?? null,
     itemNames: po.items.map((i) => i.itemName),
     itemValue,
     paymentTerms: po.paymentTerms,
@@ -143,14 +150,18 @@ function buildManualFinanceRow(record: {
   vendorName: string;
   itemName: string;
   referenceNumber: string | null;
+  lcNumber: string | null;
   itemValue: { toNumber(): number };
   paymentTerms: string | null;
   createdAt: Date;
   currency: string;
   vendor: { id: number; name: string } | null;
+  project: { id: number; name: string } | null;
   payments: { id: number; amount: { toNumber(): number }; paidDate: Date; exchangeRate: { toNumber(): number } | null; reference: string | null; notes: string | null }[];
+  lines: { itemName: string; majorCost: { toNumber(): number } }[];
 }): FinanceLedgerRow {
-  const itemValue = num(record.itemValue);
+  // The record's own value is the first line; "Add Line" extras add to it.
+  const itemValue = num(record.itemValue) + record.lines.reduce((sum, l) => sum + num(l.majorCost), 0);
   const payments = toPaymentEntries(record.payments);
   const amountPaid = payments.reduce((sum, p) => sum + p.amount, 0);
   const paidDate = payments.length > 0 ? payments[0]!.paidDate : null;
@@ -162,7 +173,9 @@ function buildManualFinanceRow(record: {
     poNumber: record.referenceNumber,
     vendor: record.vendor ? { id: record.vendor.id, name: record.vendor.name } : null,
     vendorName: record.vendor?.name ?? record.vendorName,
-    itemNames: [record.itemName],
+    project: record.project ? { id: record.project.id, name: record.project.name } : null,
+    lcNumber: record.lcNumber,
+    itemNames: [record.itemName, ...record.lines.map((l) => l.itemName)].filter((n, i, all) => n.trim() !== "" && all.indexOf(n) === i),
     itemValue,
     paymentTerms: record.paymentTerms,
     amountPaid,
@@ -176,6 +189,7 @@ function buildManualFinanceRow(record: {
 
 type CostBreakdownRow = {
   itemId: number | null;
+  date: Date | null;
   itemName: string;
   majorCost: number;
   freight: number;
@@ -204,16 +218,16 @@ const refundFields = (refundableAmount: number, refundedAmount: number) => ({
 
 const fmtAmount = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/** Column defs for the cost-breakdown PDF export — same columns/order as the Finance
+/** Column defs for the cost-breakdown PDF statement - same columns/order as the Finance
  * cost-breakdown page's table (see FinanceCostBreakdown.tsx). */
 const costBreakdownPdfColumns = [
+  { header: "Date", width: 1.2 },
   { header: "Item Procure", width: 1.6 },
-  { header: "Major Cost", align: "right" as const },
+  { header: "Major Cost", align: "right" as const, width: 1.25 },
   { header: "Freight", align: "right" as const },
-  { header: "LC Number" },
   { header: "LC Amount", align: "right" as const },
   { header: "LC Charge", align: "right" as const },
-  { header: "LC Commission", align: "right" as const },
+  { header: "LC Comm.", align: "right" as const },
   { header: "VAT", align: "right" as const },
   { header: "Import Duties", align: "right" as const },
   { header: "Insurance", align: "right" as const },
@@ -222,27 +236,129 @@ const costBreakdownPdfColumns = [
   { header: "Refundable (NPR)", align: "right" as const },
   { header: "Refunded (NPR)", align: "right" as const },
   { header: "To Be Refunded (NPR)", align: "right" as const },
-  { header: "Remarks", width: 1.6 },
+  { header: "Remarks", width: 1.3 },
 ];
 
-const costBreakdownRowToCells = (r: CostBreakdownRow): string[] => [
-  r.itemName,
-  fmtAmount(r.majorCost),
-  fmtAmount(r.freight),
-  r.lcNumber || "--",
-  fmtAmount(r.lcAmount),
-  fmtAmount(r.lcCharge),
-  fmtAmount(r.lcCommission),
-  fmtAmount(r.vat),
-  fmtAmount(r.importDuties),
-  fmtAmount(r.insurance),
-  fmtAmount(r.bibini),
-  fmtAmount(r.otherMargin),
-  fmtAmount(r.refundableAmount),
-  fmtAmount(r.refundedAmount),
-  fmtAmount(r.toBeRefunded),
-  r.remarks || "--",
+const fmtPdfDate = (d: Date | null) =>
+  d ? d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "--";
+
+const costBreakdownRowToCells = (r: CostBreakdownRow): StatementRowCell[] => [
+  { text: fmtPdfDate(r.date) },
+  { text: r.itemName },
+  { text: fmtAmount(r.majorCost) },
+  { text: fmtAmount(r.freight) },
+  { text: fmtAmount(r.lcAmount) },
+  { text: fmtAmount(r.lcCharge) },
+  { text: fmtAmount(r.lcCommission) },
+  { text: fmtAmount(r.vat) },
+  { text: fmtAmount(r.importDuties) },
+  { text: fmtAmount(r.insurance) },
+  { text: fmtAmount(r.bibini) },
+  { text: fmtAmount(r.otherMargin) },
+  { text: fmtAmount(r.refundableAmount) },
+  { text: fmtAmount(r.refundedAmount) },
+  { text: fmtAmount(r.toBeRefunded), color: r.toBeRefunded > 0 ? "#9A5B05" : "#1F7A45" },
+  { text: r.remarks || "--" },
 ];
+
+/** Streams the branded cost-breakdown statement PDF (see utils/costBreakdownStatementPdf.ts) for
+ * either a PO or a manual record - `ledger` supplies the money summary (total / paid / outstanding). */
+async function sendCostBreakdownStatement(
+  req: AuthRequest,
+  res: Response,
+  opts: {
+    rows: CostBreakdownRow[];
+    ledger: FinanceLedgerRow;
+    referenceNumber: string | null;
+    vendorName: string | null;
+    fileBase: string;
+  },
+) {
+  const { rows, ledger } = opts;
+  const org = req.organization!;
+  const currency = ledger.currency || "NPR";
+  const money = (n: number) => `${currency} ${fmtAmount(n)}`;
+
+  const loadImage = async (key: string | null | undefined) => {
+    if (!key) return null;
+    try {
+      return await downloadFileFromStorageCached(key);
+    } catch (error) {
+      console.error(`Failed to load organization image "${key}":`, error);
+      return null;
+    }
+  };
+  const [logoImage, signatureImage] = await Promise.all([loadImage(org.logoImagePath), loadImage(org.signatureImagePath)]);
+
+  const sum = (pick: (r: CostBreakdownRow) => number) => rows.reduce((t, r) => t + pick(r), 0);
+  const lcNumbers = [...new Set(rows.map((r) => r.lcNumber).filter(Boolean))] as string[];
+  const settled = ledger.outstandingBalance <= 0;
+  const progress = ledger.itemValue > 0 ? Math.min(100, (ledger.amountPaid / ledger.itemValue) * 100) : 0;
+
+  const doc = buildCostBreakdownStatementPdf({
+    organizationName: org.name,
+    organizationTagline: org.description,
+    organizationAddress: org.address,
+    organizationContact: org.contact,
+    organizationEmail: org.email,
+    logoImage,
+    signatureImage,
+    title: "Cost Breakdown Statement",
+    subtitle: `Detailed view of the cost breakdown${opts.referenceNumber ? ` for ${opts.referenceNumber}` : ""}`,
+    details: [
+      { label: "Reference No.", value: opts.referenceNumber || "--" },
+      { label: "Vendor", value: opts.vendorName || "--" },
+      ...(ledger.project ? [{ label: "Project", value: ledger.project.name }] : []),
+      { label: "LC Number", value: lcNumbers.join(", ") || "--" },
+      { label: "Currency", value: currency },
+      { label: "Terms of Payment", value: ledger.paymentTerms || "--" },
+      { label: "Lines", value: String(rows.length) },
+    ],
+    statusLabel: settled ? "Settled" : "Outstanding",
+    statusTone: settled ? "good" : "warn",
+    statusRows: [
+      { label: "Total Value", value: money(ledger.itemValue) },
+      { label: "Amount Paid", value: money(ledger.amountPaid) },
+      { label: "Outstanding Balance", value: money(ledger.outstandingBalance) },
+    ],
+    columns: costBreakdownPdfColumns,
+    rows: rows.map(costBreakdownRowToCells),
+    totalsRow: [
+      "Total",
+      "",
+      fmtAmount(sum((r) => r.majorCost)),
+      fmtAmount(sum((r) => r.freight)),
+      fmtAmount(sum((r) => r.lcAmount)),
+      fmtAmount(sum((r) => r.lcCharge)),
+      fmtAmount(sum((r) => r.lcCommission)),
+      fmtAmount(sum((r) => r.vat)),
+      fmtAmount(sum((r) => r.importDuties)),
+      fmtAmount(sum((r) => r.insurance)),
+      fmtAmount(sum((r) => r.bibini)),
+      fmtAmount(sum((r) => r.otherMargin)),
+      fmtAmount(sum((r) => r.refundableAmount)),
+      fmtAmount(sum((r) => r.refundedAmount)),
+      fmtAmount(sum((r) => r.toBeRefunded)),
+      "",
+    ],
+    summary: [
+      { label: "Total Value", value: money(ledger.itemValue), caption: "(Cost sheet)" },
+      { label: "Total Paid", value: money(ledger.amountPaid), caption: "(Debit)" },
+      { label: "Outstanding Balance", value: money(ledger.outstandingBalance), caption: "(Payable)" },
+      { label: "Payment Progress", value: `${progress.toFixed(2)}%`, progress },
+    ],
+    notes: [
+      "This statement includes all cost-breakdown lines recorded against the above reference.",
+      `Amounts are in ${currency}; the refund columns are in NPR (Nepalese Rupee).`,
+      "For any discrepancies, please contact our finance department.",
+    ],
+  });
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${opts.fileBase}.pdf"`);
+  doc.pipe(res);
+  doc.end();
+}
 
 /** Per-item Item Procure/Major Cost/Freight/LC/VAT breakdown for one PO — freight/LC/VAT
  * default to the same proration as getItemCostReport (split per item by its share of the PO's
@@ -257,6 +373,7 @@ async function buildPoCostBreakdownRows(
       quantity: number;
       unitPrice: { toNumber(): number } | null;
       remarks: string | null;
+      lineDate: Date | null;
       freightOverride: { toNumber(): number } | null;
       lcChargeOverride: { toNumber(): number } | null;
       lcCommissionOverride: { toNumber(): number } | null;
@@ -282,6 +399,7 @@ async function buildPoCostBreakdownRows(
     const vat = item.vatOverride != null ? num(item.vatOverride) : costSheet.customsVat * share;
     return {
       itemId: item.id,
+      date: item.lineDate,
       itemName: item.itemName,
       majorCost,
       freight: item.freightOverride != null ? num(item.freightOverride) : costSheet.freight * share,
@@ -318,11 +436,50 @@ function buildManualCostBreakdownRows(record: {
   refundableAmount: { toNumber(): number } | null;
   refundedAmount: { toNumber(): number } | null;
   remarks: string | null;
+  lineDate: Date | null;
+  lines: {
+    id: number;
+    lineDate: Date | null;
+    itemName: string;
+    majorCost: { toNumber(): number };
+    freight: { toNumber(): number };
+    lcNumber: string | null;
+    lcAmount: { toNumber(): number };
+    lcCharge: { toNumber(): number };
+    lcCommission: { toNumber(): number };
+    vat: { toNumber(): number };
+    importDuties: { toNumber(): number };
+    insurance: { toNumber(): number };
+    bibini: { toNumber(): number };
+    otherMargin: { toNumber(): number };
+    refundableAmount: { toNumber(): number };
+    refundedAmount: { toNumber(): number };
+    remarks: string | null;
+  }[];
 }): CostBreakdownRow[] {
   const vat = num(record.vat);
+  const extraLines: CostBreakdownRow[] = record.lines.map((l) => ({
+    itemId: l.id,
+    date: l.lineDate,
+    itemName: l.itemName,
+    majorCost: num(l.majorCost),
+    freight: num(l.freight),
+    lcNumber: l.lcNumber,
+    lcAmount: num(l.lcAmount),
+    lcCharge: num(l.lcCharge),
+    lcCommission: num(l.lcCommission),
+    vat: num(l.vat),
+    importDuties: num(l.importDuties),
+    insurance: num(l.insurance),
+    bibini: num(l.bibini),
+    otherMargin: num(l.otherMargin),
+    ...refundFields(num(l.refundableAmount), num(l.refundedAmount)),
+    remarks: l.remarks,
+  }));
   return [
     {
       itemId: null,
+      date: record.lineDate,
       itemName: record.itemName,
       majorCost: num(record.itemValue),
       freight: num(record.freight),
@@ -338,8 +495,24 @@ function buildManualCostBreakdownRows(record: {
       ...refundFields(num(record.refundableAmount), num(record.refundedAmount)),
       remarks: record.remarks,
     },
+    ...extraLines,
   ];
 }
+
+/** Trims, drops blanks and de-duplicates (case-insensitively) a list of item names from the form. */
+const cleanItemNames = (names: unknown): string[] => {
+  if (!Array.isArray(names)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const n of names) {
+    const name = typeof n === "string" ? n.trim() : "";
+    if (name && !seen.has(name.toLowerCase())) {
+      seen.add(name.toLowerCase());
+      out.push(name);
+    }
+  }
+  return out;
+};
 
 async function loadOwnedManualRecord(id: string, organizationId: number) {
   const recordId = parseInt(id);
@@ -369,8 +542,8 @@ function validateCostBreakdownRowInput({
   otherMargin,
   refundableAmount,
   refundedAmount,
-}: EditCostBreakdownRowDto): string | null {
-  if (typeof itemName !== "string" || !itemName.trim()) return "Item name is required";
+}: EditCostBreakdownRowDto, allowBlankName = false): string | null {
+  if (typeof itemName !== "string" || (!allowBlankName && !itemName.trim())) return "Item name is required";
   const nonNegativeFields: [string, unknown][] = [
     ["major cost", majorCost],
     ["freight", freight],
@@ -646,28 +819,19 @@ export class FinanceController {
           organizationId: req.organization!.id,
           ...(req.user!.role === UserRole.ADMIN ? { createdById: req.user!.id } : {}),
         },
-        include: {
-          vendor: true,
-          items: true,
-          shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
-          proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" as const } },
-        },
+        include: PO_FINANCE_INCLUDE,
       });
       if (!po) return res.status(404).json({ message: "Purchase order not found" });
 
       const rows = await buildPoCostBreakdownRows(po);
-      const doc = buildTablePdf({
-        title: "Cost Breakdown",
-        subtitle: [po.poNumber, po.vendor?.name].filter(Boolean).join(" — ") || null,
-        organizationName: req.organization!.name,
-        columns: costBreakdownPdfColumns,
-        rows: rows.map(costBreakdownRowToCells),
+      const ledger = await buildFinanceRow(po);
+      await sendCostBreakdownStatement(req, res, {
+        rows,
+        ledger,
+        referenceNumber: po.poNumber,
+        vendorName: po.vendor?.name ?? null,
+        fileBase: `cost-breakdown-${(po.poNumber || `PO-${po.id}`).replace(/\//g, "-")}`,
       });
-
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="cost-breakdown-${(po.poNumber || `PO-${po.id}`).replace(/\//g, "-")}.pdf"`);
-      doc.pipe(res);
-      doc.end();
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -684,18 +848,13 @@ export class FinanceController {
       if (!record) return res.status(404).json({ message: "Record not found" });
 
       const rows = buildManualCostBreakdownRows(record);
-      const doc = buildTablePdf({
-        title: "Cost Breakdown",
-        subtitle: [record.referenceNumber, record.vendor?.name ?? record.vendorName].filter(Boolean).join(" — ") || null,
-        organizationName: req.organization!.name,
-        columns: costBreakdownPdfColumns,
-        rows: rows.map(costBreakdownRowToCells),
+      await sendCostBreakdownStatement(req, res, {
+        rows,
+        ledger: buildManualFinanceRow(record),
+        referenceNumber: record.referenceNumber,
+        vendorName: record.vendor?.name ?? record.vendorName,
+        fileBase: `cost-breakdown-${(record.referenceNumber || `record-${record.id}`).replace(/\//g, "-")}`,
       });
-
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="cost-breakdown-${(record.referenceNumber || `record-${record.id}`).replace(/\//g, "-")}.pdf"`);
-      doc.pipe(res);
-      doc.end();
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -755,6 +914,7 @@ export class FinanceController {
           refundableAmount: dto.refundableAmount,
           refundedAmount: dto.refundedAmount,
           remarks: dto.remarks?.trim() || null,
+          lineDate: dto.date ? new Date(dto.date) : null,
         },
       });
 
@@ -781,7 +941,7 @@ export class FinanceController {
 
     const { id } = req.params;
     const dto: EditCostBreakdownRowDto = req.body;
-    const validationError = validateCostBreakdownRowInput(dto);
+    const validationError = validateCostBreakdownRowInput(dto, true);
     if (validationError) return res.status(400).json({ message: validationError });
 
     try {
@@ -806,6 +966,7 @@ export class FinanceController {
           refundableAmount: dto.refundableAmount,
           refundedAmount: dto.refundedAmount,
           remarks: dto.remarks?.trim() || null,
+          lineDate: dto.date ? new Date(dto.date) : null,
         },
       });
 
@@ -816,15 +977,97 @@ export class FinanceController {
     }
   };
 
-  /** POST /workspace/finance/manual-records — adds a freeform Finance ledger row not tied to
+  /** POST /workspace/finance/manual-records/:id/lines - "Add Line": an extra cost-breakdown line
+   * on a manual record. Created with just a name; the rest is filled in via the inline editor. */
+  static addManualRecordLine = async (req: AuthRequest, res: Response) => {
+    if (!(await canEditFinance(req.user!.role))) return res.status(403).json({ message: "Forbidden" });
+
+    const { itemName }: { itemName?: string } = req.body;
+
+    try {
+      const existing = await loadOwnedManualRecord(req.params.id as string, req.organization!.id);
+      if (!existing) return res.status(404).json({ message: "Record not found" });
+
+      // Every line of a record is the same item, so a new line inherits the record's item name unless one is given.
+      const line = await prisma.financeManualLine.create({
+        data: { manualRecordId: existing.id, itemName: itemName?.trim() || existing.itemName, lineDate: new Date() },
+      });
+      return res.status(201).json({ message: "Line added", lineId: line.id });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** PUT /workspace/finance/manual-records/:id/lines/:lineId - full edit of an added line. */
+  static updateManualRecordLine = async (req: AuthRequest, res: Response) => {
+    if (!(await canEditFinance(req.user!.role))) return res.status(403).json({ message: "Forbidden" });
+
+    const dto: EditCostBreakdownRowDto = req.body;
+    const validationError = validateCostBreakdownRowInput(dto, true);
+    if (validationError) return res.status(400).json({ message: validationError });
+
+    try {
+      const existing = await loadOwnedManualRecord(req.params.id as string, req.organization!.id);
+      if (!existing) return res.status(404).json({ message: "Record not found" });
+      const line = existing.lines.find((l) => l.id === parseInt(req.params.lineId as string));
+      if (!line) return res.status(404).json({ message: "Line not found" });
+
+      await prisma.financeManualLine.update({
+        where: { id: line.id },
+        data: {
+          itemName: dto.itemName.trim(),
+          majorCost: dto.majorCost,
+          freight: dto.freight,
+          lcNumber: dto.lcNumber?.trim() || null,
+          lcAmount: dto.lcAmount,
+          lcCharge: dto.lcCharge,
+          lcCommission: dto.lcCommission,
+          vat: dto.vat,
+          importDuties: dto.importDuties,
+          insurance: dto.insurance,
+          bibini: dto.bibini,
+          otherMargin: dto.otherMargin,
+          refundableAmount: dto.refundableAmount,
+          refundedAmount: dto.refundedAmount,
+          remarks: dto.remarks?.trim() || null,
+          lineDate: dto.date ? new Date(dto.date) : null,
+        },
+      });
+      return res.status(200).json({ message: "Line updated" });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** DELETE /workspace/finance/manual-records/:id/lines/:lineId */
+  static deleteManualRecordLine = async (req: AuthRequest, res: Response) => {
+    if (!(await canEditFinance(req.user!.role))) return res.status(403).json({ message: "Forbidden" });
+
+    try {
+      const existing = await loadOwnedManualRecord(req.params.id as string, req.organization!.id);
+      if (!existing) return res.status(404).json({ message: "Record not found" });
+      const line = existing.lines.find((l) => l.id === parseInt(req.params.lineId as string));
+      if (!line) return res.status(404).json({ message: "Line not found" });
+
+      await prisma.financeManualLine.delete({ where: { id: line.id } });
+      return res.status(200).json({ message: "Line deleted" });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** POST /workspace/finance/manual-records - adds a freeform Finance ledger row not tied to
    * any real PurchaseOrder (e.g. tracking a payment/balance before a PO exists for it). */
   static createManualRecord = async (req: AuthRequest, res: Response) => {
     if (!(await canEditFinance(req.user!.role))) return res.status(403).json({ message: "Forbidden" });
 
-    const { vendorName, itemName, referenceNumber, itemValue, paymentTerms, vendorId, currency }: SaveFinanceManualRecordDto = req.body;
+    const { vendorName, itemName, itemNames, referenceNumber, itemValue, paymentTerms, vendorId, projectId, lcNumber, currency }: SaveFinanceManualRecordDto = req.body;
+    const items = cleanItemNames(itemNames ?? (itemName ? [itemName] : []));
 
-    if (!vendorName?.trim()) return res.status(400).json({ message: "Vendor name is required" });
-    if (!itemName?.trim()) return res.status(400).json({ message: "Item name is required" });
+    if (!lcNumber?.trim()) return res.status(400).json({ message: "LC number is required" });
     if (typeof itemValue !== "number" || !Number.isFinite(itemValue) || itemValue < 0) {
       return res.status(400).json({ message: "A valid item value is required" });
     }
@@ -834,20 +1077,33 @@ export class FinanceController {
 
     try {
       let linkedVendorId: number | null = null;
+      let resolvedVendorName = vendorName?.trim() || "";
       if (vendorId != null) {
         const vendor = await prisma.vendor.findFirst({ where: { id: vendorId, organizationId: req.organization!.id } });
         if (!vendor) return res.status(404).json({ message: "Vendor not found" });
         linkedVendorId = vendor.id;
+        resolvedVendorName = vendor.name;
+      }
+      if (!resolvedVendorName) return res.status(400).json({ message: "Select a vendor" });
+
+      let linkedProjectId: number | null = null;
+      if (projectId != null) {
+        const project = await prisma.project.findFirst({ where: { id: projectId, organizationId: req.organization!.id } });
+        if (!project) return res.status(404).json({ message: "Project not found" });
+        linkedProjectId = project.id;
       }
 
       const record = await prisma.financeManualRecord.create({
         data: {
-          vendorName: vendorName.trim(),
-          itemName: itemName.trim(),
+          vendorName: resolvedVendorName,
+          itemName: items[0] ?? "",
+          ...(items.length > 1 ? { lines: { create: items.slice(1).map((name) => ({ itemName: name, lineDate: new Date() })) } } : {}),
           referenceNumber: referenceNumber?.trim() || null,
           itemValue,
           paymentTerms: paymentTerms?.trim() || null,
           vendorId: linkedVendorId,
+          projectId: linkedProjectId,
+          lcNumber: lcNumber?.trim() || null,
           currency: currency || "NPR",
           organizationId: req.organization!.id,
           createdById: req.user!.id,
@@ -867,10 +1123,11 @@ export class FinanceController {
     if (!(await canEditFinance(req.user!.role))) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
-    const { vendorName, itemName, referenceNumber, itemValue, paymentTerms, vendorId, currency }: SaveFinanceManualRecordDto = req.body;
+    const { vendorName, itemName, newItemNames, referenceNumber, itemValue, paymentTerms, vendorId, projectId, lcNumber, currency }: SaveFinanceManualRecordDto = req.body;
+    const addedItems = cleanItemNames(newItemNames);
 
-    if (!vendorName?.trim()) return res.status(400).json({ message: "Vendor name is required" });
-    if (!itemName?.trim()) return res.status(400).json({ message: "Item name is required" });
+    if (!lcNumber?.trim()) return res.status(400).json({ message: "LC number is required" });
+
     if (typeof itemValue !== "number" || !Number.isFinite(itemValue) || itemValue < 0) {
       return res.status(400).json({ message: "A valid item value is required" });
     }
@@ -883,21 +1140,34 @@ export class FinanceController {
       if (!existing) return res.status(404).json({ message: "Record not found" });
 
       let linkedVendorId: number | null = null;
+      let resolvedVendorName = vendorName?.trim() || "";
       if (vendorId != null) {
         const vendor = await prisma.vendor.findFirst({ where: { id: vendorId, organizationId: req.organization!.id } });
         if (!vendor) return res.status(404).json({ message: "Vendor not found" });
         linkedVendorId = vendor.id;
+        resolvedVendorName = vendor.name;
+      }
+      if (!resolvedVendorName) return res.status(400).json({ message: "Select a vendor" });
+
+      let linkedProjectId: number | null = null;
+      if (projectId != null) {
+        const project = await prisma.project.findFirst({ where: { id: projectId, organizationId: req.organization!.id } });
+        if (!project) return res.status(404).json({ message: "Project not found" });
+        linkedProjectId = project.id;
       }
 
       const record = await prisma.financeManualRecord.update({
         where: { id: existing.id },
         data: {
-          vendorName: vendorName.trim(),
-          itemName: itemName.trim(),
+          vendorName: resolvedVendorName,
+          itemName: itemName?.trim() ?? existing.itemName,
+          ...(addedItems.length > 0 ? { lines: { create: addedItems.map((name) => ({ itemName: name, lineDate: new Date() })) } } : {}),
           referenceNumber: referenceNumber?.trim() || null,
           itemValue,
           paymentTerms: paymentTerms?.trim() || null,
           vendorId: linkedVendorId,
+          projectId: linkedProjectId,
+          lcNumber: lcNumber?.trim() || null,
           ...(currency ? { currency } : {}),
         },
         include: MANUAL_RECORD_INCLUDE,

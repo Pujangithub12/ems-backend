@@ -17,6 +17,8 @@ import { ProjectController } from "../controllers/ProjectController";
 import { ProjectFileController } from "../controllers/ProjectFileController";
 import { PurchaseOrderController } from "../controllers/PurchaseOrderController";
 import { FinanceController } from "../controllers/FinanceController";
+import { DebtorController } from "../controllers/DebtorController";
+import { DebtorClaimController } from "../controllers/DebtorClaimController";
 import { ShipmentTrackingController } from "../controllers/ShipmentTrackingController";
 import { ProformaInvoiceController } from "../controllers/ProformaInvoiceController";
 import { QuotationController } from "../controllers/QuotationController";
@@ -589,6 +591,19 @@ router.delete(
 );
 router.get("/purchase-orders/:id/cost-sheet", authMiddleware, cacheResponse("procurement", 30), PurchaseOrderController.getCostSheet);
 router.get("/purchase-orders/:id/pdf", authMiddleware, PurchaseOrderController.downloadPdf);
+router.get("/purchase-orders/:id/pdf-data", authMiddleware, PurchaseOrderController.getPdfData);
+
+// Debtors — receivables (money customers owe us); role-gated inline in DebtorController.
+router.get("/workspace/debtors", authMiddleware, DebtorController.getDebtors);
+router.post("/workspace/debtors", authMiddleware, DebtorController.createDebtor);
+router.get("/workspace/debtors/:id", authMiddleware, DebtorClaimController.getDebtorDetail);
+router.post("/workspace/debtors/:id/claims", authMiddleware, DebtorClaimController.createClaim);
+router.put("/workspace/debtors/:id/claims/:claimId", authMiddleware, DebtorClaimController.updateClaim);
+router.delete("/workspace/debtors/:id/claims/:claimId", authMiddleware, DebtorClaimController.deleteClaim);
+router.put("/workspace/debtors/:id", authMiddleware, DebtorController.updateDebtor);
+router.delete("/workspace/debtors/:id", authMiddleware, DebtorController.deleteDebtor);
+router.post("/workspace/debtors/:id/payments", authMiddleware, DebtorController.addPayment);
+router.delete("/workspace/debtors/:id/payments/:paymentId", authMiddleware, DebtorController.deletePayment);
 
 // Finance — payment ledger layered on top of the Cost Sheet above (role-gated inline in
 // FinanceController, not via permissionMiddleware, since it must include finance).
@@ -609,6 +624,9 @@ router.get("/workspace/finance/purchase-orders/:id/cost-breakdown/pdf", authMidd
 router.get("/workspace/finance/manual-records/:id/cost-breakdown/pdf", authMiddleware, FinanceController.exportManualRecordCostBreakdownPdf);
 router.put("/workspace/finance/purchase-orders/:poId/items/:itemId", authMiddleware, FinanceController.updatePurchaseOrderItemBreakdownRow);
 router.put("/workspace/finance/manual-records/:id/breakdown", authMiddleware, FinanceController.updateManualRecordBreakdownRow);
+router.post("/workspace/finance/manual-records/:id/lines", authMiddleware, FinanceController.addManualRecordLine);
+router.put("/workspace/finance/manual-records/:id/lines/:lineId", authMiddleware, FinanceController.updateManualRecordLine);
+router.delete("/workspace/finance/manual-records/:id/lines/:lineId", authMiddleware, FinanceController.deleteManualRecordLine);
 
 // Shipment Tracking — Finance page's second tab, a freeform logistics log (org-wide,
 // admin/super_admin/finance; gated inline in the controller, same as the rest of Finance).
@@ -659,6 +677,7 @@ router.post(
   ProformaInvoiceController.addAttachment,
 );
 router.get("/proforma-invoices/:id/pdf", authMiddleware, ProformaInvoiceController.downloadPdf);
+router.get("/proforma-invoices/:id/pdf-data", authMiddleware, ProformaInvoiceController.getPdfData);
 
 // Quotations
 router.get("/workspace/quotations", authMiddleware, cacheResponse("procurement", 30, { perUser: false }), QuotationController.getAllQuotations);
@@ -681,6 +700,7 @@ router.delete(
   QuotationController.deleteQuotation,
 );
 router.get("/quotations/:id/pdf", authMiddleware, QuotationController.downloadPdf);
+router.get("/quotations/:id/pdf-data", authMiddleware, QuotationController.getPdfData);
 
 // Shipment (Local + International) + Insurance + Customs
 router.post(

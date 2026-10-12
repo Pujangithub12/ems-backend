@@ -7,7 +7,8 @@ import {
   ProformaInvoiceItemInput,
 } from "../dto/proformaInvoice.dto";
 import { ProformaInvoiceStatus } from "../types/domain";
-import { buildProformaInvoicePdf } from "../utils/proformaInvoicePdf";
+import { buildProformaInvoicePdf, ProformaInvoicePdfData } from "../utils/proformaInvoicePdf";
+import { pdfDataWithBase64Images } from "../utils/pdfDataJson";
 import { downloadFileFromStorageCached } from "../config/supabaseStorage";
 
 const DETAIL_INCLUDE = {
@@ -492,78 +493,101 @@ export class ProformaInvoiceController {
   };
 
   /**
-   * GET /proforma-invoices/:id/pdf — renders the PI on demand and streams it back as an
+   * Shared by downloadPdf and getPdfData: loads the PI (org-checked) plus the letterhead images
+   * and assembles the ProformaInvoicePdfData the renderer needs. Null when not found / not in the
+   * caller's organization.
+   */
+  private static async loadPdfData(id: string, req: AuthRequest) {
+    const proformaInvoice = await prisma.proformaInvoice.findFirst({
+      where: { id: parseInt(id) },
+      include: PDF_INCLUDE,
+    });
+    if (!proformaInvoice || proformaInvoice.organizationId !== req.organization!.id) return null;
+
+    const organization = proformaInvoice.purchaseOrder?.organization ?? proformaInvoice.organization;
+    const loadOrgImage = async (key: string | null | undefined) => {
+      if (!key) return null;
+      try {
+        return await downloadFileFromStorageCached(key);
+      } catch (error) {
+        console.error(`Failed to load organization letterhead image "${key}":`, error);
+        return null;
+      }
+    };
+    const [signatureImage, stampImage] = await Promise.all([
+      loadOrgImage(organization?.signatureImagePath),
+      loadOrgImage(organization?.stampImagePath),
+    ]);
+
+    const pdfData: ProformaInvoicePdfData = {
+      piNumber: proformaInvoice.piNumber,
+      piDate: proformaInvoice.piDate,
+      taxPercent: proformaInvoice.taxPercent,
+      currency: proformaInvoice.currency,
+      paymentTerms: proformaInvoice.paymentTerms,
+      notes: proformaInvoice.notes,
+      customerName: proformaInvoice.customerName,
+      customerContactPerson: proformaInvoice.customerContactPerson,
+      customerAddress: proformaInvoice.customerAddress,
+      customerPan: proformaInvoice.customerPan,
+      customerEmail: proformaInvoice.customerEmail,
+      customerContact: proformaInvoice.customerContact,
+      organizationContactPerson: proformaInvoice.purchaseOrder?.customerContactPerson ?? null,
+      vendorName: proformaInvoice.vendorName,
+      vendorContactPerson: proformaInvoice.vendorContactPerson,
+      vendorAddress: proformaInvoice.vendorAddress,
+      vendorEmail: proformaInvoice.vendorEmail,
+      vendorContact: proformaInvoice.vendorContact,
+      organizationName: organization?.name ?? null,
+      organizationAddress: organization?.address ?? null,
+      organizationContact: organization?.contact ?? null,
+      organizationEmail: organization?.email ?? null,
+      vendorPan: proformaInvoice.vendorPan,
+      bankBeneficiaryName: proformaInvoice.bankBeneficiaryName,
+      bankAccountNumber: proformaInvoice.bankAccountNumber,
+      bankName: proformaInvoice.bankName,
+      bankSwiftCode: proformaInvoice.bankSwiftCode,
+      bankAddress: proformaInvoice.bankAddress,
+      deliveryTerms: proformaInvoice.deliveryTerms,
+      placeOfLoading: proformaInvoice.placeOfLoading,
+      placeOfDischarge: proformaInvoice.placeOfDischarge,
+      modeOfShipment: proformaInvoice.modeOfShipment,
+      signatureImage,
+      stampImage,
+      items: proformaInvoice.items,
+    };
+    const downloadName = (proformaInvoice.piNumber || `PI-${proformaInvoice.id}`).replace(/\//g, "-");
+    return { pdfData, downloadName };
+  }
+
+  /**
+   * GET /proforma-invoices/:id/pdf - renders the PI on demand and streams it back as an
    * attachment, always regenerated live from current data (mirrors PurchaseOrderController.downloadPdf).
    */
   static downloadPdf = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      const proformaInvoice = await prisma.proformaInvoice.findFirst({
-        where: { id: parseInt(id as string) },
-        include: PDF_INCLUDE,
-      });
-      if (!proformaInvoice || proformaInvoice.organizationId !== req.organization!.id) {
-        return res.status(404).json({ message: "Proforma invoice not found" });
-      }
+      const loaded = await ProformaInvoiceController.loadPdfData(id as string, req);
+      if (!loaded) return res.status(404).json({ message: "Proforma invoice not found" });
 
-      const organization = proformaInvoice.purchaseOrder?.organization ?? proformaInvoice.organization;
-      const loadOrgImage = async (key: string | null | undefined) => {
-        if (!key) return null;
-        try {
-          return await downloadFileFromStorageCached(key);
-        } catch (error) {
-          console.error(`Failed to load organization letterhead image "${key}":`, error);
-          return null;
-        }
-      };
-      const [signatureImage, stampImage] = await Promise.all([
-        loadOrgImage(organization?.signatureImagePath),
-        loadOrgImage(organization?.stampImagePath),
-      ]);
-
-      const doc = buildProformaInvoicePdf({
-        piNumber: proformaInvoice.piNumber,
-        piDate: proformaInvoice.piDate,
-        taxPercent: proformaInvoice.taxPercent,
-        currency: proformaInvoice.currency,
-        paymentTerms: proformaInvoice.paymentTerms,
-        notes: proformaInvoice.notes,
-        customerName: proformaInvoice.customerName,
-        customerContactPerson: proformaInvoice.customerContactPerson,
-        customerAddress: proformaInvoice.customerAddress,
-        customerPan: proformaInvoice.customerPan,
-        customerEmail: proformaInvoice.customerEmail,
-        customerContact: proformaInvoice.customerContact,
-        organizationContactPerson: proformaInvoice.purchaseOrder?.customerContactPerson ?? null,
-        vendorName: proformaInvoice.vendorName,
-        vendorContactPerson: proformaInvoice.vendorContactPerson,
-        vendorAddress: proformaInvoice.vendorAddress,
-        vendorEmail: proformaInvoice.vendorEmail,
-        vendorContact: proformaInvoice.vendorContact,
-        organizationName: organization?.name ?? null,
-        organizationAddress: organization?.address ?? null,
-        organizationContact: organization?.contact ?? null,
-        organizationEmail: organization?.email ?? null,
-        vendorPan: proformaInvoice.vendorPan,
-        bankBeneficiaryName: proformaInvoice.bankBeneficiaryName,
-        bankAccountNumber: proformaInvoice.bankAccountNumber,
-        bankName: proformaInvoice.bankName,
-        bankSwiftCode: proformaInvoice.bankSwiftCode,
-        bankAddress: proformaInvoice.bankAddress,
-        deliveryTerms: proformaInvoice.deliveryTerms,
-        placeOfLoading: proformaInvoice.placeOfLoading,
-        placeOfDischarge: proformaInvoice.placeOfDischarge,
-        modeOfShipment: proformaInvoice.modeOfShipment,
-        signatureImage,
-        stampImage,
-        items: proformaInvoice.items,
-      });
-
-      const downloadName = (proformaInvoice.piNumber || `PI-${proformaInvoice.id}`).replace(/\//g, "-");
+      const doc = buildProformaInvoicePdf(loaded.pdfData);
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${downloadName}.pdf"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${loaded.downloadName}.pdf"`);
       doc.pipe(res);
       doc.end();
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** GET /proforma-invoices/:id/pdf-data - the renderer's input as JSON (images base64-encoded) so the browser can draw the PDF itself. */
+  static getPdfData = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    try {
+      const loaded = await ProformaInvoiceController.loadPdfData(id as string, req);
+      if (!loaded) return res.status(404).json({ message: "Proforma invoice not found" });
+      return res.status(200).json({ pdfData: pdfDataWithBase64Images(loaded.pdfData), downloadName: loaded.downloadName });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });

@@ -12,6 +12,7 @@ import {
 import { AddPurchaseOrderPaymentDto } from "../dto/purchaseOrderPayment.dto";
 import { computeCostSheet } from "../utils/costSheet";
 import { buildPurchaseOrderPdf, PurchaseOrderPdfData } from "../utils/purchaseOrderPdf";
+import { pdfDataWithBase64Images } from "../utils/pdfDataJson";
 import { currentNepaliFiscalYearLabel } from "../utils/nepaliFiscalYear";
 import { downloadFileFromStorageCached } from "../config/supabaseStorage";
 
@@ -713,6 +714,22 @@ export class PurchaseOrderController {
     }
   };
 
+
+  /**
+   * GET /purchase-orders/:id/pdf-data - the same data downloadPdf feeds the renderer, as JSON
+   * (letterhead images base64-encoded), so the browser can draw the PDF itself.
+   */
+  static getPdfData = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    try {
+      const loaded = await PurchaseOrderController.loadPdfData(id as string, req);
+      if (!loaded) return res.status(404).json({ message: "Purchase order not found" });
+      return res.status(200).json({ pdfData: pdfDataWithBase64Images(loaded.pdfData), downloadName: loaded.downloadName });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
 
   /** GET /purchase-orders/:id/cost-sheet — spec section 9's landed-cost breakdown, always computed on the fly. */
   static getCostSheet = async (req: AuthRequest, res: Response) => {
