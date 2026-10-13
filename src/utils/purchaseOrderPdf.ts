@@ -159,6 +159,17 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   doc.registerFont(FONT_BODY_BOLD_ITALIC, FONT_BODY_BOLD_ITALIC_PATH);
   let y = MARGIN_TOP;
 
+  // Everything below is positioned by hand with a running `y`, so every block must reserve its
+  // height *before* drawing: if it doesn't fit, start a new page first. Left to itself, PDFKit
+  // breaks the page in the middle of a text call and desyncs from `y` - that is what made long
+  // item lists come out scrambled (one cell per page).
+  const ensureSpace = (height: number) => {
+    if (y + height > doc.page.height - MARGIN_BOTTOM) {
+      doc.addPage();
+      y = MARGIN_TOP;
+    }
+  };
+
   // ---- Letterhead: company name (Caladea/Cambria) + PURCHASE ORDER badge, adjacent
   // (one 2-column table in the source, ratio 6797:2815) ----
   const companyName = po.organizationName || "Purchase Order";
@@ -314,6 +325,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // ---- "Product Details" — a compact auto-width label (not a full-width bar), matching
   // the reference: it's a run-level highlight on the heading text, not a table cell. ----
   const productLabel = "Product Details";
+  ensureSpace(22 + 5 + 38 + 30);
   doc.font(FONT_COMPANY).fontSize(11);
   const productLabelW = doc.widthOfString(productLabel) + 20;
   doc.rect(MARGIN_LEFT, y, productLabelW, 22).fill(PRODUCT_LABEL_NAVY);
@@ -341,16 +353,20 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     24,
     ...cols.map((col) => doc.heightOfString(col.label, { width: col.width - 10, align: col.align || "left" }) + 14),
   );
-  for (const col of cols) {
-    doc.rect(colX, y, col.width, headerH).fill(NAVY);
-    doc
-      .fillColor("#ffffff")
-      .font(FONT_COMPANY)
-      .fontSize(9)
-      .text(col.label, colX + 5, y + 7, { width: col.width - 10, align: col.align || "left" });
-    colX += col.width;
-  }
-  y += headerH;
+  const drawItemsHeader = () => {
+    let hx = MARGIN_LEFT;
+    for (const col of cols) {
+      doc.rect(hx, y, col.width, headerH).fill(NAVY);
+      doc
+        .fillColor("#ffffff")
+        .font(FONT_COMPANY)
+        .fontSize(9)
+        .text(col.label, hx + 5, y + 7, { width: col.width - 10, align: col.align || "left" });
+      hx += col.width;
+    }
+    y += headerH;
+  };
+  drawItemsHeader();
 
   let itemsSubtotal = 0;
   for (const item of po.items) {
@@ -379,6 +395,12 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
         return doc.font(FONT_BODY).fontSize(8.5).heightOfString(value, { width: col.width - 10 }) + 8;
       }),
     );
+
+    if (y + rowHeight > doc.page.height - MARGIN_BOTTOM) {
+      doc.addPage();
+      y = MARGIN_TOP;
+      drawItemsHeader();
+    }
 
     colX = MARGIN_LEFT;
     for (let i = 0; i < cols.length; i++) {
@@ -416,6 +438,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
 
   if (taxPercent > 0) {
     const vatRowH = 20;
+    ensureSpace(vatRowH + 40); // keep the VAT row with the grand total below it
     doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, vatRowH).fill(LIGHT_BG);
     doc
       .fillColor(BLACK)
@@ -432,6 +455,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const amountWordsText = `Amount in Words: ${amountToWords(grandTotal, po.currency?.trim() || "Rupees")}.`;
   const totalRowH = Math.max(30, doc.font(FONT_BODY_BOLD_ITALIC).fontSize(8.5).heightOfString(amountWordsText, { width: hsnDescQtyW - 16 }) + 12);
 
+  ensureSpace(totalRowH);
   doc.rect(MARGIN_LEFT, y, hsnDescQtyW, totalRowH).fill(NAVY);
   doc
     .fillColor("#ffffff")
@@ -448,11 +472,20 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     .font(FONT_BODY_BOLD)
     .fontSize(8.5)
     .text("GRAND TOTAL", MARGIN_LEFT + hsnDescQtyW + 8, y + (totalRowH - 9) / 2, { width: unitPriceW - 16 });
-  doc
-    .fontSize(9.5)
-    .text(`${po.currency?.trim() || "Rupees"} ${fmtAmount(grandTotal)}`, MARGIN_LEFT + hsnDescQtyW + unitPriceW + 8, y + (totalRowH - 10) / 2, {
-      width: amountW - 16,
-    });
+  // The grand total sits in the narrow Amount column: shrink the font until "USD 83,699.10"-style
+  // values fit on one line instead of wrapping the currency onto its own row.
+  const grandTotalText = `${po.currency?.trim() || "Rupees"} ${fmtAmount(grandTotal)}`;
+  const grandTotalMaxW = amountW - 12;
+  let grandTotalSize = 9.5;
+  doc.font(FONT_BODY_BOLD).fontSize(grandTotalSize);
+  while (grandTotalSize > 6 && doc.widthOfString(grandTotalText) > grandTotalMaxW) {
+    grandTotalSize -= 0.5;
+    doc.fontSize(grandTotalSize);
+  }
+  doc.text(grandTotalText, MARGIN_LEFT + hsnDescQtyW + unitPriceW + 6, y + (totalRowH - grandTotalSize) / 2, {
+    width: grandTotalMaxW,
+    lineBreak: false,
+  });
 
   y += totalRowH + 14;
 
@@ -472,13 +505,6 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // land past the bottom margin) fires in the middle of a line if left to its own devices, which
   // desyncs it from this manually-tracked `y`. Proactively reserving space keeps `y` far enough
   // from the bottom that PDFKit's own trigger never fires. ----
-  const ensureSpace = (height: number) => {
-    if (y + height > doc.page.height - MARGIN_BOTTOM) {
-      doc.addPage();
-      y = MARGIN_TOP;
-    }
-  };
-
   for (const table of po.specTables || []) {
     const columns = (Array.isArray(table.columns) ? table.columns : []).map((c) => String(c ?? ""));
     const rows = (table.rows || []).map((r) => (Array.isArray(r.cells) ? r.cells : []).map((c) => String(c ?? "")));
@@ -524,11 +550,16 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   }
 
   // ---- Payment Terms ----
+  const paymentTermsText = (po.paymentTerms || "").trim();
+  const paymentTermsNumbered = paymentTermsText ? (/^\d+[.)]/.test(paymentTermsText) ? paymentTermsText : `1. ${paymentTermsText}`) : "";
+  const paymentTermsH = paymentTermsNumbered
+    ? doc.font(FONT_BODY).fontSize(9).heightOfString(paymentTermsNumbered, { width: CONTENT_WIDTH }) + 10
+    : 4;
+  ensureSpace(16 + 8 + paymentTermsH);
   sectionBar(doc, MARGIN_LEFT, y, CONTENT_WIDTH, 16, "PAYMENT TERMS");
   y += 16 + 8;
-  const paymentTermsText = (po.paymentTerms || "").trim();
   if (paymentTermsText) {
-    const numbered = /^\d+[.)]/.test(paymentTermsText) ? paymentTermsText : `1. ${paymentTermsText}`;
+    const numbered = paymentTermsNumbered;
     doc.fillColor(BLACK).font(FONT_BODY).fontSize(9).text(numbered, MARGIN_LEFT, y, { width: CONTENT_WIDTH });
     y = doc.y + 10;
   } else {
@@ -536,16 +567,21 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   }
 
   if (po.terms) {
+    ensureSpace(14 + doc.font(FONT_BODY).fontSize(8.5).heightOfString(po.terms, { width: CONTENT_WIDTH }) + 16);
     doc.fillColor(BLACK).font(FONT_BODY_BOLD).fontSize(9).text("Notes:", MARGIN_LEFT, y);
     y = doc.y + 2;
     doc.font(FONT_BODY).fontSize(8.5).text(po.terms, MARGIN_LEFT, y, { width: CONTENT_WIDTH });
     y = doc.y + 14;
   }
 
-  // ---- Signature line — the org's uploaded signature image sits above the line if set,
+  // ---- Signature line, placed right after the content above — the org's uploaded signature image sits above the line if set,
   // otherwise it's left blank; the label is always the generic "Authorized Signatory"
   // (never a specific person's name), and the org's stamp sits alongside if set. ----
-  const sigY = Math.max(y + 20, doc.page.height - 50);
+  // Sits right after whatever came before it (not pinned to the page bottom): leave room above the
+  // line for the signature image (35pt) or, with a stamp, the stamp's height (66pt above the line).
+  const sigClearance = po.stampImage ? 72 : 42;
+  ensureSpace(sigClearance + 28);
+  const sigY = y + sigClearance;
   const sigW = 100;
   if (po.signatureImage) {
     try {
