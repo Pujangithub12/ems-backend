@@ -2,7 +2,8 @@ import { Response } from "express";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { AddQuotationDto, UpdateQuotationDto, QuotationItemInput } from "../dto/quotation.dto";
-import { buildQuotationPdf } from "../utils/quotationPdf";
+import { buildQuotationPdf, QuotationPdfData } from "../utils/quotationPdf";
+import { pdfDataWithBase64Images } from "../utils/pdfDataJson";
 import { downloadFileFromStorageCached } from "../config/supabaseStorage";
 import { currentNepaliFiscalYearLabel } from "../utils/nepaliFiscalYear";
 
@@ -244,69 +245,92 @@ export class QuotationController {
     }
   };
 
-  /** GET /quotations/:id/pdf — renders the PDF live on every request, never cached. */
+  /**
+   * Shared by downloadPdf and getPdfData: loads the quotation (org-checked) plus the letterhead
+   * images and assembles the QuotationPdfData the renderer needs. Null when not found / not in the
+   * caller's organization.
+   */
+  private static async loadPdfData(id: string, req: AuthRequest) {
+    const quotation = await prisma.quotation.findFirst({
+      where: { id: parseInt(id) },
+      include: { items: true, organization: true },
+    });
+    if (!quotation || quotation.organizationId !== req.organization!.id) return null;
+
+    const organization = quotation.organization;
+    const loadOrgImage = async (key: string | null | undefined) => {
+      if (!key) return null;
+      try {
+        return await downloadFileFromStorageCached(key);
+      } catch (error) {
+        console.error(`Failed to load organization letterhead image "${key}":`, error);
+        return null;
+      }
+    };
+    const [signatureImage, stampImage, logoImage] = await Promise.all([
+      loadOrgImage(organization?.signatureImagePath),
+      loadOrgImage(organization?.stampImagePath),
+      loadOrgImage(organization?.logoImagePath),
+    ]);
+
+    const pdfData: QuotationPdfData = {
+      quotationNumber: quotation.quotationNumber,
+      quotationDate: quotation.quotationDate,
+      title: quotation.title,
+      currency: quotation.currency,
+      taxPercent: quotation.taxPercent,
+      organizationName: organization?.name ?? null,
+      organizationAddress: organization?.address ?? null,
+      organizationContact: organization?.contact ?? null,
+      organizationEmail: organization?.email ?? null,
+      fromPan: quotation.fromPan,
+      regNo: quotation.regNo,
+      logoImage,
+      customerName: quotation.customerName,
+      customerAddress: quotation.customerAddress,
+      customerContact: quotation.customerContact,
+      customerEmail: quotation.customerEmail,
+      customerPan: quotation.customerPan,
+      priceBasis: quotation.priceBasis,
+      deliveryPeriod: quotation.deliveryPeriod,
+      deliveryAddress: quotation.deliveryAddress,
+      paymentTerms: quotation.paymentTerms,
+      validityPeriod: quotation.validityPeriod,
+      signatoryName: quotation.signatoryName,
+      signatoryDesignation: quotation.signatoryDesignation,
+      signatureImage,
+      stampImage,
+      items: quotation.items,
+    };
+    const downloadName = (quotation.quotationNumber || `QT-${quotation.id}`).replace(/\//g, "-");
+    return { pdfData, downloadName };
+  }
+
+  /** GET /quotations/:id/pdf - renders the PDF live on every request, never cached. */
   static downloadPdf = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-      const quotation = await prisma.quotation.findFirst({
-        where: { id: parseInt(id as string) },
-        include: { items: true, organization: true },
-      });
-      if (!quotation || quotation.organizationId !== req.organization!.id) {
-        return res.status(404).json({ message: "Quotation not found" });
-      }
+      const loaded = await QuotationController.loadPdfData(id as string, req);
+      if (!loaded) return res.status(404).json({ message: "Quotation not found" });
 
-      const organization = quotation.organization;
-      const loadOrgImage = async (key: string | null | undefined) => {
-        if (!key) return null;
-        try {
-          return await downloadFileFromStorageCached(key);
-        } catch (error) {
-          console.error(`Failed to load organization letterhead image "${key}":`, error);
-          return null;
-        }
-      };
-      const [signatureImage, stampImage, logoImage] = await Promise.all([
-        loadOrgImage(organization?.signatureImagePath),
-        loadOrgImage(organization?.stampImagePath),
-        loadOrgImage(organization?.logoImagePath),
-      ]);
-
-      const doc = buildQuotationPdf({
-        quotationNumber: quotation.quotationNumber,
-        quotationDate: quotation.quotationDate,
-        title: quotation.title,
-        currency: quotation.currency,
-        taxPercent: quotation.taxPercent,
-        organizationName: organization?.name ?? null,
-        organizationAddress: organization?.address ?? null,
-        organizationContact: organization?.contact ?? null,
-        organizationEmail: organization?.email ?? null,
-        fromPan: quotation.fromPan,
-        regNo: quotation.regNo,
-        logoImage,
-        customerName: quotation.customerName,
-        customerAddress: quotation.customerAddress,
-        customerContact: quotation.customerContact,
-        customerEmail: quotation.customerEmail,
-        customerPan: quotation.customerPan,
-        priceBasis: quotation.priceBasis,
-        deliveryPeriod: quotation.deliveryPeriod,
-        deliveryAddress: quotation.deliveryAddress,
-        paymentTerms: quotation.paymentTerms,
-        validityPeriod: quotation.validityPeriod,
-        signatoryName: quotation.signatoryName,
-        signatoryDesignation: quotation.signatoryDesignation,
-        signatureImage,
-        stampImage,
-        items: quotation.items,
-      });
-
-      const downloadName = (quotation.quotationNumber || `QT-${quotation.id}`).replace(/\//g, "-");
+      const doc = buildQuotationPdf(loaded.pdfData);
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${downloadName}.pdf"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${loaded.downloadName}.pdf"`);
       doc.pipe(res);
       doc.end();
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** GET /quotations/:id/pdf-data - the renderer's input as JSON (images base64-encoded) so the browser can draw the PDF itself. */
+  static getPdfData = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    try {
+      const loaded = await QuotationController.loadPdfData(id as string, req);
+      if (!loaded) return res.status(404).json({ message: "Quotation not found" });
+      return res.status(200).json({ pdfData: pdfDataWithBase64Images(loaded.pdfData), downloadName: loaded.downloadName });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });

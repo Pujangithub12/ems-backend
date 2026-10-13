@@ -14,12 +14,20 @@ export type AddManualRecordPaymentDto = AddPurchaseOrderPaymentDto;
 
 /** Body shape for creating/updating a manually-entered Finance ledger row (not derived from a real PurchaseOrder). */
 export interface SaveFinanceManualRecordDto {
-  vendorName: string;
-  itemName: string;
+  /** Optional - when vendorId is given, the vendor's own name is used. */
+  vendorName?: string;
+  /** Optional - the record's first line is named later on the cost-breakdown page. */
+  itemName?: string;
+  /** Create: every item procured on this record - the first becomes the record's own line, the rest are added as extra lines. */
+  itemNames?: string[];
+  /** Update: items to append as new lines (existing lines are managed on the cost-breakdown page). */
+  newItemNames?: string[];
   referenceNumber?: string | null;
   itemValue: number;
   paymentTerms?: string | null;
   vendorId?: number | null;
+  projectId?: number | null;
+  lcNumber?: string | null;
   /** "NPR" | "INR" | "USD" | "RMB" — falls back to "NPR" when unset. */
   currency?: string;
 }
@@ -29,6 +37,8 @@ export interface SaveFinanceManualRecordDto {
  * single line (PUT .../manual-records/:id/breakdown). */
 export interface EditCostBreakdownRowDto {
   itemName: string;
+  /** ISO date (YYYY-MM-DD) shown in the cost-breakdown "Date" column; blank/null clears it. */
+  date?: string | null;
   majorCost: number;
   freight: number;
   lcNumber?: string | null;

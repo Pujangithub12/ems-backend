@@ -49,6 +49,8 @@ model User {
   purchaseOrdersCreated             PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
   purchaseOrderPaymentsLogged       PurchaseOrderPayment[]
   financeManualRecordsCreated       FinanceManualRecord[]
+  debtorRecordsCreated              DebtorRecord[]
+  debtorPaymentsLogged              DebtorPayment[]
   shipmentTrackingRecordsCreated    ShipmentTrackingRecord[]
   proformaInvoicesCreated           ProformaInvoice[]
   quotationsCreated                 Quotation[]
@@ -108,6 +110,7 @@ model Organization {
   vendors                 Vendor[]
   warehouses              Warehouse[]
   financeManualRecords    FinanceManualRecord[]
+  debtorRecords           DebtorRecord[]
   proformaInvoices        ProformaInvoice[]
   quotations              Quotation[]
   memberships             OrganizationMembership[]
@@ -1173,50 +1176,155 @@ model PurchaseOrderPayment {
 /// PurchaseOrder — for tracking payments/balances that don't have (or don't yet have) a PO
 /// behind them. Shares the PurchaseOrderPayment log for its payment history.
 model FinanceManualRecord {
-  id               Int      @id @default(autoincrement())
-  vendorName       String   @db.VarChar
-  itemName         String   @db.VarChar
+  id               Int       @id @default(autoincrement())
+  /// Date shown in the Finance cost-breakdown "Date" column for this line.
+  lineDate         DateTime? @db.Date
+  vendorName       String    @db.VarChar
+  itemName         String    @db.VarChar
   /// Free-text procurement/reference identifier — the manual-record equivalent of PurchaseOrder.poNumber.
-  referenceNumber  String?  @db.VarChar
-  itemValue        Decimal  @db.Decimal
+  referenceNumber  String?   @db.VarChar
+  itemValue        Decimal   @db.Decimal
   /// "NPR" | "INR" | "USD" | "RMB" — set on the Finance page's Add/Edit Record form.
-  currency         String   @default("NPR") @db.VarChar
-  paymentTerms     String?  @db.VarChar
+  currency         String    @default("NPR") @db.VarChar
+  paymentTerms     String?   @db.VarChar
   /// The following mirror the Finance cost-breakdown page's columns for a PO row — plain stored
   /// fields here (no shipment/proration behind a manual record, unlike PurchaseOrderItem's
   /// override columns below).
-  freight          Decimal? @db.Decimal
-  lcNumber         String?  @db.VarChar
+  freight          Decimal?  @db.Decimal
+  lcNumber         String?   @db.VarChar
   /// The Letter of Credit's own principal amount — manually entered, distinct from lcCharge/lcCommission (fees).
-  lcAmount         Decimal? @db.Decimal
-  lcCharge         Decimal? @db.Decimal
-  lcCommission     Decimal? @db.Decimal
-  vat              Decimal? @db.Decimal
-  importDuties     Decimal? @db.Decimal
-  insurance        Decimal? @db.Decimal
+  lcAmount         Decimal?  @db.Decimal
+  lcCharge         Decimal?  @db.Decimal
+  lcCommission     Decimal?  @db.Decimal
+  vat              Decimal?  @db.Decimal
+  importDuties     Decimal?  @db.Decimal
+  insurance        Decimal?  @db.Decimal
   /// VAT-refund tracking (Finance cost-breakdown page), both manually entered directly in NPR
   /// (not this record's own currency) since VAT refunds are processed in NPR regardless: how
   /// much of this record's VAT is refundable, and how much of that has actually been refunded so far.
-  refundableAmount Decimal? @db.Decimal
-  refundedAmount   Decimal? @db.Decimal
+  refundableAmount Decimal?  @db.Decimal
+  refundedAmount   Decimal?  @db.Decimal
   /// Manually entered figures shown just left of Refundable Amount on the Finance cost-breakdown
   /// page — no computed baseline behind either, unlike freight/vat/insurance above.
-  bibini           Decimal? @db.Decimal
-  otherMargin      Decimal? @db.Decimal
+  bibini           Decimal?  @db.Decimal
+  otherMargin      Decimal?  @db.Decimal
   /// Freeform note shown on the record's Finance cost-breakdown page.
   remarks          String?
-  createdAt        DateTime @default(now())
+  createdAt        DateTime  @default(now())
   organizationId   Int?
   /// Optional link to a real Vendor so this record's totals fold into that vendor's Finance drilldown page.
   vendorId         Int?
+  /// Optional link to a Project so this record (e.g. an LC) is attributed to it.
+  projectId        Int?
   createdById      Int?
 
+  project      Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   organization Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   vendor       Vendor?                @relation(fields: [vendorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   createdBy    User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
   payments     PurchaseOrderPayment[]
+  lines        FinanceManualLine[]
 
   @@map("finance_manual_record")
+}
+
+/// A receivable on the Procurement > Debtors page: money a customer owes us. The mirror image of
+/// a Finance ledger row — `amountDue` is what they owe, DebtorPayment rows are what we've received.
+model DebtorRecord {
+  id              Int      @id @default(autoincrement())
+  debtorName      String   @db.VarChar
+  /// What the debt is for (goods/service sold).
+  itemName        String   @db.VarChar
+  referenceNumber String?  @db.VarChar
+  /// Letter of Credit number, if the debt is backed by an LC.
+  lcNumber        String?  @db.VarChar
+  amountDue       Decimal  @db.Decimal
+  /// Amount being claimed from the debtor; shown (read-only) on the detail page's Claim columns.
+  claimAmount     Decimal  @default(0) @db.Decimal
+  /// "NPR" | "INR" | "USD" | "RMB"
+  currency        String   @default("NPR") @db.VarChar
+  paymentTerms    String?  @db.VarChar
+  createdAt       DateTime @default(now())
+  organizationId  Int?
+  projectId       Int?
+  createdById     Int?
+
+  project      Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  organization Organization?   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdBy    User?           @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  payments     DebtorPayment[]
+  claims       DebtorClaim[]
+
+  @@map("debtor_record")
+}
+
+/// One line on a debtor's detail page: a claim (purpose / commercial invoice / amount claimed and
+/// received) plus the reimbursement of expense tied to it. Balances are computed, not stored.
+model DebtorClaim {
+  id                    Int       @id @default(autoincrement())
+  debtorId              Int
+  /// Date the payment on this line was made.
+  paymentDate           DateTime? @db.Date
+  /// Claim group
+  purpose               String?   @db.VarChar
+  commercialInvoiceNo   String?   @db.VarChar
+  claimAmount           Decimal   @default(0) @db.Decimal
+  claimReceived         Decimal   @default(0) @db.Decimal
+  /// Reimbursement of expense group
+  reimbursementPurpose  String?   @db.VarChar
+  reimbursementAmount   Decimal   @default(0) @db.Decimal
+  reimbursementReceived Decimal   @default(0) @db.Decimal
+  createdAt             DateTime  @default(now())
+
+  debtor DebtorRecord @relation(fields: [debtorId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("debtor_claim")
+}
+
+/// One installment received from a debtor.
+model DebtorPayment {
+  id           Int      @id @default(autoincrement())
+  amount       Decimal  @db.Decimal
+  receivedDate DateTime @db.Date
+  reference    String?  @db.VarChar
+  notes        String?
+  createdAt    DateTime @default(now())
+  debtorId     Int
+  createdById  Int?
+
+  debtor    DebtorRecord @relation(fields: [debtorId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdBy User?        @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("debtor_payment")
+}
+
+/// An extra line on a manual record's cost-breakdown page ("Add Line"). The record itself holds
+/// the first line's fields; these carry the same cost columns for each additional line.
+model FinanceManualLine {
+  id               Int       @id @default(autoincrement())
+  /// Date shown in the Finance cost-breakdown "Date" column for this line.
+  lineDate         DateTime? @db.Date
+  manualRecordId   Int
+  itemName         String    @db.VarChar
+  majorCost        Decimal   @default(0) @db.Decimal
+  freight          Decimal   @default(0) @db.Decimal
+  lcNumber         String?   @db.VarChar
+  lcAmount         Decimal   @default(0) @db.Decimal
+  lcCharge         Decimal   @default(0) @db.Decimal
+  lcCommission     Decimal   @default(0) @db.Decimal
+  vat              Decimal   @default(0) @db.Decimal
+  importDuties     Decimal   @default(0) @db.Decimal
+  insurance        Decimal   @default(0) @db.Decimal
+  bibini           Decimal   @default(0) @db.Decimal
+  otherMargin      Decimal   @default(0) @db.Decimal
+  refundableAmount Decimal   @default(0) @db.Decimal
+  refundedAmount   Decimal   @default(0) @db.Decimal
+  remarks          String?
+  createdAt        DateTime  @default(now())
+
+  manualRecord FinanceManualRecord @relation(fields: [manualRecordId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("finance_manual_line")
 }
 
 /// A freeform shipping/logistics tracking log, shown as a second tab on the Finance page
@@ -1251,42 +1359,44 @@ model ShipmentTrackingRecord {
 
 /// Snapshot copy of the selected PurchaseRequestItem rows at PO-generation time — not a live reference, so the PO stays stable if the PR is later edited.
 model PurchaseOrderItem {
-  id                   Int      @id @default(autoincrement())
-  itemName             String   @db.VarChar
-  quantity             Float    @default(1)
-  unit                 String?  @db.VarChar
-  unitPrice            Decimal? @db.Decimal
+  id                   Int       @id @default(autoincrement())
+  /// Date shown in the Finance cost-breakdown "Date" column for this line.
+  lineDate             DateTime? @db.Date
+  itemName             String    @db.VarChar
+  quantity             Float     @default(1)
+  unit                 String?   @db.VarChar
+  unitPrice            Decimal?  @db.Decimal
   /// Entered on the Overview tab's "Add Item" form — shown under the item name in the PDF's Product Description cell.
   description          String?
   /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
-  hsnCode              String?  @db.VarChar
+  hsnCode              String?   @db.VarChar
   /// The following let the Finance cost-breakdown page override this item's computed share of
   /// the PO's freight/LC charge/LC commission/VAT/import duties/insurance (normally prorated
   /// from Shipment/Customs/Insurance/LetterOfCredit by this item's value share — see
   /// computeCostSheet/buildPoCostBreakdownRows). Null means "use the computed proration"; a
   /// non-null value here wins.
-  freightOverride      Decimal? @db.Decimal
-  lcChargeOverride     Decimal? @db.Decimal
-  lcCommissionOverride Decimal? @db.Decimal
-  vatOverride          Decimal? @db.Decimal
-  importDutiesOverride Decimal? @db.Decimal
-  insuranceOverride    Decimal? @db.Decimal
+  freightOverride      Decimal?  @db.Decimal
+  lcChargeOverride     Decimal?  @db.Decimal
+  lcCommissionOverride Decimal?  @db.Decimal
+  vatOverride          Decimal?  @db.Decimal
+  importDutiesOverride Decimal?  @db.Decimal
+  insuranceOverride    Decimal?  @db.Decimal
   /// VAT-refund tracking (Finance cost-breakdown page), both manually entered directly in NPR
   /// (not this item's own currency) since VAT refunds are processed in NPR regardless: how much
   /// of this item's VAT (see vatOverride above) is refundable, and how much of that has actually
   /// been refunded so far.
-  refundableAmount     Decimal? @db.Decimal
-  refundedAmount       Decimal? @db.Decimal
+  refundableAmount     Decimal?  @db.Decimal
+  refundedAmount       Decimal?  @db.Decimal
   /// The Letter of Credit's own principal amount for this item's share — manually entered, no
   /// computed baseline to override (unlike freight/vat/importDuties/insurance above).
-  lcAmount             Decimal? @db.Decimal
+  lcAmount             Decimal?  @db.Decimal
   /// Manually entered figures shown just left of Refundable Amount on the Finance cost-breakdown
   /// page — no computed baseline behind either, same as lcAmount above.
-  bibini               Decimal? @db.Decimal
-  otherMargin          Decimal? @db.Decimal
+  bibini               Decimal?  @db.Decimal
+  otherMargin          Decimal?  @db.Decimal
   /// Freeform note shown on the PO's Finance cost-breakdown page (not printed on the PO PDF).
   remarks              String?
-  createdAt            DateTime @default(now())
+  createdAt            DateTime  @default(now())
   purchaseOrderId      Int?
   itemId               Int?
 
@@ -1615,18 +1725,20 @@ model GoodsReceiptPhoto {
 }
 
 model Project {
-  id                 Int       @id(map: "PK_4d68b1358bb5b766d3e78f32f57") @default(autoincrement())
-  name               String    @db.VarChar
-  description        String?
-  createdAt          DateTime  @default(now()) @db.Timestamp(6)
-  dueDate            DateTime? @db.Date
-  status             String    @default("pending") @db.VarChar
-  priority           String    @default("medium") @db.VarChar
-  organizationId     Int?      @map("workspaceId")
-  contractDate       DateTime? @db.Date
-  kickoffDate        DateTime? @db.Date
-  estimatedTotalCost Decimal?  @db.Decimal
-  sellingPrice       Decimal?  @db.Decimal
+  debtorRecords        DebtorRecord[]
+  financeManualRecords FinanceManualRecord[]
+  id                   Int                   @id(map: "PK_4d68b1358bb5b766d3e78f32f57") @default(autoincrement())
+  name                 String                @db.VarChar
+  description          String?
+  createdAt            DateTime              @default(now()) @db.Timestamp(6)
+  dueDate              DateTime?             @db.Date
+  status               String                @default("pending") @db.VarChar
+  priority             String                @default("medium") @db.VarChar
+  organizationId       Int?                  @map("workspaceId")
+  contractDate         DateTime?             @db.Date
+  kickoffDate          DateTime?             @db.Date
+  estimatedTotalCost   Decimal?              @db.Decimal
+  sellingPrice         Decimal?              @db.Decimal
 
   dailyGeneration      DailyGeneration[]
   inventoryItems       InventoryItem[]
