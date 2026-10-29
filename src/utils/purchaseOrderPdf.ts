@@ -15,6 +15,8 @@ export interface PurchaseOrderPdfItem {
   quantity: number;
   unit?: string | null;
   unitPrice?: { toNumber(): number } | number | string | null;
+  /** Optional label shown under the unit price, typed as e.g. "/ kg" or "per gm". */
+  perUnit?: string | null;
   hsnCode?: string | null;
   /** Entered on the Overview tab's "Add Item" form — shown under the item name in the Product Description cell. */
   description?: string | null;
@@ -380,7 +382,9 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       : rowUnit
         ? `${item.quantity} ${rowUnit}`
         : String(item.quantity);
-    const rowValues = [item.hsnCode || "", item.itemName, rowQuantity, fmtAmount(unitPrice), fmtAmount(amount)];
+    // "perUnit" (e.g. "/ kg") goes on a second line under the price so the narrow column never wraps mid-number.
+    const perUnit = (item.perUnit || "").trim();
+    const rowValues = [item.hsnCode || "", item.itemName, rowQuantity, perUnit ? `${fmtAmount(unitPrice)}\n${perUnit}` : fmtAmount(unitPrice), fmtAmount(amount)];
     const description = (item.description || "").trim();
     const descColWidth = cols[1]!.width - 10;
     const nameHeight = doc.font(FONT_BODY_BOLD).fontSize(8.5).heightOfString(item.itemName, { width: descColWidth });

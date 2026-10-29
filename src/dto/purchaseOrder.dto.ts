@@ -7,6 +7,8 @@ export interface CreatePurchaseOrderItemDto {
   quantity: number;
   unit?: string | null;
   unitPrice?: number | null;
+  /** Optional label shown next to the unit price on the PDF, e.g. "/ kg". */
+  perUnit?: string | null;
   description?: string | null;
 }
 
@@ -28,6 +30,8 @@ export interface AddPurchaseOrderItemDto {
   quantity: number;
   unit?: string | null;
   unitPrice?: number | null;
+  /** Optional label shown next to the unit price on the PDF, e.g. "/ kg". */
+  perUnit?: string | null;
   description?: string | null;
 }
 
@@ -40,6 +44,8 @@ export interface EditPurchaseOrderItemDto {
   quantity: number;
   unit?: string | null;
   unitPrice?: number | null;
+  /** Optional label shown next to the unit price on the PDF, e.g. "/ kg". */
+  perUnit?: string | null;
   description?: string | null;
 }
 

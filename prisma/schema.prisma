@@ -1366,6 +1366,8 @@ model PurchaseOrderItem {
   quantity             Float     @default(1)
   unit                 String?   @db.VarChar
   unitPrice            Decimal?  @db.Decimal
+  /// Optional "per" label shown next to the unit price on the PO PDF, typed as e.g. "/ kg" or "per gm".
+  perUnit              String?   @db.VarChar
   /// Entered on the Overview tab's "Add Item" form — shown under the item name in the PDF's Product Description cell.
   description          String?
   /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
