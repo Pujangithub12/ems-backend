@@ -189,6 +189,7 @@ export class PurchaseOrderController {
               quantity: item.quantity ?? 1,
               unit: item.unit ?? null,
               unitPrice: item.unitPrice ?? null,
+              perUnit: item.perUnit?.trim() || null,
               description: item.description ?? null,
             })),
           },
@@ -387,7 +388,7 @@ export class PurchaseOrderController {
    * time). Same edit permission as updatePurchaseOrder. */
   static addPurchaseOrderItem = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { itemName, itemId, quantity, unit, unitPrice, description }: AddPurchaseOrderItemDto = req.body;
+    const { itemName, itemId, quantity, unit, unitPrice, perUnit, description }: AddPurchaseOrderItemDto = req.body;
 
     if (typeof itemName !== "string" || !itemName.trim()) {
       return res.status(400).json({ message: "Item name is required" });
@@ -416,6 +417,7 @@ export class PurchaseOrderController {
           quantity,
           unit: unit ?? null,
           unitPrice: unitPrice ?? null,
+          perUnit: perUnit?.trim() || null,
           description: description?.trim() || null,
         },
       });
@@ -445,7 +447,7 @@ export class PurchaseOrderController {
    * Items table). Same edit permission as addPurchaseOrderItem. */
   static editPurchaseOrderItem = async (req: AuthRequest, res: Response) => {
     const { id, itemId } = req.params;
-    const { itemName, itemId: catalogItemId, quantity, unit, unitPrice, description }: EditPurchaseOrderItemDto =
+    const { itemName, itemId: catalogItemId, quantity, unit, unitPrice, perUnit, description }: EditPurchaseOrderItemDto =
       req.body;
 
     if (typeof itemName !== "string" || !itemName.trim()) {
@@ -479,6 +481,7 @@ export class PurchaseOrderController {
           quantity,
           unit: unit ?? null,
           unitPrice: unitPrice ?? null,
+          perUnit: perUnit?.trim() || null,
           description: description?.trim() || null,
         },
       });
