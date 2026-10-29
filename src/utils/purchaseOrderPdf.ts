@@ -349,6 +349,22 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const commonUnit = itemUnits.size === 1 ? [...itemUnits][0] : null;
   cols[2]!.label = commonUnit ? `Quantity (${commonUnit})` : "Quantity";
 
+  // Unit price text, with the optional "per" label ("/ kg", "per gm") on the same line.
+  const unitPriceText = (item: PurchaseOrderPdfItem) => {
+    const perUnit = (item.perUnit || "").trim();
+    const price = fmtAmount(num(item.unitPrice));
+    return perUnit ? `${price} ${perUnit}` : price;
+  };
+  // Make sure the longest "price + per" fits on one line: if it doesn't, widen the Unit Price
+  // column at the expense of the (much wider) Product Description column.
+  doc.font(FONT_BODY).fontSize(8.5);
+  const unitPriceNeeded = Math.max(0, ...po.items.map((item) => doc.widthOfString(unitPriceText(item)))) + 10 + 6;
+  if (unitPriceNeeded > cols[3]!.width) {
+    const extra = Math.min(unitPriceNeeded - cols[3]!.width, cols[1]!.width - 140);
+    cols[3]!.width += extra;
+    cols[1]!.width -= extra;
+  }
+
   let colX = MARGIN_LEFT;
   doc.font(FONT_COMPANY).fontSize(9);
   const headerH = Math.max(
@@ -382,9 +398,8 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       : rowUnit
         ? `${item.quantity} ${rowUnit}`
         : String(item.quantity);
-    // "perUnit" (e.g. "/ kg") goes on a second line under the price so the narrow column never wraps mid-number.
-    const perUnit = (item.perUnit || "").trim();
-    const rowValues = [item.hsnCode || "", item.itemName, rowQuantity, perUnit ? `${fmtAmount(unitPrice)}\n${perUnit}` : fmtAmount(unitPrice), fmtAmount(amount)];
+    // "perUnit" (e.g. "/ kg") sits on the same line, right after the price.
+    const rowValues = [item.hsnCode || "", item.itemName, rowQuantity, unitPriceText(item), fmtAmount(amount)];
     const description = (item.description || "").trim();
     const descColWidth = cols[1]!.width - 10;
     const nameHeight = doc.font(FONT_BODY_BOLD).fontSize(8.5).heightOfString(item.itemName, { width: descColWidth });
