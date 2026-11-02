@@ -50,6 +50,7 @@ model User {
   purchaseOrderPaymentsLogged       PurchaseOrderPayment[]
   financeManualRecordsCreated       FinanceManualRecord[]
   debtorRecordsCreated              DebtorRecord[]
+  requisitionsCreated               Requisition[]
   debtorPaymentsLogged              DebtorPayment[]
   shipmentTrackingRecordsCreated    ShipmentTrackingRecord[]
   proformaInvoicesCreated           ProformaInvoice[]
@@ -111,6 +112,7 @@ model Organization {
   warehouses              Warehouse[]
   financeManualRecords    FinanceManualRecord[]
   debtorRecords           DebtorRecord[]
+  requisitions            Requisition[]
   proformaInvoices        ProformaInvoice[]
   quotations              Quotation[]
   memberships             OrganizationMembership[]
@@ -1226,6 +1228,27 @@ model FinanceManualRecord {
   lines        FinanceManualLine[]
 
   @@map("finance_manual_record")
+}
+
+/// A Purchase Requisition Form saved from Procurement > Requisition. The whole form lives in `data`
+/// (shape: RequisitionFormData on the frontend); the columns beside it are copies kept for the History list.
+model Requisition {
+  id              Int       @id @default(autoincrement())
+  requisitionNo   String?   @db.VarChar
+  requisitionDate DateTime? @db.Date
+  requestedBy     String?   @db.VarChar
+  priority        String?   @db.VarChar
+  itemCount       Int       @default(0)
+  data            Json
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  organizationId  Int?
+  createdById     Int?
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdBy    User?         @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("requisition")
 }
 
 /// A receivable on the Procurement > Debtors page: money a customer owes us. The mirror image of
