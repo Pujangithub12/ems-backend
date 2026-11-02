@@ -18,6 +18,7 @@ import { ProjectFileController } from "../controllers/ProjectFileController";
 import { PurchaseOrderController } from "../controllers/PurchaseOrderController";
 import { FinanceController } from "../controllers/FinanceController";
 import { DebtorController } from "../controllers/DebtorController";
+import { RequisitionController } from "../controllers/RequisitionController";
 import { DebtorClaimController } from "../controllers/DebtorClaimController";
 import { ShipmentTrackingController } from "../controllers/ShipmentTrackingController";
 import { ProformaInvoiceController } from "../controllers/ProformaInvoiceController";
@@ -592,6 +593,12 @@ router.delete(
 router.get("/purchase-orders/:id/cost-sheet", authMiddleware, cacheResponse("procurement", 30), PurchaseOrderController.getCostSheet);
 router.get("/purchase-orders/:id/pdf", authMiddleware, PurchaseOrderController.downloadPdf);
 router.get("/purchase-orders/:id/pdf-data", authMiddleware, PurchaseOrderController.getPdfData);
+
+// Requisitions — saved Purchase Requisition Forms + their History list; role-gated inline.
+router.get("/workspace/requisitions", authMiddleware, RequisitionController.list);
+router.post("/workspace/requisitions", authMiddleware, RequisitionController.create);
+router.put("/workspace/requisitions/:id", authMiddleware, RequisitionController.update);
+router.delete("/workspace/requisitions/:id", authMiddleware, RequisitionController.remove);
 
 // Debtors — receivables (money customers owe us); role-gated inline in DebtorController.
 router.get("/workspace/debtors", authMiddleware, DebtorController.getDebtors);
