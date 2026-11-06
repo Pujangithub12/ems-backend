@@ -352,10 +352,18 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const colUnitSum = colOrder.reduce((sum, k) => sum + colUnits[k], 0);
 
   // Units go in the headers (matching the template) when every item shares one; otherwise each cell carries its own.
-  const itemUnits = new Set(po.items.map((i) => (i.unit || "").trim()).filter((u) => u.length > 0));
-  const commonUnit = itemUnits.size === 1 ? [...itemUnits][0] : null;
-  const weightUnits = new Set(po.items.map((i) => (i.weightUnit || "").trim()).filter((u) => u.length > 0));
-  const commonWeightUnit = weightUnits.size === 1 ? [...weightUnits][0] : null;
+  // One shared unit (compared ignoring case, so "kg" and "Kg" count as the same) goes in the header;
+  // only genuinely different units are written in each cell.
+  const commonUnitOf = (values: (string | null | undefined)[]): string | null => {
+    const seen = new Map<string, string>();
+    for (const v of values) {
+      const t = (v || "").trim();
+      if (t && !seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t);
+    }
+    return seen.size === 1 ? [...seen.values()][0]! : null;
+  };
+  const commonUnit = commonUnitOf(po.items.map((i) => i.unit));
+  const commonWeightUnit = commonUnitOf(po.items.map((i) => i.weightUnit));
   const rateCurrency = po.currency?.trim() || "Rs";
   const colLabels: Record<ColKey, string> = {
     hsn: "HSN Code",
