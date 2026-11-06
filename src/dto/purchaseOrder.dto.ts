@@ -9,6 +9,10 @@ export interface CreatePurchaseOrderItemDto {
   unitPrice?: number | null;
   /** Optional label shown next to the unit price on the PDF, e.g. "/ kg". */
   perUnit?: string | null;
+  /** Weight of one unit, its unit label (e.g. "kg") and the rate per that weight unit - see PurchaseOrderItem.unitWeight. */
+  unitWeight?: number | null;
+  weightUnit?: string | null;
+  rate?: number | null;
   description?: string | null;
 }
 
@@ -32,6 +36,10 @@ export interface AddPurchaseOrderItemDto {
   unitPrice?: number | null;
   /** Optional label shown next to the unit price on the PDF, e.g. "/ kg". */
   perUnit?: string | null;
+  /** Weight of one unit, its unit label (e.g. "kg") and the rate per that weight unit - see PurchaseOrderItem.unitWeight. */
+  unitWeight?: number | null;
+  weightUnit?: string | null;
+  rate?: number | null;
   description?: string | null;
 }
 
@@ -46,6 +54,10 @@ export interface EditPurchaseOrderItemDto {
   unitPrice?: number | null;
   /** Optional label shown next to the unit price on the PDF, e.g. "/ kg". */
   perUnit?: string | null;
+  /** Weight of one unit, its unit label (e.g. "kg") and the rate per that weight unit - see PurchaseOrderItem.unitWeight. */
+  unitWeight?: number | null;
+  weightUnit?: string | null;
+  rate?: number | null;
   description?: string | null;
 }
 

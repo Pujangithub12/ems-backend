@@ -1391,6 +1391,10 @@ model PurchaseOrderItem {
   unitPrice            Decimal?  @db.Decimal
   /// Optional "per" label shown next to the unit price on the PO PDF, typed as e.g. "/ kg" or "per gm".
   perUnit              String?   @db.VarChar
+  /// Weight columns on the PO line items: weight of ONE unit (in `weightUnit`, e.g. "kg") and the rate per weight unit. When both are set the unit price is derived (unitWeight x rate), so quantity x unitPrice = total weight x rate everywhere.
+  unitWeight           Decimal?  @db.Decimal
+  weightUnit           String?   @db.VarChar
+  rate                 Decimal?  @db.Decimal
   /// Entered on the Overview tab's "Add Item" form — shown under the item name in the PDF's Product Description cell.
   description          String?
   /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.

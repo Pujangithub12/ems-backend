@@ -15,6 +15,10 @@ export interface PurchaseOrderPdfItem {
   quantity: number;
   unit?: string | null;
   unitPrice?: { toNumber(): number } | number | string | null;
+  /** Weight of one unit, its unit label and the rate per weight unit (see PurchaseOrderItem.unitWeight). */
+  unitWeight?: { toNumber(): number } | number | string | null;
+  weightUnit?: string | null;
+  rate?: { toNumber(): number } | number | string | null;
   /** Optional label shown under the unit price, typed as e.g. "/ kg" or "per gm". */
   perUnit?: string | null;
   hsnCode?: string | null;
@@ -334,35 +338,63 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   doc.fillColor("#ffffff").text(productLabel, MARGIN_LEFT + 10, y + 5.5, { width: productLabelW - 20 });
   y += 22 + 5;
 
-  // ---- Items table (ratio 1090:4580:1158:1522:1294) ----
-  const colW = (twips: number) => (CONTENT_WIDTH * twips) / 9644;
-  const cols = [
-    { label: "HSN Code", width: colW(1090) },
-    { label: "Product Description", width: colW(4580) },
-    { label: "Quantity", width: colW(1158), align: "right" as const },
-    { label: "Unit Price", width: colW(1522), align: "right" as const },
-    { label: "Amount", width: colW(1294), align: "right" as const },
-  ];
-  // Unit goes in the Quantity header (matching the template) rather than appended to each
-  // row's description, when every item shares one common unit.
+  // ---- Items table. Plain layout: HSN | Description | Quantity | Unit Price | Amount (ratio
+  // 1090:4580:1158:1522:1294). When any item carries a unit weight, Unit Wt / Total Wt / Rate
+  // columns are added right after Quantity. ----
+  const weightMode = po.items.some((i) => num(i.unitWeight) > 0);
+  type ColKey = "hsn" | "desc" | "qty" | "unitWt" | "totalWt" | "rate" | "unitPrice" | "amount";
+  const colUnits: Record<ColKey, number> = weightMode
+    ? { hsn: 900, desc: 3000, qty: 1000, unitWt: 1050, totalWt: 1150, rate: 1250, unitPrice: 1250, amount: 1350 }
+    : { hsn: 1090, desc: 4580, qty: 1158, unitWt: 0, totalWt: 0, rate: 0, unitPrice: 1522, amount: 1294 };
+  const colOrder: ColKey[] = weightMode
+    ? ["hsn", "desc", "qty", "unitWt", "totalWt", "rate", "unitPrice", "amount"]
+    : ["hsn", "desc", "qty", "unitPrice", "amount"];
+  const colUnitSum = colOrder.reduce((sum, k) => sum + colUnits[k], 0);
+
+  // Units go in the headers (matching the template) when every item shares one; otherwise each cell carries its own.
   const itemUnits = new Set(po.items.map((i) => (i.unit || "").trim()).filter((u) => u.length > 0));
   const commonUnit = itemUnits.size === 1 ? [...itemUnits][0] : null;
-  cols[2]!.label = commonUnit ? `Quantity (${commonUnit})` : "Quantity";
+  const weightUnits = new Set(po.items.map((i) => (i.weightUnit || "").trim()).filter((u) => u.length > 0));
+  const commonWeightUnit = weightUnits.size === 1 ? [...weightUnits][0] : null;
+  const rateCurrency = po.currency?.trim() || "Rs";
+  const colLabels: Record<ColKey, string> = {
+    hsn: "HSN Code",
+    desc: "Product Description",
+    qty: commonUnit ? `Quantity (${commonUnit})` : "Quantity",
+    unitWt: commonWeightUnit ? `Unit Wt (${commonWeightUnit})` : "Unit Wt",
+    totalWt: commonWeightUnit ? `Total Wt (${commonWeightUnit})` : "Total Wt",
+    rate: `Rate (${rateCurrency}/${commonWeightUnit || "unit"})`,
+    unitPrice: "Unit Price",
+    amount: "Amount",
+  };
+  const cols = colOrder.map((key) => ({
+    key,
+    label: colLabels[key],
+    width: (CONTENT_WIDTH * colUnits[key]) / colUnitSum,
+    align: key === "hsn" || key === "desc" ? undefined : ("right" as const),
+  }));
+  const colIdx = (key: ColKey) => cols.findIndex((c) => c.key === key);
 
+  const fmtWeight = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  // A weight-priced line (unit weight + rate) is worth unitWeight x rate per unit.
+  const effectiveUnitPrice = (item: PurchaseOrderPdfItem) =>
+    num(item.unitWeight) > 0 && item.rate != null ? num(item.unitWeight) * num(item.rate) : num(item.unitPrice);
   // Unit price text, with the optional "per" label ("/ kg", "per gm") on the same line.
   const unitPriceText = (item: PurchaseOrderPdfItem) => {
     const perUnit = (item.perUnit || "").trim();
-    const price = fmtAmount(num(item.unitPrice));
+    const price = fmtAmount(effectiveUnitPrice(item));
     return perUnit ? `${price} ${perUnit}` : price;
   };
   // Make sure the longest "price + per" fits on one line: if it doesn't, widen the Unit Price
   // column at the expense of the (much wider) Product Description column.
   doc.font(FONT_BODY).fontSize(8.5);
   const unitPriceNeeded = Math.max(0, ...po.items.map((item) => doc.widthOfString(unitPriceText(item)))) + 10 + 6;
-  if (unitPriceNeeded > cols[3]!.width) {
-    const extra = Math.min(unitPriceNeeded - cols[3]!.width, cols[1]!.width - 140);
-    cols[3]!.width += extra;
-    cols[1]!.width -= extra;
+  const upCol = cols[colIdx("unitPrice")]!;
+  const descCol = cols[colIdx("desc")]!;
+  if (unitPriceNeeded > upCol.width) {
+    const extra = Math.min(unitPriceNeeded - upCol.width, descCol.width - 140);
+    upCol.width += extra;
+    descCol.width -= extra;
   }
 
   let colX = MARGIN_LEFT;
@@ -386,9 +418,10 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   };
   drawItemsHeader();
 
+  const descIdx = colIdx("desc");
   let itemsSubtotal = 0;
   for (const item of po.items) {
-    const unitPrice = num(item.unitPrice);
+    const unitPrice = effectiveUnitPrice(item);
     const amount = unitPrice * item.quantity;
     itemsSubtotal += amount;
 
@@ -398,10 +431,22 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       : rowUnit
         ? `${item.quantity} ${rowUnit}`
         : String(item.quantity);
-    // "perUnit" (e.g. "/ kg") sits on the same line, right after the price.
-    const rowValues = [item.hsnCode || "", item.itemName, rowQuantity, unitPriceText(item), fmtAmount(amount)];
+    const rowWeightUnit = (item.weightUnit || "").trim();
+    const withWeightUnit = (text: string) => (commonWeightUnit || !rowWeightUnit ? text : `${text} ${rowWeightUnit}`);
+    const unitWeight = num(item.unitWeight);
+    const cellText: Record<ColKey, string> = {
+      hsn: item.hsnCode || "",
+      desc: item.itemName,
+      qty: rowQuantity,
+      unitWt: unitWeight > 0 ? withWeightUnit(fmtWeight(unitWeight)) : "",
+      totalWt: unitWeight > 0 ? withWeightUnit(fmtWeight(unitWeight * item.quantity)) : "",
+      rate: item.rate != null ? (commonWeightUnit || !rowWeightUnit ? fmtAmount(num(item.rate)) : `${fmtAmount(num(item.rate))}/${rowWeightUnit}`) : "",
+      unitPrice: unitPriceText(item),
+      amount: fmtAmount(amount),
+    };
+    const rowValues = cols.map((c) => cellText[c.key]);
     const description = (item.description || "").trim();
-    const descColWidth = cols[1]!.width - 10;
+    const descColWidth = cols[descIdx]!.width - 10;
     const nameHeight = doc.font(FONT_BODY_BOLD).fontSize(8.5).heightOfString(item.itemName, { width: descColWidth });
     const descriptionHeight = description
       ? doc.font(FONT_BODY).fontSize(8.5).heightOfString(description, { width: descColWidth }) + 2
@@ -409,10 +454,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     const rowHeight = Math.max(
       18,
       nameHeight + descriptionHeight + 8,
-      ...cols.slice(0, 1).concat(cols.slice(2)).map((col, i) => {
-        const value = i === 0 ? rowValues[0]! : rowValues[i + 1]!;
-        return doc.font(FONT_BODY).fontSize(8.5).heightOfString(value, { width: col.width - 10 }) + 8;
-      }),
+      ...cols.map((col, i) => (i === descIdx ? 0 : doc.font(FONT_BODY).fontSize(8.5).heightOfString(rowValues[i]!, { width: col.width - 10 }) + 8)),
     );
 
     if (y + rowHeight > doc.page.height - MARGIN_BOTTOM) {
@@ -426,7 +468,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       const col = cols[i]!;
       doc.rect(colX, y, col.width, rowHeight).fill(LIGHT_BG);
       doc.rect(colX, y, col.width, rowHeight).stroke("#ffffff");
-      if (i === 1) {
+      if (i === descIdx) {
         doc.fillColor(BLACK).font(FONT_BODY_BOLD).fontSize(8.5).text(item.itemName, colX + 5, y + 5, { width: descColWidth });
         if (description) {
           doc.fillColor(BLACK).font(FONT_BODY).fontSize(8.5).text(description, colX + 5, y + 5 + nameHeight + 2, { width: descColWidth });
@@ -449,11 +491,14 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const vatAmount = taxPercent > 0 ? itemsSubtotal * (taxPercent / 100) : 0;
   const grandTotal = itemsSubtotal + vatAmount;
 
-  const hsnDescQtyW = cols[0]!.width + cols[1]!.width + cols[2]!.width;
-  const qtyUnitPriceW = cols[2]!.width + cols[3]!.width;
-  const unitPriceW = cols[3]!.width;
-  const amountW = cols[4]!.width;
+  // Totals rows span the columns: everything before Unit Price (words / VAT label), Unit Price
+  // (GRAND TOTAL label), and the last column (Amount).
+  const unitPriceIdx = colIdx("unitPrice");
+  const hsnDescQtyW = cols.slice(0, unitPriceIdx).reduce((sum, c) => sum + c.width, 0);
+  const unitPriceW = cols[unitPriceIdx]!.width;
+  const amountW = cols[unitPriceIdx + 1]!.width;
   const labelColsWidth = cols[0]!.width + cols[1]!.width;
+  const qtyUnitPriceW = hsnDescQtyW - labelColsWidth + unitPriceW;
 
   if (taxPercent > 0) {
     const vatRowH = 20;

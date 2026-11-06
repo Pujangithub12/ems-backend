@@ -29,6 +29,17 @@ const LIST_INCLUDE = {
 } as const;
 
 /** Purchase Order tab (procurement pipeline v2, step 3): created directly via createPurchaseOrder, then read/updated/tracked here through PI/Shipment/GRN. */
+/** A line with both a unit weight and a rate is priced by weight: its unit price is derived as
+ * unitWeight x rate, so quantity x unitPrice equals total weight x rate everywhere (totals, VAT,
+ * cost sheet, Finance, PDF) without any of those needing to know about weights. */
+function resolveWeightPricing(input: { unitWeight?: number | null | undefined; weightUnit?: string | null | undefined; rate?: number | null | undefined; unitPrice?: number | null | undefined }) {
+  const valid = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  const unitWeight = valid(input.unitWeight) ? input.unitWeight : null;
+  const rate = valid(input.rate) ? input.rate : null;
+  const unitPrice = unitWeight != null && rate != null ? Math.round(unitWeight * rate * 1e6) / 1e6 : (input.unitPrice ?? null);
+  return { unitWeight, weightUnit: input.weightUnit?.trim() || null, rate, unitPrice };
+}
+
 export class PurchaseOrderController {
   /** Loads one PO in the exact shape DETAIL_INCLUDE used to produce — but as several parallel
    * queries instead of one giant nested `include`. A single query combining this many sibling
@@ -188,7 +199,7 @@ export class PurchaseOrderController {
               itemId: item.itemId ?? null,
               quantity: item.quantity ?? 1,
               unit: item.unit ?? null,
-              unitPrice: item.unitPrice ?? null,
+              ...resolveWeightPricing(item),
               perUnit: item.perUnit?.trim() || null,
               description: item.description ?? null,
             })),
@@ -388,7 +399,7 @@ export class PurchaseOrderController {
    * time). Same edit permission as updatePurchaseOrder. */
   static addPurchaseOrderItem = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { itemName, itemId, quantity, unit, unitPrice, perUnit, description }: AddPurchaseOrderItemDto = req.body;
+    const { itemName, itemId, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: AddPurchaseOrderItemDto = req.body;
 
     if (typeof itemName !== "string" || !itemName.trim()) {
       return res.status(400).json({ message: "Item name is required" });
@@ -416,7 +427,7 @@ export class PurchaseOrderController {
           itemId: itemId ?? null,
           quantity,
           unit: unit ?? null,
-          unitPrice: unitPrice ?? null,
+          ...resolveWeightPricing({ unitPrice, unitWeight, weightUnit, rate }),
           perUnit: perUnit?.trim() || null,
           description: description?.trim() || null,
         },
@@ -447,7 +458,7 @@ export class PurchaseOrderController {
    * Items table). Same edit permission as addPurchaseOrderItem. */
   static editPurchaseOrderItem = async (req: AuthRequest, res: Response) => {
     const { id, itemId } = req.params;
-    const { itemName, itemId: catalogItemId, quantity, unit, unitPrice, perUnit, description }: EditPurchaseOrderItemDto =
+    const { itemName, itemId: catalogItemId, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: EditPurchaseOrderItemDto =
       req.body;
 
     if (typeof itemName !== "string" || !itemName.trim()) {
@@ -480,7 +491,7 @@ export class PurchaseOrderController {
           itemId: catalogItemId ?? null,
           quantity,
           unit: unit ?? null,
-          unitPrice: unitPrice ?? null,
+          ...resolveWeightPricing({ unitPrice, unitWeight, weightUnit, rate }),
           perUnit: perUnit?.trim() || null,
           description: description?.trim() || null,
         },
