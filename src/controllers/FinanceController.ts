@@ -902,6 +902,8 @@ export class FinanceController {
         data: {
           itemName: dto.itemName.trim(),
           unitPrice: dto.majorCost / quantity,
+          // A weight-priced item (unit weight + rate): keep the rate in step with the new price.
+          ...(item.unitWeight != null && item.rate != null && num(item.unitWeight) > 0 ? { rate: dto.majorCost / quantity / num(item.unitWeight) } : {}),
           freightOverride: dto.freight,
           lcAmount: dto.lcAmount,
           lcChargeOverride: dto.lcCharge,
