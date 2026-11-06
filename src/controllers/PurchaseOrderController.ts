@@ -29,14 +29,16 @@ const LIST_INCLUDE = {
 } as const;
 
 /** Purchase Order tab (procurement pipeline v2, step 3): created directly via createPurchaseOrder, then read/updated/tracked here through PI/Shipment/GRN. */
-/** A line with both a unit weight and a rate is priced by weight: its unit price is derived as
- * unitWeight x rate, so quantity x unitPrice equals total weight x rate everywhere (totals, VAT,
- * cost sheet, Finance, PDF) without any of those needing to know about weights. */
+/** A line with both a unit weight and a rate is priced by weight: unless a unit price was typed in
+ * explicitly (the form pre-fills unitWeight x rate but lets it be overridden), the unit price is
+ * derived as unitWeight x rate, so quantity x unitPrice equals total weight x rate everywhere
+ * (totals, VAT, cost sheet, Finance, PDF) without any of those needing to know about weights. */
 function resolveWeightPricing(input: { unitWeight?: number | null | undefined; weightUnit?: string | null | undefined; rate?: number | null | undefined; unitPrice?: number | null | undefined }) {
   const valid = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
   const unitWeight = valid(input.unitWeight) ? input.unitWeight : null;
   const rate = valid(input.rate) ? input.rate : null;
-  const unitPrice = unitWeight != null && rate != null ? Math.round(unitWeight * rate * 1e6) / 1e6 : (input.unitPrice ?? null);
+  const derived = unitWeight != null && rate != null ? Math.round(unitWeight * rate * 1e6) / 1e6 : null;
+  const unitPrice = input.unitPrice ?? derived;
   return { unitWeight, weightUnit: input.weightUnit?.trim() || null, rate, unitPrice };
 }
 
