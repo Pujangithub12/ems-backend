@@ -376,9 +376,10 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const colIdx = (key: ColKey) => cols.findIndex((c) => c.key === key);
 
   const fmtWeight = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 3 });
-  // A weight-priced line (unit weight + rate) is worth unitWeight x rate per unit.
+  // The stored unit price wins (it can be overridden by hand); a weight-priced line with no stored
+  // price is worth unitWeight x rate per unit.
   const effectiveUnitPrice = (item: PurchaseOrderPdfItem) =>
-    num(item.unitWeight) > 0 && item.rate != null ? num(item.unitWeight) * num(item.rate) : num(item.unitPrice);
+    item.unitPrice != null ? num(item.unitPrice) : num(item.unitWeight) > 0 && item.rate != null ? num(item.unitWeight) * num(item.rate) : 0;
   // Unit price text, with the optional "per" label ("/ kg", "per gm") on the same line.
   const unitPriceText = (item: PurchaseOrderPdfItem) => {
     const perUnit = (item.perUnit || "").trim();
