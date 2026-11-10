@@ -22,6 +22,8 @@ export interface PurchaseOrderPdfItem {
   /** Optional label shown under the unit price, typed as e.g. "/ kg" or "per gm". */
   perUnit?: string | null;
   hsnCode?: string | null;
+  /** Values of the PO's user-defined columns, { [column key]: text } (JSON from Prisma, hence unknown). */
+  customValues?: unknown;
   /** Entered on the Overview tab's "Add Item" form — shown under the item name in the Product Description cell. */
   description?: string | null;
 }
@@ -73,6 +75,8 @@ export interface PurchaseOrderPdfData {
   stampImage?: Buffer | null;
   vendor?: PurchaseOrderPdfVendor | null;
   items: PurchaseOrderPdfItem[];
+  /** User-defined extra columns of the items table, [{ key, label }] (JSON from Prisma, hence unknown) — drawn between Quantity and Unit Price. */
+  itemColumns?: unknown;
   /** Any number of free-form tables shown right above Payment Terms (e.g. "Technical
    * Specification", "Electricity Requirement", "Electrical Motor data...") — each with its own
    * title, column headers and rows. `columns`/`cells` come back from Prisma as JsonValue, hence
@@ -342,14 +346,26 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // 1090:4580:1158:1522:1294). When any item carries a unit weight, Unit Wt / Total Wt / Rate
   // columns are added right after Quantity. ----
   const weightMode = po.items.some((i) => num(i.unitWeight) > 0);
-  type ColKey = "hsn" | "desc" | "qty" | "unitWt" | "totalWt" | "rate" | "unitPrice" | "amount";
+  // User-defined columns (keys prefixed "x:"): shown only when at least one item has a value in them.
+  const customValueOf = (item: PurchaseOrderPdfItem, key: string): string => {
+    const raw = item.customValues && typeof item.customValues === "object" ? (item.customValues as Record<string, unknown>)[key] : "";
+    return raw == null ? "" : String(raw);
+  };
+  const customCols = (Array.isArray(po.itemColumns) ? po.itemColumns : [])
+    .map((c: { key?: unknown; label?: unknown }) => ({ key: String(c?.key ?? ""), label: String(c?.label ?? "").trim() }))
+    .filter((c: { key: string; label: string }) => c.key && c.label && po.items.some((i) => customValueOf(i, c.key).trim()));
+  type ColKey = string;
   const colUnits: Record<ColKey, number> = weightMode
     ? { hsn: 900, desc: 3000, qty: 1000, unitWt: 1050, totalWt: 1150, rate: 1250, unitPrice: 1250, amount: 1350 }
     : { hsn: 1090, desc: 4580, qty: 1158, unitWt: 0, totalWt: 0, rate: 0, unitPrice: 1522, amount: 1294 };
   const colOrder: ColKey[] = weightMode
     ? ["hsn", "desc", "qty", "unitWt", "totalWt", "rate", "unitPrice", "amount"]
     : ["hsn", "desc", "qty", "unitPrice", "amount"];
-  const colUnitSum = colOrder.reduce((sum, k) => sum + colUnits[k], 0);
+  for (const c of customCols) {
+    colUnits[`x:${c.key}`] = 1100;
+    colOrder.splice(colOrder.indexOf("qty") + 1, 0, `x:${c.key}`);
+  }
+  const colUnitSum = colOrder.reduce((sum, k) => sum + (colUnits[k] ?? 0), 0);
 
   // Units go in the headers (matching the template) when every item shares one; otherwise each cell carries its own.
   // One shared unit (compared ignoring case, so "kg" and "Kg" count as the same) goes in the header;
@@ -375,11 +391,12 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     unitPrice: "Unit Price",
     amount: "Amount",
   };
+  for (const c of customCols) colLabels[`x:${c.key}`] = c.label;
   const cols = colOrder.map((key) => ({
     key,
-    label: colLabels[key],
-    width: (CONTENT_WIDTH * colUnits[key]) / colUnitSum,
-    align: key === "hsn" || key === "desc" ? undefined : ("right" as const),
+    label: colLabels[key] ?? "",
+    width: (CONTENT_WIDTH * (colUnits[key] ?? 0)) / colUnitSum,
+    align: key === "hsn" || key === "desc" || key.startsWith("x:") ? undefined : ("right" as const),
   }));
   const colIdx = (key: ColKey) => cols.findIndex((c) => c.key === key);
 
@@ -453,7 +470,8 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       unitPrice: unitPriceText(item),
       amount: fmtAmount(amount),
     };
-    const rowValues = cols.map((c) => cellText[c.key]);
+    for (const c of customCols) cellText[`x:${c.key}`] = customValueOf(item, c.key);
+    const rowValues = cols.map((c) => cellText[c.key] ?? "");
     const description = (item.description || "").trim();
     const descColWidth = cols[descIdx]!.width - 10;
     const nameHeight = doc.font(FONT_BODY_BOLD).fontSize(8.5).heightOfString(item.itemName, { width: descColWidth });

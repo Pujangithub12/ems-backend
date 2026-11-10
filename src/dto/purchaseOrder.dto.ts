@@ -31,6 +31,9 @@ export interface CreatePurchaseOrderDto {
 export interface AddPurchaseOrderItemDto {
   itemName: string;
   itemId?: number | null;
+  hsnCode?: string | null;
+  /** Values for the PO's custom columns, keyed by the column's `key` (see PurchaseOrder.itemColumns). */
+  customValues?: Record<string, string> | null;
   quantity: number;
   unit?: string | null;
   unitPrice?: number | null;
@@ -49,6 +52,9 @@ export interface AddPurchaseOrderItemDto {
 export interface EditPurchaseOrderItemDto {
   itemName: string;
   itemId?: number | null;
+  hsnCode?: string | null;
+  /** Values for the PO's custom columns, keyed by the column's `key` (see PurchaseOrder.itemColumns). */
+  customValues?: Record<string, string> | null;
   quantity: number;
   unit?: string | null;
   unitPrice?: number | null;
@@ -108,6 +114,8 @@ export interface UpdatePurchaseOrderDto {
   purchaseType?: PurchaseType;
   status?: PurchaseOrderStatus;
   items?: UpdatePurchaseOrderItemDto[];
+  /** User-defined extra columns of the line-items table — full replace when present. */
+  itemColumns?: { key: string; label: string }[];
   /** Full replace when present — omit to leave existing tables untouched, pass an empty array to
    * clear all of them. Any table missing a title or ending up with no non-blank rows is dropped
    * before saving, see PurchaseOrderController.updatePurchaseOrder. */
