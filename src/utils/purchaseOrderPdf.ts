@@ -582,7 +582,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       .fillColor(BLACK)
       .font(FONT_BODY_BOLD)
       .fontSize(9)
-      .text(`Value Added Tax @ ${taxPercent}%`, MARGIN_LEFT + labelColsWidth + 8, y + 6, { width: qtyUnitPriceW - 16 })
+      .text(`Value Added Tax @ ${taxPercent}%`, MARGIN_LEFT + labelColsWidth + 8, y + 6, { width: qtyUnitPriceW - 16, align: "right" })
       .text(fmtAmount(vatAmount), MARGIN_LEFT + labelColsWidth + qtyUnitPriceW, y + 6, { width: amountW - 10, align: "right" });
     y += vatRowH;
   }
