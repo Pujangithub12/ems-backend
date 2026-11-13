@@ -15,6 +15,7 @@ import { buildPurchaseOrderPdf, PurchaseOrderPdfData } from "../utils/purchaseOr
 import { pdfDataWithBase64Images } from "../utils/pdfDataJson";
 import { currentNepaliFiscalYearLabel } from "../utils/nepaliFiscalYear";
 import { downloadFileFromStorageCached } from "../config/supabaseStorage";
+import { Prisma } from "../generated/prisma/client";
 
 const SPEC_TABLES_INCLUDE = { orderBy: { orderIndex: "asc" as const }, include: { rows: { orderBy: { orderIndex: "asc" as const } } } };
 
@@ -40,6 +41,33 @@ function resolveWeightPricing(input: { unitWeight?: number | null | undefined; w
   const derived = unitWeight != null && rate != null ? Math.round(unitWeight * rate * 1e6) / 1e6 : null;
   const unitPrice = input.unitPrice ?? derived;
   return { unitWeight, weightUnit: input.weightUnit?.trim() || null, rate, unitPrice };
+}
+
+/** Cleans the PO's custom line-item columns: a list of { key, label } with unique keys and non-blank labels (max 10). */
+function sanitizeItemColumns(input: unknown): { key: string; label: string }[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const out: { key: string; label: string }[] = [];
+  for (const c of input) {
+    const key = typeof c?.key === "string" ? c.key.trim().slice(0, 40) : "";
+    const label = typeof c?.label === "string" ? c.label.trim().slice(0, 60) : "";
+    if (!key || !label || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, label });
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+/** Cleans one item's custom column values into { key: text } (blank values dropped), or DbNull when there are none. */
+function sanitizeCustomValues(input: unknown): Prisma.InputJsonValue | typeof Prisma.DbNull {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return Prisma.DbNull;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    const text = typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
+    if (text) out[k] = text.slice(0, 500);
+  }
+  return Object.keys(out).length ? out : Prisma.DbNull;
 }
 
 export class PurchaseOrderController {
@@ -286,6 +314,7 @@ export class PurchaseOrderController {
       purchaseType,
       status,
       items,
+      itemColumns,
       specTables,
     }: UpdatePurchaseOrderDto = req.body;
 
@@ -331,6 +360,10 @@ export class PurchaseOrderController {
       if (currency !== undefined) data.currency = currency;
       if (purchaseType !== undefined) data.purchaseType = purchaseType;
       if (status !== undefined) data.status = status;
+      if (itemColumns !== undefined) {
+        const cols = sanitizeItemColumns(itemColumns);
+        data.itemColumns = cols.length ? cols : Prisma.DbNull;
+      }
       if (specTables !== undefined) {
         const resolvedTables = (Array.isArray(specTables) ? specTables : [])
           .map((table, tableIndex) => {
@@ -401,7 +434,7 @@ export class PurchaseOrderController {
    * time). Same edit permission as updatePurchaseOrder. */
   static addPurchaseOrderItem = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { itemName, itemId, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: AddPurchaseOrderItemDto = req.body;
+    const { itemName, itemId, hsnCode, customValues, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: AddPurchaseOrderItemDto = req.body;
 
     if (typeof itemName !== "string" || !itemName.trim()) {
       return res.status(400).json({ message: "Item name is required" });
@@ -427,6 +460,8 @@ export class PurchaseOrderController {
           purchaseOrderId: existing.id,
           itemName: itemName.trim(),
           itemId: itemId ?? null,
+          hsnCode: hsnCode?.trim() || null,
+          customValues: sanitizeCustomValues(customValues),
           quantity,
           unit: unit ?? null,
           ...resolveWeightPricing({ unitPrice, unitWeight, weightUnit, rate }),
@@ -460,7 +495,7 @@ export class PurchaseOrderController {
    * Items table). Same edit permission as addPurchaseOrderItem. */
   static editPurchaseOrderItem = async (req: AuthRequest, res: Response) => {
     const { id, itemId } = req.params;
-    const { itemName, itemId: catalogItemId, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: EditPurchaseOrderItemDto =
+    const { itemName, itemId: catalogItemId, hsnCode, customValues, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: EditPurchaseOrderItemDto =
       req.body;
 
     if (typeof itemName !== "string" || !itemName.trim()) {
@@ -491,6 +526,9 @@ export class PurchaseOrderController {
         data: {
           itemName: itemName.trim(),
           itemId: catalogItemId ?? null,
+          // Only touched when the caller sends it, so older clients leave the stored HSN alone.
+          ...(hsnCode !== undefined ? { hsnCode: hsnCode?.trim() || null } : {}),
+          ...(customValues !== undefined ? { customValues: sanitizeCustomValues(customValues) } : {}),
           quantity,
           unit: unit ?? null,
           ...resolveWeightPricing({ unitPrice, unitWeight, weightUnit, rate }),
@@ -695,6 +733,7 @@ export class PurchaseOrderController {
       stampImage,
       vendor: purchaseOrder.vendor,
       items: purchaseOrder.items,
+      itemColumns: purchaseOrder.itemColumns,
       specTables: purchaseOrder.specTables,
     };
 

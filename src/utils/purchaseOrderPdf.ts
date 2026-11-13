@@ -22,6 +22,8 @@ export interface PurchaseOrderPdfItem {
   /** Optional label shown under the unit price, typed as e.g. "/ kg" or "per gm". */
   perUnit?: string | null;
   hsnCode?: string | null;
+  /** Values of the PO's user-defined columns, { [column key]: text } (JSON from Prisma, hence unknown). */
+  customValues?: unknown;
   /** Entered on the Overview tab's "Add Item" form — shown under the item name in the Product Description cell. */
   description?: string | null;
 }
@@ -73,6 +75,8 @@ export interface PurchaseOrderPdfData {
   stampImage?: Buffer | null;
   vendor?: PurchaseOrderPdfVendor | null;
   items: PurchaseOrderPdfItem[];
+  /** User-defined extra columns of the items table, [{ key, label }] (JSON from Prisma, hence unknown) — drawn between Quantity and Unit Price. */
+  itemColumns?: unknown;
   /** Any number of free-form tables shown right above Payment Terms (e.g. "Technical
    * Specification", "Electricity Requirement", "Electrical Motor data...") — each with its own
    * title, column headers and rows. `columns`/`cells` come back from Prisma as JsonValue, hence
@@ -342,14 +346,26 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // 1090:4580:1158:1522:1294). When any item carries a unit weight, Unit Wt / Total Wt / Rate
   // columns are added right after Quantity. ----
   const weightMode = po.items.some((i) => num(i.unitWeight) > 0);
-  type ColKey = "hsn" | "desc" | "qty" | "unitWt" | "totalWt" | "rate" | "unitPrice" | "amount";
+  // User-defined columns (keys prefixed "x:"): shown only when at least one item has a value in them.
+  const customValueOf = (item: PurchaseOrderPdfItem, key: string): string => {
+    const raw = item.customValues && typeof item.customValues === "object" ? (item.customValues as Record<string, unknown>)[key] : "";
+    return raw == null ? "" : String(raw);
+  };
+  const customCols = (Array.isArray(po.itemColumns) ? po.itemColumns : [])
+    .map((c: { key?: unknown; label?: unknown }) => ({ key: String(c?.key ?? ""), label: String(c?.label ?? "").trim() }))
+    .filter((c: { key: string; label: string }) => c.key && c.label && po.items.some((i) => customValueOf(i, c.key).trim()));
+  type ColKey = string;
   const colUnits: Record<ColKey, number> = weightMode
     ? { hsn: 900, desc: 3000, qty: 1000, unitWt: 1050, totalWt: 1150, rate: 1250, unitPrice: 1250, amount: 1350 }
     : { hsn: 1090, desc: 4580, qty: 1158, unitWt: 0, totalWt: 0, rate: 0, unitPrice: 1522, amount: 1294 };
   const colOrder: ColKey[] = weightMode
     ? ["hsn", "desc", "qty", "unitWt", "totalWt", "rate", "unitPrice", "amount"]
     : ["hsn", "desc", "qty", "unitPrice", "amount"];
-  const colUnitSum = colOrder.reduce((sum, k) => sum + colUnits[k], 0);
+  for (const c of customCols) {
+    colUnits[`x:${c.key}`] = 1100;
+    colOrder.splice(colOrder.indexOf("qty") + 1, 0, `x:${c.key}`);
+  }
+  const colUnitSum = colOrder.reduce((sum, k) => sum + (colUnits[k] ?? 0), 0);
 
   // Units go in the headers (matching the template) when every item shares one; otherwise each cell carries its own.
   // One shared unit (compared ignoring case, so "kg" and "Kg" count as the same) goes in the header;
@@ -375,11 +391,12 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     unitPrice: "Unit Price",
     amount: "Amount",
   };
+  for (const c of customCols) colLabels[`x:${c.key}`] = c.label;
   const cols = colOrder.map((key) => ({
     key,
-    label: colLabels[key],
-    width: (CONTENT_WIDTH * colUnits[key]) / colUnitSum,
-    align: key === "hsn" || key === "desc" ? undefined : ("right" as const),
+    label: colLabels[key] ?? "",
+    width: (CONTENT_WIDTH * (colUnits[key] ?? 0)) / colUnitSum,
+    align: key === "hsn" || key === "desc" || key.startsWith("x:") ? undefined : ("right" as const),
   }));
   const colIdx = (key: ColKey) => cols.findIndex((c) => c.key === key);
 
@@ -394,16 +411,82 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     const price = fmtAmount(effectiveUnitPrice(item));
     return perUnit ? `${price} ${perUnit}` : price;
   };
-  // Make sure the longest "price + per" fits on one line: if it doesn't, widen the Unit Price
-  // column at the expense of the (much wider) Product Description column.
-  doc.font(FONT_BODY).fontSize(8.5);
-  const unitPriceNeeded = Math.max(0, ...po.items.map((item) => doc.widthOfString(unitPriceText(item)))) + 10 + 6;
-  const upCol = cols[colIdx("unitPrice")]!;
-  const descCol = cols[colIdx("desc")]!;
-  if (unitPriceNeeded > upCol.width) {
-    const extra = Math.min(unitPriceNeeded - upCol.width, descCol.width - 140);
-    upCol.width += extra;
-    descCol.width -= extra;
+  // The text shown in every column of one item's row (shared by the width fitting below and the drawing loop).
+  const cellTextsFor = (item: PurchaseOrderPdfItem): Record<ColKey, string> => {
+    const rowUnit = (item.unit || "").trim();
+    const rowQuantity = commonUnit ? String(item.quantity) : rowUnit ? `${item.quantity} ${rowUnit}` : String(item.quantity);
+    const rowWeightUnit = (item.weightUnit || "").trim();
+    const withWeightUnit = (text: string) => (commonWeightUnit || !rowWeightUnit ? text : `${text} ${rowWeightUnit}`);
+    const unitWeight = num(item.unitWeight);
+    const texts: Record<ColKey, string> = {
+      hsn: item.hsnCode || "",
+      desc: item.itemName,
+      qty: rowQuantity,
+      unitWt: unitWeight > 0 ? withWeightUnit(fmtWeight(unitWeight)) : "",
+      totalWt: unitWeight > 0 ? withWeightUnit(fmtWeight(unitWeight * item.quantity)) : "",
+      rate: item.rate != null ? (commonWeightUnit || !rowWeightUnit ? fmtAmount(num(item.rate)) : `${fmtAmount(num(item.rate))}/${rowWeightUnit}`) : "",
+      unitPrice: unitPriceText(item),
+      amount: fmtAmount(effectiveUnitPrice(item) * item.quantity),
+    };
+    for (const c of customCols) texts[`x:${c.key}`] = customValueOf(item, c.key);
+    return texts;
+  };
+
+  // ---- Fit the column widths to what is actually in them, so adding columns (or long values)
+  // never squeezes a figure onto two lines ("2,579,786." / "00"). Every column gets a minimum (the
+  // longest unbreakable word of its header/cells; for number columns the whole figure) and a
+  // preferred width (the original ratio, or the content for text columns). Product Description
+  // takes whatever is left; when that gets too small the other columns give up their slack
+  // (down to their minimum) before Description is squeezed any further. ----
+  const fitPad = 14; // 5pt text inset on each side + a little slack
+  const widthOfText = (text: string, font: string, size: number) => doc.font(font).fontSize(size).widthOfString(text);
+  const longestWordW = (text: string, font: string, size: number) =>
+    Math.max(0, ...text.split(/\s+/).filter(Boolean).map((w) => widthOfText(w, font, size)));
+  const NUMERIC_KEYS = new Set(["qty", "unitWt", "totalWt", "rate", "unitPrice", "amount"]);
+  const allCellTexts = po.items.map(cellTextsFor);
+  const estSubtotal = po.items.reduce((sum, i) => sum + effectiveUnitPrice(i) * i.quantity, 0);
+  const estTaxPercent = num(po.taxPercent);
+  const estVatText = estTaxPercent > 0 ? fmtAmount(estSubtotal * (estTaxPercent / 100)) : "";
+  const minW: number[] = [];
+  const prefW: number[] = [];
+  cols.forEach((col) => {
+    const texts = allCellTexts.map((t) => t[col.key] ?? "");
+    const headerWord = longestWordW(col.label, FONT_COMPANY, 9);
+    if (col.key === "desc") {
+      const word = Math.max(headerWord, ...texts.map((t) => longestWordW(t, FONT_BODY_BOLD, 8.5)), ...po.items.map((i) => longestWordW(i.description || "", FONT_BODY, 8.5)));
+      minW.push(Math.max(word + fitPad, 90));
+      prefW.push(col.width);
+    } else if (NUMERIC_KEYS.has(col.key)) {
+      let full = Math.max(0, ...texts.map((t) => widthOfText(t, FONT_BODY, 8.5)));
+      if (col.key === "amount" && estVatText) full = Math.max(full, widthOfText(estVatText, FONT_BODY_BOLD, 9));
+      const need = Math.max(full, headerWord) + fitPad;
+      minW.push(need);
+      prefW.push(Math.max(need, col.width));
+    } else {
+      const word = Math.max(headerWord, ...texts.map((t) => longestWordW(t, FONT_BODY, 8.5)));
+      const full = Math.max(0, ...texts.map((t) => widthOfText(t, FONT_BODY, 8.5)));
+      const min = word + fitPad;
+      minW.push(min);
+      prefW.push(Math.max(min, col.width, Math.min(full + fitPad, 150)));
+    }
+  });
+  {
+    const descI = colIdx("desc");
+    const widths = prefW.slice();
+    const sumOthers = () => widths.reduce((sum, w, i) => (i === descI ? sum : sum + w), 0);
+    const descFloor = Math.max(minW[descI]!, 150);
+    let descW = CONTENT_WIDTH - sumOthers();
+    if (descW < descFloor) {
+      const slack = widths.reduce((sum, w, i) => (i === descI ? sum : sum + (w - minW[i]!)), 0);
+      const take = Math.min(descFloor - descW, slack);
+      if (slack > 0) widths.forEach((w, i) => { if (i !== descI) widths[i] = w - ((w - minW[i]!) / slack) * take; });
+      descW = CONTENT_WIDTH - sumOthers();
+    }
+    widths[descI] = Math.max(descW, minW[descI]!);
+    // Last resort (far too many columns): scale everything down proportionally to fit the page.
+    const total = widths.reduce((sum, w) => sum + w, 0);
+    const scale = total > CONTENT_WIDTH ? CONTENT_WIDTH / total : 1;
+    cols.forEach((col, i) => { col.width = widths[i]! * scale; });
   }
 
   let colX = MARGIN_LEFT;
@@ -434,26 +517,8 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     const amount = unitPrice * item.quantity;
     itemsSubtotal += amount;
 
-    const rowUnit = (item.unit || "").trim();
-    const rowQuantity = commonUnit
-      ? String(item.quantity)
-      : rowUnit
-        ? `${item.quantity} ${rowUnit}`
-        : String(item.quantity);
-    const rowWeightUnit = (item.weightUnit || "").trim();
-    const withWeightUnit = (text: string) => (commonWeightUnit || !rowWeightUnit ? text : `${text} ${rowWeightUnit}`);
-    const unitWeight = num(item.unitWeight);
-    const cellText: Record<ColKey, string> = {
-      hsn: item.hsnCode || "",
-      desc: item.itemName,
-      qty: rowQuantity,
-      unitWt: unitWeight > 0 ? withWeightUnit(fmtWeight(unitWeight)) : "",
-      totalWt: unitWeight > 0 ? withWeightUnit(fmtWeight(unitWeight * item.quantity)) : "",
-      rate: item.rate != null ? (commonWeightUnit || !rowWeightUnit ? fmtAmount(num(item.rate)) : `${fmtAmount(num(item.rate))}/${rowWeightUnit}`) : "",
-      unitPrice: unitPriceText(item),
-      amount: fmtAmount(amount),
-    };
-    const rowValues = cols.map((c) => cellText[c.key]);
+    const cellText = cellTextsFor(item);
+    const rowValues = cols.map((c) => cellText[c.key] ?? "");
     const description = (item.description || "").trim();
     const descColWidth = cols[descIdx]!.width - 10;
     const nameHeight = doc.font(FONT_BODY_BOLD).fontSize(8.5).heightOfString(item.itemName, { width: descColWidth });
@@ -516,46 +581,53 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     doc
       .fillColor(BLACK)
       .font(FONT_BODY_BOLD)
-      .fontSize(8.5)
+      .fontSize(9)
       .text(`Value Added Tax @ ${taxPercent}%`, MARGIN_LEFT + labelColsWidth + 8, y + 6, { width: qtyUnitPriceW - 16 })
       .text(fmtAmount(vatAmount), MARGIN_LEFT + labelColsWidth + qtyUnitPriceW, y + 6, { width: amountW - 10, align: "right" });
     y += vatRowH;
   }
 
-  // ---- Amount in Words (navy, bold italic white) + Grand Total (light bg, left-aligned) —
-  // merged HSN+Description+Qty for the words, then Unit-Price-width label cell, then
-  // Amount-width value cell, matching the reference exactly. ----
+  // ---- Amount in Words (navy, bold italic white) + Grand Total (light bg, left-aligned). The
+  // grand total block takes the width its label and a large, one-line figure ("Rupees 9,107,972.00")
+  // need: at least the Unit Price + Amount columns, growing leftwards into the words cell (which
+  // always keeps at least 40% of its width). The figure only shrinks if it still doesn't fit. ----
   const amountWordsText = `Amount in Words: ${amountToWords(grandTotal, po.currency?.trim() || "Rupees")}.`;
-  const totalRowH = Math.max(30, doc.font(FONT_BODY_BOLD_ITALIC).fontSize(8.5).heightOfString(amountWordsText, { width: hsnDescQtyW - 16 }) + 12);
+  const grandLabelSize = 10.5;
+  const grandTotalText = `${po.currency?.trim() || "Rupees"} ${fmtAmount(grandTotal)}`;
+  doc.font(FONT_BODY_BOLD).fontSize(grandLabelSize);
+  const grandLabelW = doc.widthOfString("GRAND TOTAL") + 22;
+  doc.fontSize(grandLabelSize);
+  const grandValueNeeded = doc.widthOfString(grandTotalText) + 18;
+  const grandBlockMin = unitPriceW + amountW;
+  const grandBlockW = Math.min(Math.max(grandBlockMin, grandLabelW + grandValueNeeded), grandBlockMin + hsnDescQtyW * 0.6);
+  const wordsW = CONTENT_WIDTH - grandBlockW;
+  const grandX = MARGIN_LEFT + wordsW;
+  const totalRowH = Math.max(32, doc.font(FONT_BODY_BOLD_ITALIC).fontSize(8.5).heightOfString(amountWordsText, { width: wordsW - 16 }) + 12);
 
   ensureSpace(totalRowH);
-  doc.rect(MARGIN_LEFT, y, hsnDescQtyW, totalRowH).fill(NAVY);
+  doc.rect(MARGIN_LEFT, y, wordsW, totalRowH).fill(NAVY);
   doc
     .fillColor("#ffffff")
     .font(FONT_BODY_BOLD_ITALIC)
     .fontSize(8.5)
-    .text(amountWordsText, MARGIN_LEFT + 8, y + (totalRowH - doc.heightOfString(amountWordsText, { width: hsnDescQtyW - 16 })) / 2, {
-      width: hsnDescQtyW - 16,
+    .text(amountWordsText, MARGIN_LEFT + 8, y + (totalRowH - doc.heightOfString(amountWordsText, { width: wordsW - 16 })) / 2, {
+      width: wordsW - 16,
     });
 
-  doc.rect(MARGIN_LEFT + hsnDescQtyW, y, unitPriceW, totalRowH).fill(LIGHT_BG);
-  doc.rect(MARGIN_LEFT + hsnDescQtyW + unitPriceW, y, amountW, totalRowH).fill(LIGHT_BG);
+  doc.rect(grandX, y, grandBlockW, totalRowH).fill(LIGHT_BG);
   doc
     .fillColor(BLACK)
     .font(FONT_BODY_BOLD)
-    .fontSize(8.5)
-    .text("GRAND TOTAL", MARGIN_LEFT + hsnDescQtyW + 8, y + (totalRowH - 9) / 2, { width: unitPriceW - 16 });
-  // The grand total sits in the narrow Amount column: shrink the font until "USD 83,699.10"-style
-  // values fit on one line instead of wrapping the currency onto its own row.
-  const grandTotalText = `${po.currency?.trim() || "Rupees"} ${fmtAmount(grandTotal)}`;
-  const grandTotalMaxW = amountW - 12;
-  let grandTotalSize = 9.5;
+    .fontSize(grandLabelSize)
+    .text("GRAND TOTAL", grandX + 8, y + (totalRowH - grandLabelSize) / 2, { width: grandLabelW - 8, lineBreak: false });
+  const grandTotalMaxW = grandBlockW - grandLabelW - 8;
+  let grandTotalSize = grandLabelSize; // same size as the "GRAND TOTAL" label
   doc.font(FONT_BODY_BOLD).fontSize(grandTotalSize);
   while (grandTotalSize > 6 && doc.widthOfString(grandTotalText) > grandTotalMaxW) {
     grandTotalSize -= 0.5;
     doc.fontSize(grandTotalSize);
   }
-  doc.text(grandTotalText, MARGIN_LEFT + hsnDescQtyW + unitPriceW + 6, y + (totalRowH - grandTotalSize) / 2, {
+  doc.text(grandTotalText, grandX + grandLabelW, y + (totalRowH - grandTotalSize) / 2, {
     width: grandTotalMaxW,
     lineBreak: false,
   });

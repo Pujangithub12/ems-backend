@@ -1086,6 +1086,8 @@ model PurchaseOrder {
   customerPhone         String?   @db.VarChar
   /// Free-text currency label for the PDF's "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset, see purchaseOrderPdf.ts.
   currency              String?   @db.VarChar
+  /// User-defined extra columns of the line-items table, as [{ "key": "c1", "label": "Brand" }, ...] — values live in PurchaseOrderItem.customValues keyed by `key`. Printed on the PDF between Quantity and Unit Price.
+  itemColumns           Json?
   /// "local" | "international" — drives whether Insurance/Customs apply, see PurchaseType in types/domain.ts
   purchaseType          String    @default("local") @db.VarChar
   status                String    @default("created") @db.VarChar
@@ -1399,6 +1401,8 @@ model PurchaseOrderItem {
   description          String?
   /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
   hsnCode              String?   @db.VarChar
+  /// Values for the PO's custom columns (PurchaseOrder.itemColumns), as { "<column key>": "text" }.
+  customValues         Json?
   /// The following let the Finance cost-breakdown page override this item's computed share of
   /// the PO's freight/LC charge/LC commission/VAT/import duties/insurance (normally prorated
   /// from Shipment/Customs/Insurance/LetterOfCredit by this item's value share — see
