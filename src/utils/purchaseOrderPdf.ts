@@ -356,11 +356,13 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     .filter((c: { key: string; label: string }) => c.key && c.label && po.items.some((i) => customValueOf(i, c.key).trim()));
   type ColKey = string;
   const colUnits: Record<ColKey, number> = weightMode
-    ? { hsn: 900, desc: 3000, qty: 1000, unitWt: 1050, totalWt: 1150, rate: 1250, unitPrice: 1250, amount: 1350 }
-    : { hsn: 1090, desc: 4580, qty: 1158, unitWt: 0, totalWt: 0, rate: 0, unitPrice: 1522, amount: 1294 };
+    ? { sn: 450, hsn: 900, desc: 3000, qty: 1000, unitWt: 1050, totalWt: 1150, rate: 1250, unitPrice: 1250, amount: 1350 }
+    : { sn: 520, hsn: 1090, desc: 4580, qty: 1158, unitWt: 0, totalWt: 0, rate: 0, unitPrice: 1522, amount: 1294 };
   const colOrder: ColKey[] = weightMode
-    ? ["hsn", "desc", "qty", "unitWt", "totalWt", "rate", "unitPrice", "amount"]
-    : ["hsn", "desc", "qty", "unitPrice", "amount"];
+    ? ["sn", "desc", "hsn", "qty", "unitWt", "totalWt", "rate", "unitPrice", "amount"]
+    : ["sn", "desc", "hsn", "qty", "unitPrice", "amount"];
+  // The HSN Code column only appears when at least one item has a code.
+  if (!po.items.some((i) => (i.hsnCode || "").trim())) colOrder.splice(colOrder.indexOf("hsn"), 1);
   for (const c of customCols) {
     colUnits[`x:${c.key}`] = 1100;
     colOrder.splice(colOrder.indexOf("qty") + 1, 0, `x:${c.key}`);
@@ -382,6 +384,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const commonWeightUnit = commonUnitOf(po.items.map((i) => i.weightUnit));
   const rateCurrency = po.currency?.trim() || "Rs";
   const colLabels: Record<ColKey, string> = {
+    sn: "S.N.",
     hsn: "HSN Code",
     desc: "Product Description",
     qty: commonUnit ? `Quantity (${commonUnit})` : "Quantity",
@@ -396,7 +399,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     key,
     label: colLabels[key] ?? "",
     width: (CONTENT_WIDTH * (colUnits[key] ?? 0)) / colUnitSum,
-    align: key === "hsn" || key === "desc" || key.startsWith("x:") ? undefined : ("right" as const),
+    align: key === "sn" || key === "hsn" || key === "desc" || key.startsWith("x:") ? undefined : ("right" as const),
   }));
   const colIdx = (key: ColKey) => cols.findIndex((c) => c.key === key);
 
@@ -412,13 +415,14 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
     return perUnit ? `${price} ${perUnit}` : price;
   };
   // The text shown in every column of one item's row (shared by the width fitting below and the drawing loop).
-  const cellTextsFor = (item: PurchaseOrderPdfItem): Record<ColKey, string> => {
+  const cellTextsFor = (item: PurchaseOrderPdfItem, index: number): Record<ColKey, string> => {
     const rowUnit = (item.unit || "").trim();
     const rowQuantity = commonUnit ? String(item.quantity) : rowUnit ? `${item.quantity} ${rowUnit}` : String(item.quantity);
     const rowWeightUnit = (item.weightUnit || "").trim();
     const withWeightUnit = (text: string) => (commonWeightUnit || !rowWeightUnit ? text : `${text} ${rowWeightUnit}`);
     const unitWeight = num(item.unitWeight);
     const texts: Record<ColKey, string> = {
+      sn: String(index + 1),
       hsn: item.hsnCode || "",
       desc: item.itemName,
       qty: rowQuantity,
@@ -458,7 +462,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       prefW.push(col.width);
     } else if (NUMERIC_KEYS.has(col.key)) {
       let full = Math.max(0, ...texts.map((t) => widthOfText(t, FONT_BODY, 8.5)));
-      if (col.key === "amount" && estVatText) full = Math.max(full, widthOfText(estVatText, FONT_BODY_BOLD, 9));
+      if (col.key === "amount" && estVatText) full = Math.max(full, widthOfText(estVatText, FONT_BODY_BOLD, 9.5), widthOfText(fmtAmount(estSubtotal), FONT_BODY_BOLD, 9.5));
       const need = Math.max(full, headerWord) + fitPad;
       minW.push(need);
       prefW.push(Math.max(need, col.width));
@@ -512,12 +516,12 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
 
   const descIdx = colIdx("desc");
   let itemsSubtotal = 0;
-  for (const item of po.items) {
+  for (const [itemIdx, item] of po.items.entries()) {
     const unitPrice = effectiveUnitPrice(item);
     const amount = unitPrice * item.quantity;
     itemsSubtotal += amount;
 
-    const cellText = cellTextsFor(item);
+    const cellText = cellTextsFor(item, itemIdx);
     const rowValues = cols.map((c) => cellText[c.key] ?? "");
     const description = (item.description || "").trim();
     const descColWidth = cols[descIdx]!.width - 10;
@@ -571,17 +575,26 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const hsnDescQtyW = cols.slice(0, unitPriceIdx).reduce((sum, c) => sum + c.width, 0);
   const unitPriceW = cols[unitPriceIdx]!.width;
   const amountW = cols[unitPriceIdx + 1]!.width;
-  const labelColsWidth = cols[0]!.width + cols[1]!.width;
+  const labelColsWidth = cols.filter((c) => c.key === "sn" || c.key === "desc" || c.key === "hsn").reduce((sum, c) => sum + c.width, 0);
   const qtyUnitPriceW = hsnDescQtyW - labelColsWidth + unitPriceW;
 
   if (taxPercent > 0) {
     const vatRowH = 20;
-    ensureSpace(vatRowH + 40); // keep the VAT row with the grand total below it
+    ensureSpace(vatRowH * 2 + 40); // keep the Total + VAT rows with the grand total below them
+    // Total of the item amounts above, before VAT (only shown when there is a VAT row under it).
     doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, vatRowH).fill(LIGHT_BG);
     doc
       .fillColor(BLACK)
       .font(FONT_BODY_BOLD)
-      .fontSize(9)
+      .fontSize(9.5)
+      .text("Total", MARGIN_LEFT + labelColsWidth + 8, y + 6, { width: qtyUnitPriceW - 16, align: "right" })
+      .text(fmtAmount(itemsSubtotal), MARGIN_LEFT + labelColsWidth + qtyUnitPriceW, y + 6, { width: amountW - 10, align: "right" });
+    y += vatRowH;
+    doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, vatRowH).fill(LIGHT_BG);
+    doc
+      .fillColor(BLACK)
+      .font(FONT_BODY_BOLD)
+      .fontSize(9.5)
       .text(`Value Added Tax @ ${taxPercent}%`, MARGIN_LEFT + labelColsWidth + 8, y + 6, { width: qtyUnitPriceW - 16, align: "right" })
       .text(fmtAmount(vatAmount), MARGIN_LEFT + labelColsWidth + qtyUnitPriceW, y + 6, { width: amountW - 10, align: "right" });
     y += vatRowH;
@@ -592,7 +605,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // need: at least the Unit Price + Amount columns, growing leftwards into the words cell (which
   // always keeps at least 40% of its width). The figure only shrinks if it still doesn't fit. ----
   const amountWordsText = `Amount in Words: ${amountToWords(grandTotal, po.currency?.trim() || "Rupees")}.`;
-  const grandLabelSize = 10.5;
+  const grandLabelSize = 9.5;
   const grandTotalText = `${po.currency?.trim() || "Rupees"} ${fmtAmount(grandTotal)}`;
   doc.font(FONT_BODY_BOLD).fontSize(grandLabelSize);
   const grandLabelW = doc.widthOfString("GRAND TOTAL") + 22;
