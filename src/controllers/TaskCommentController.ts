@@ -36,12 +36,12 @@ export class TaskCommentController {
       const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      // Only the assigner (creator) and the assignees may view/comment on a task.
+      // Writing a progress update is the assignee's job — the assigner reviews
+      // it and gives feedback instead (see addFeedback below).
       const isAssigned = task.assignedUsers.some(
         (assigned) => assigned.userId === user.id,
       );
-      const isCreator = task.createdById === user.id;
-      if (!isAssigned && !isCreator && req.user?.role !== "super_admin")
+      if (!isAssigned && req.user?.role !== "super_admin")
         return res.status(403).json({ message: "Forbidden" });
 
       const created = await prisma.taskComment.create({
@@ -92,22 +92,29 @@ export class TaskCommentController {
     }
   };
 
-  static addFeedback = async (req: Request, res: Response) => {
+  static addFeedback = async (req: AuthRequest, res: Response) => {
     const { taskId, commentId } = req.params;
     const { feedback }: AddFeedbackDto = req.body;
 
-    if (!feedback)
+    if (!feedback || !feedback.trim())
       return res.status(400).json({ message: "Feedback is required" });
 
     try {
       const comment = await prisma.taskComment.findUnique({
         where: { id: parseInt(commentId as string) },
-        include: { author: true },
+        include: { author: true, task: true },
       });
 
       if (!comment || comment.taskId !== parseInt(taskId as string)) {
         return res.status(404).json({ message: "Comment not found" });
       }
+
+      // Only the person who assigned this task may give feedback on the
+      // assignee's progress update — a super_admin can too, as a fallback in
+      // case the original assigner's account was removed.
+      const isAssigner = comment.task?.createdById === req.user?.id;
+      if (!isAssigner && req.user?.role !== "super_admin")
+        return res.status(403).json({ message: "Forbidden" });
 
       const updated = await prisma.taskComment.update({
         where: { id: comment.id },
@@ -119,6 +126,48 @@ export class TaskCommentController {
       return res
         .status(200)
         .json({ message: "Feedback added", comment: responseComment });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /**
+   * Standalone feedback from the assigner, not tied to any progress update —
+   * stored as a TaskComment with empty commentText so it shows up in the same
+   * list (the frontend renders empty-text entries as feedback-only).
+   */
+  static addStandaloneFeedback = async (req: AuthRequest, res: Response) => {
+    const { taskId } = req.params;
+    const { feedback }: AddFeedbackDto = req.body;
+
+    if (!feedback || !feedback.trim())
+      return res.status(400).json({ message: "Feedback is required" });
+
+    try {
+      const task = await prisma.task.findUnique({
+        where: { id: parseInt(taskId as string) },
+      });
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      if (task.createdById !== user.id && req.user?.role !== "super_admin")
+        return res.status(403).json({ message: "Forbidden" });
+
+      const created = await prisma.taskComment.create({
+        data: {
+          commentText: "",
+          feedback: feedback.trim(),
+          authorId: user.id,
+          taskId: task.id,
+        },
+      });
+      const comment: any = { ...created, author: user };
+      sanitizeAuthor(comment);
+
+      return res.status(201).json({ message: "Feedback added", comment });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });

@@ -3,7 +3,7 @@ import { AuthRequest } from "../middlewares/auth";
 import { ScheduleService } from "../services/schedule.service";
 import { validateScheduleTasks, validateScheduleLinks, ValidationError } from "../dto/schedule.dto";
 
-// schedule endpoints (get/save) — schedule tab and task tab share the Task table (see schedule.service.ts)
+// schedule endpoints (get/save) — the Schedule tab has its own storage, separate from the Task table (see schedule.service.ts)
 export class ScheduleController {
   constructor(private scheduleService: ScheduleService) {}
 
@@ -39,7 +39,6 @@ export class ScheduleController {
       const saved = await this.scheduleService.saveSchedule(
         projectId,
         req.organization!.id,
-        req.user?.id ?? null,
         tasks,
         links,
       );
