@@ -33,7 +33,7 @@ async function canEditFinance(role: string) {
 
 const PO_FINANCE_INCLUDE = {
   vendor: true,
-  items: true,
+  items: { orderBy: { id: "asc" as const } },
   payments: { orderBy: { paidDate: "desc" as const } },
   shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
   proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" as const } },
@@ -691,7 +691,7 @@ export class FinanceController {
           ...(req.user!.role === UserRole.ADMIN ? { createdById: req.user!.id } : {}),
         },
         include: {
-          items: true,
+          items: { orderBy: { id: "asc" as const } },
           shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
           proformaInvoices: { include: { items: true }, orderBy: { updatedAt: "desc" as const } },
         },
@@ -757,7 +757,7 @@ export class FinanceController {
         },
         include: {
           vendor: true,
-          items: true,
+          items: { orderBy: { id: "asc" as const } },
           shipment: { include: { insurance: true, customs: true, letterOfCredit: true } },
           // Needed by computeCostSheetFromData (via buildPoCostBreakdownRows) — included here
           // so that computation doesn't have to re-fetch this same PO a second time.

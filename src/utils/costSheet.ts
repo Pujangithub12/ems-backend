@@ -195,7 +195,7 @@ export async function computeCostSheet(purchaseOrderId: number): Promise<CostShe
       where: { id: purchaseOrderId },
       include: { shipment: { include: { insurance: true, customs: true, letterOfCredit: true } } },
     }),
-    prisma.purchaseOrderItem.findMany({ where: { purchaseOrderId } }),
+    prisma.purchaseOrderItem.findMany({ where: { purchaseOrderId }, orderBy: { id: "asc" } }),
     prisma.proformaInvoice.findMany({ where: { purchaseOrderId }, include: { items: true }, orderBy: { updatedAt: "desc" } }),
   ]);
   if (!purchaseOrder) return null;
