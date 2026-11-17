@@ -19,12 +19,12 @@ import { Prisma } from "../generated/prisma/client";
 
 const SPEC_TABLES_INCLUDE = { orderBy: { orderIndex: "asc" as const }, include: { rows: { orderBy: { orderIndex: "asc" as const } } } };
 
-const PDF_INCLUDE = { vendor: true, organization: true, items: true, specTables: SPEC_TABLES_INCLUDE } as const;
+const PDF_INCLUDE = { vendor: true, organization: true, items: { orderBy: { id: "asc" as const } }, specTables: SPEC_TABLES_INCLUDE } as const;
 
 const LIST_INCLUDE = {
   vendor: true,
   project: true,
-  items: true,
+  items: { orderBy: { id: "asc" as const } },
   createdBy: { select: { id: true, fullName: true } },
   shipment: { select: { status: true } },
 } as const;
@@ -91,7 +91,7 @@ export class PurchaseOrderController {
           shipment: { include: { insurance: true, customs: { include: { documents: true } }, letterOfCredit: true } },
         },
       }),
-      prisma.purchaseOrderItem.findMany({ where: { purchaseOrderId: id }, include: { item: true } }),
+      prisma.purchaseOrderItem.findMany({ where: { purchaseOrderId: id }, include: { item: true }, orderBy: { id: "asc" } }),
       prisma.purchaseOrderSpecTable.findMany({
         where: { purchaseOrderId: id },
         orderBy: { orderIndex: "asc" },
@@ -248,7 +248,7 @@ export class PurchaseOrderController {
 
       const purchaseOrder = await prisma.purchaseOrder.findUnique({
         where: { id: createdPo.id },
-        include: { vendor: true, project: true, items: true },
+        include: { vendor: true, project: true, items: { orderBy: { id: "asc" as const } } },
       });
 
       return res.status(201).json({ message: "Purchase order created", purchaseOrder });
