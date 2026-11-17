@@ -1104,10 +1104,14 @@ router.get(
   authMiddleware,
   TaskCommentController.getTaskComments,
 );
+router.post(
+  "/tasks/:taskId/feedback",
+  authMiddleware,
+  TaskCommentController.addStandaloneFeedback,
+);
 router.put(
   "/tasks/:taskId/comments/:commentId/feedback",
   authMiddleware,
-  permissionMiddleware("tasks.feedback"),
   TaskCommentController.addFeedback,
 );
 
@@ -1255,6 +1259,12 @@ router.post(
   authMiddleware,
   permissionMiddleware("calendar.manage"),
   CalendarEventController.createEvent,
+);
+router.post(
+  "/events/copy",
+  authMiddleware,
+  permissionMiddleware("calendar.manage"),
+  CalendarEventController.copyEvents,
 );
 router.delete(
   "/events/:id",

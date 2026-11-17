@@ -1857,10 +1857,12 @@ model RolePermission {
   @@map("role_permission")
 }
 
-/// Deprecated — superseded by Task's parentTaskId/startDate/duration/orderIndex
-/// columns (Schedule and Task tabs now share the Task table). Left in place,
-/// unwritten by new code, for historical/rollback safety; see
-/// migrate-schedule-to-task.ts for the one-off backfill into Task.
+/// The project Schedule (Gantt) tab's own rows — deliberately separate from Task, so a
+/// schedule row is never a task on the Tasks tab/Kanban board (and vice versa). `taskId` is
+/// the client-assigned row id the Gantt uses (parentId and dependency links refer to it).
+/// Full-replaced per project on every save (see schedule.service.ts). The Task columns
+/// startDate/duration/parentTaskId/orderIndex and the TaskLink table below are legacy from
+/// the period when the two tabs shared Task; see migrate-task-to-schedule.ts.
 model ScheduleTask {
   id            Int                @id(map: "PK_b184187cc1517c0972cedc4f0b6") @default(autoincrement())
   projectId     Int
@@ -1869,7 +1871,7 @@ model ScheduleTask {
   duration      Float?
   startDate     DateTime?          @db.Date
   parentId      String?            @db.VarChar
-  /// Deprecated — superseded by ScheduleTaskLink (real FK-backed table with dependency type + lag). Left in place, unwritten by new code, for historical/rollback safety; see ScheduleTaskLink for the current model.
+  /// Deprecated — superseded by ScheduleTaskLink (real FK-backed table with dependency type + lag); no longer written.
   predecessorId String?            @db.VarChar
   orderIndex    Int                @default(0)
   createdAt     DateTime           @default(now()) @db.Timestamp(6)
@@ -1884,9 +1886,7 @@ model ScheduleTask {
   @@map("schedule_task")
 }
 
-/// Deprecated — superseded by TaskLink (same shape, FK-backed against Task
-/// instead of ScheduleTask). Left in place, unwritten by new code, for
-/// historical/rollback safety.
+/// Dependency links between ScheduleTask rows (FS/SS/FF/SF + lag) for the Schedule tab.
 model ScheduleTaskLink {
   id            Int      @id @default(autoincrement())
   projectId     Int
@@ -1998,9 +1998,8 @@ model Task {
   projectName                String?         @db.VarChar
   createdById                Int?
   organizationId             Int?            @map("workspaceId")
-  /// Gantt hierarchy (Schedule tab) — self-referential, arbitrary depth.
-  /// Independent of projectHeadingId, which stays the orthogonal Kanban
-  /// grouping concept; a task can have both.
+  /// Legacy Gantt hierarchy — only set on rows created while the Schedule tab
+  /// shared this table; the Schedule tab now uses ScheduleTask instead.
   parentTaskId               Int?
   /// Gantt-only (Schedule tab). dueDate above stays the Kanban-owned
   /// deadline; the two are never auto-synced.
