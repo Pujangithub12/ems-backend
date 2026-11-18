@@ -22,6 +22,8 @@ export interface PurchaseOrderPdfItem {
   /** Optional label shown under the unit price, typed as e.g. "/ kg" or "per gm". */
   perUnit?: string | null;
   hsnCode?: string | null;
+  /** Whether VAT applies to this line (default true) — the PO's Tax % is only charged on taxable lines. */
+  taxable?: boolean;
   /** Values of the PO's user-defined columns, { [column key]: text } (JSON from Prisma, hence unknown). */
   customValues?: unknown;
   /** Entered on the Overview tab's "Add Item" form — shown under the item name in the Product Description cell. */
@@ -450,7 +452,8 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   const allCellTexts = po.items.map(cellTextsFor);
   const estSubtotal = po.items.reduce((sum, i) => sum + effectiveUnitPrice(i) * i.quantity, 0);
   const estTaxPercent = num(po.taxPercent);
-  const estVatText = estTaxPercent > 0 ? fmtAmount(estSubtotal * (estTaxPercent / 100)) : "";
+  const estTaxableSubtotal = po.items.reduce((sum, i) => (i.taxable === false ? sum : sum + effectiveUnitPrice(i) * i.quantity), 0);
+  const estVatText = estTaxPercent > 0 ? fmtAmount(estTaxableSubtotal * (estTaxPercent / 100)) : "";
   const minW: number[] = [];
   const prefW: number[] = [];
   cols.forEach((col) => {
@@ -567,7 +570,9 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // ---- Value Added Tax row (only when a tax % is set) — full row shaded light, label
   // left-aligned under Qty+Unit Price (merged), amount right-aligned under Amount. ----
   const taxPercent = num(po.taxPercent);
-  const vatAmount = taxPercent > 0 ? itemsSubtotal * (taxPercent / 100) : 0;
+  // VAT is charged only on lines marked taxable; non-taxable lines stay in the total but not in the VAT base.
+  const taxableSubtotal = po.items.reduce((sum, i) => (i.taxable === false ? sum : sum + effectiveUnitPrice(i) * i.quantity), 0);
+  const vatAmount = taxPercent > 0 ? taxableSubtotal * (taxPercent / 100) : 0;
   const grandTotal = itemsSubtotal + vatAmount;
 
   // Totals rows span the columns: everything before Unit Price (words / VAT label), Unit Price
