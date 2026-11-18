@@ -1404,6 +1404,8 @@ model PurchaseOrderItem {
   description          String?
   /// HS (Harmonized System) customs code for the PO PDF's line-item table — filled in manually, usually only relevant for international purchases.
   hsnCode              String?   @db.VarChar
+  /// Whether this line is subject to VAT. The PO's Tax % (PurchaseOrder.taxPercent) is applied only to taxable lines — non-taxable ones are still part of the total, just not of the VAT base.
+  taxable              Boolean   @default(true)
   /// Values for the PO's custom columns (PurchaseOrder.itemColumns), as { "<column key>": "text" }.
   customValues         Json?
   /// The following let the Finance cost-breakdown page override this item's computed share of

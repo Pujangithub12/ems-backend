@@ -307,6 +307,7 @@ export class PurchaseOrderController {
     const { id } = req.params;
     const {
       poNumber,
+      projectId,
       poDate,
       paymentTerms,
       incoterms,
@@ -356,6 +357,15 @@ export class PurchaseOrderController {
           return res.status(400).json({ message: `PO number "${trimmed}" is already in use by another purchase order` });
         }
         data.poNumber = trimmed;
+      }
+      if (projectId !== undefined) {
+        if (projectId === null) {
+          data.projectId = null;
+        } else {
+          const project = await prisma.project.findFirst({ where: { id: Number(projectId), organizationId: req.organization!.id }, select: { id: true } });
+          if (!project) return res.status(404).json({ message: "Project not found" });
+          data.projectId = project.id;
+        }
       }
       if (poDate !== undefined) data.poDate = poDate ? new Date(poDate) : null;
       if (paymentTerms !== undefined) data.paymentTerms = paymentTerms;
@@ -445,7 +455,7 @@ export class PurchaseOrderController {
    * time). Same edit permission as updatePurchaseOrder. */
   static addPurchaseOrderItem = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { itemName, itemId, hsnCode, customValues, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: AddPurchaseOrderItemDto = req.body;
+    const { itemName, itemId, hsnCode, taxable, customValues, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: AddPurchaseOrderItemDto = req.body;
 
     if (typeof itemName !== "string" || !itemName.trim()) {
       return res.status(400).json({ message: "Item name is required" });
@@ -475,6 +485,7 @@ export class PurchaseOrderController {
           itemName: itemName.trim(),
           itemId: itemId ?? null,
           hsnCode: hsnCode?.trim() || null,
+          taxable: taxable ?? true,
           customValues: sanitizeCustomValues(customValues),
           quantity,
           unit: unit ?? null,
@@ -509,7 +520,7 @@ export class PurchaseOrderController {
    * Items table). Same edit permission as addPurchaseOrderItem. */
   static editPurchaseOrderItem = async (req: AuthRequest, res: Response) => {
     const { id, itemId } = req.params;
-    const { itemName, itemId: catalogItemId, hsnCode, customValues, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: EditPurchaseOrderItemDto =
+    const { itemName, itemId: catalogItemId, hsnCode, taxable, customValues, quantity, unit, unitPrice, perUnit, unitWeight, weightUnit, rate, description }: EditPurchaseOrderItemDto =
       req.body;
 
     if (typeof itemName !== "string" || !itemName.trim()) {
@@ -545,6 +556,7 @@ export class PurchaseOrderController {
           itemId: catalogItemId ?? null,
           // Only touched when the caller sends it, so older clients leave the stored HSN alone.
           ...(hsnCode !== undefined ? { hsnCode: hsnCode?.trim() || null } : {}),
+          ...(taxable !== undefined ? { taxable } : {}),
           ...(customValues !== undefined ? { customValues: sanitizeCustomValues(customValues) } : {}),
           quantity,
           unit: unit ?? null,

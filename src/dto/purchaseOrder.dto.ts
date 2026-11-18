@@ -32,6 +32,8 @@ export interface AddPurchaseOrderItemDto {
   itemName: string;
   itemId?: number | null;
   hsnCode?: string | null;
+  /** Whether VAT applies to this line (default true). */
+  taxable?: boolean;
   /** Values for the PO's custom columns, keyed by the column's `key` (see PurchaseOrder.itemColumns). */
   customValues?: Record<string, string> | null;
   quantity: number;
@@ -53,6 +55,8 @@ export interface EditPurchaseOrderItemDto {
   itemName: string;
   itemId?: number | null;
   hsnCode?: string | null;
+  /** Whether VAT applies to this line (default true). */
+  taxable?: boolean;
   /** Values for the PO's custom columns, keyed by the column's `key` (see PurchaseOrder.itemColumns). */
   customValues?: Record<string, string> | null;
   quantity: number;
@@ -94,6 +98,8 @@ export interface PurchaseOrderSpecTableDto {
 export interface UpdatePurchaseOrderDto {
   /** Auto-assigned at creation time (see PurchaseOrderController.createPurchaseOrder) but user-editable afterward — see the uniqueness check in PurchaseOrderController.updatePurchaseOrder. */
   poNumber?: string;
+  /** Assigns the PO to a project of the same organization, or null to detach it (a PO can be created without a project and linked later). */
+  projectId?: number | null;
   /** ISO date string ("YYYY-MM-DD") — pass null to clear back to unset (Overview tab then falls back to displaying today's date). */
   poDate?: string | null;
   paymentTerms?: string | null;
