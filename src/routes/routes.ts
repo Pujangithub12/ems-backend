@@ -22,6 +22,7 @@ import { RequisitionController } from "../controllers/RequisitionController";
 import { DebtorClaimController } from "../controllers/DebtorClaimController";
 import { ShipmentTrackingController } from "../controllers/ShipmentTrackingController";
 import { ProformaInvoiceController } from "../controllers/ProformaInvoiceController";
+import { ProcurementAccessController } from "../controllers/ProcurementAccessController";
 import { QuotationController } from "../controllers/QuotationController";
 import { ShipmentController } from "../controllers/ShipmentController";
 import { GoodsReceiptController } from "../controllers/GoodsReceiptController";
@@ -559,6 +560,10 @@ router.post(
   roleMiddleware([UserRole.ADMIN, UserRole.FINANCE, UserRole.SUPER_ADMIN]),
   PurchaseOrderController.createPurchaseOrder,
 );
+router.get("/procurement-access/purchase-orders", authMiddleware, ProcurementAccessController.get("purchaseOrder"));
+router.put("/procurement-access/purchase-orders", authMiddleware, ProcurementAccessController.save("purchaseOrder"));
+router.get("/procurement-access/proforma-invoices", authMiddleware, ProcurementAccessController.get("proformaInvoice"));
+router.put("/procurement-access/proforma-invoices", authMiddleware, ProcurementAccessController.save("proformaInvoice"));
 router.get("/purchase-orders/:id/detail", authMiddleware, cacheResponse("procurement", 30), PurchaseOrderController.getPurchaseOrderDetail);
 router.put(
   "/purchase-orders/:id",
@@ -644,7 +649,7 @@ router.put("/workspace/shipment-tracking/:id", authMiddleware, ShipmentTrackingC
 router.delete("/workspace/shipment-tracking/:id", authMiddleware, ShipmentTrackingController.remove);
 
 // Proforma Invoices
-router.get("/workspace/proforma-invoices", authMiddleware, cacheResponse("procurement", 30, { perUser: false }), ProformaInvoiceController.getAllProformaInvoices);
+router.get("/workspace/proforma-invoices", authMiddleware, cacheResponse("procurement", 30), ProformaInvoiceController.getAllProformaInvoices);
 router.post(
   "/purchase-orders/:id/proforma-invoices",
   authMiddleware,

@@ -44,6 +44,7 @@ export const CACHE_GROUPS: Record<string, string[]> = {
     "PurchaseOrderSpecTableRow",
     "ProformaInvoice",
     "ProformaInvoiceItem",
+    "ProcurementPageAccess",
     "Quotation",
     "Shipment",
     "Insurance",

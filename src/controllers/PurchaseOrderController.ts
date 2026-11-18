@@ -3,6 +3,7 @@ import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { UserRole } from "../types/enums";
 import { roleHasPermission } from "../utils/permissionService";
+import { accessLevelFor, visibleToWhere, withMyAccess } from "../utils/procurementAccess";
 import {
   CreatePurchaseOrderDto,
   UpdatePurchaseOrderDto,
@@ -120,7 +121,7 @@ export class PurchaseOrderController {
       const purchaseOrders = await prisma.purchaseOrder.findMany({
         where: {
           organizationId: req.organization!.id,
-          ...(req.user!.role === UserRole.ADMIN ? { createdById: req.user!.id } : {}),
+          ...(await visibleToWhere("purchaseOrder", req)),
         },
         include: LIST_INCLUDE,
         orderBy: { createdAt: "desc" },
@@ -128,7 +129,7 @@ export class PurchaseOrderController {
         // stops unbounded growth from degrading the page further as PO history accumulates.
         take: 500,
       });
-      return res.status(200).json({ purchaseOrders });
+      return res.status(200).json({ purchaseOrders: await withMyAccess("purchaseOrder", purchaseOrders, req) });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -148,12 +149,12 @@ export class PurchaseOrderController {
       const purchaseOrders = await prisma.purchaseOrder.findMany({
         where: {
           projectId: project.id,
-          ...(req.user!.role === UserRole.ADMIN ? { createdById: req.user!.id } : {}),
+          ...(await visibleToWhere("purchaseOrder", req)),
         },
         include: LIST_INCLUDE,
         orderBy: { createdAt: "desc" },
       });
-      return res.status(200).json({ purchaseOrders });
+      return res.status(200).json({ purchaseOrders: await withMyAccess("purchaseOrder", purchaseOrders, req) });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -266,11 +267,15 @@ export class PurchaseOrderController {
     return purchaseOrder;
   }
 
-  /** A plain admin may only see/act on POs they created themselves — finance/super_admin see
-   * everything. Used everywhere loadOwnedPurchaseOrder gates access to a specific PO. */
-  private static isVisibleTo(purchaseOrder: { createdById: number | null }, req: AuthRequest) {
-    if (req.user!.role !== UserRole.ADMIN) return true;
-    return purchaseOrder.createdById === req.user!.id;
+  /** A plain admin may only see/act on POs they created themselves or that were shared with them
+   * (see utils/procurementAccess.ts) — finance/super_admin see everything. Used everywhere loadOwnedPurchaseOrder gates access to a specific PO. */
+  private static async isVisibleTo(purchaseOrder: { id: number; createdById: number | null }, req: AuthRequest) {
+    return (await accessLevelFor("purchaseOrder", purchaseOrder, req)) !== null;
+  }
+
+  /** Writes need "edit" access: the creator, finance/super_admin, or an admin the PO was shared with at the "edit" level. */
+  private static async canEdit(purchaseOrder: { id: number; createdById: number | null }, req: AuthRequest) {
+    return (await accessLevelFor("purchaseOrder", purchaseOrder, req)) === "edit";
   }
 
   /** GET /purchase-orders/:id/detail — everything the PO detail screen needs across the whole downstream pipeline. */
@@ -278,13 +283,16 @@ export class PurchaseOrderController {
     const { id } = req.params;
     try {
       const owned = await PurchaseOrderController.loadOwnedPurchaseOrder(id as string, req.organization!.id);
-      if (!owned || !PurchaseOrderController.isVisibleTo(owned, req)) {
+      if (!owned || !(await PurchaseOrderController.isVisibleTo(owned, req))) {
         return res.status(404).json({ message: "Purchase order not found" });
       }
 
       const purchaseOrder = await PurchaseOrderController.loadPurchaseOrderDetail(owned.id);
+      if (!purchaseOrder) return res.status(404).json({ message: "Purchase order not found" });
 
-      return res.status(200).json({ purchaseOrder });
+      // What the caller may do with this PO, so the UI can lock editing for view-only page access.
+      const access = { canEdit: await PurchaseOrderController.canEdit(owned, req) };
+      return res.status(200).json({ purchaseOrder: { ...purchaseOrder, access } });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -326,8 +334,11 @@ export class PurchaseOrderController {
       if (!canEdit) return res.status(403).json({ message: "Forbidden" });
 
       const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id as string, req.organization!.id);
-      if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
+      if (!existing || !(await PurchaseOrderController.isVisibleTo(existing, req))) {
         return res.status(404).json({ message: "Purchase order not found" });
+      }
+      if (!(await PurchaseOrderController.canEdit(existing, req))) {
+        return res.status(403).json({ message: "You have view-only access to this purchase order." });
       }
 
       const previousStatus = existing.status;
@@ -451,8 +462,11 @@ export class PurchaseOrderController {
       if (!canEdit) return res.status(403).json({ message: "Forbidden" });
 
       const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id as string, req.organization!.id);
-      if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
+      if (!existing || !(await PurchaseOrderController.isVisibleTo(existing, req))) {
         return res.status(404).json({ message: "Purchase order not found" });
+      }
+      if (!(await PurchaseOrderController.canEdit(existing, req))) {
+        return res.status(403).json({ message: "You have view-only access to this purchase order." });
       }
 
       await prisma.purchaseOrderItem.create({
@@ -517,8 +531,11 @@ export class PurchaseOrderController {
         itemId as string,
         req.organization!.id,
       );
-      if (!loaded || !PurchaseOrderController.isVisibleTo(loaded.po, req)) {
+      if (!loaded || !(await PurchaseOrderController.isVisibleTo(loaded.po, req))) {
         return res.status(404).json({ message: "Purchase order item not found" });
+      }
+      if (!(await PurchaseOrderController.canEdit(loaded.po, req))) {
+        return res.status(403).json({ message: "You have view-only access to this purchase order." });
       }
 
       await prisma.purchaseOrderItem.update({
@@ -564,8 +581,11 @@ export class PurchaseOrderController {
         itemId as string,
         req.organization!.id,
       );
-      if (!loaded || !PurchaseOrderController.isVisibleTo(loaded.po, req)) {
+      if (!loaded || !(await PurchaseOrderController.isVisibleTo(loaded.po, req))) {
         return res.status(404).json({ message: "Purchase order item not found" });
+      }
+      if (!(await PurchaseOrderController.canEdit(loaded.po, req))) {
+        return res.status(403).json({ message: "You have view-only access to this purchase order." });
       }
 
       await prisma.purchaseOrderItem.delete({ where: { id: loaded.item.id } });
@@ -616,8 +636,11 @@ export class PurchaseOrderController {
       if (!canEdit) return res.status(403).json({ message: "Forbidden" });
 
       const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id as string, req.organization!.id);
-      if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
+      if (!existing || !(await PurchaseOrderController.isVisibleTo(existing, req))) {
         return res.status(404).json({ message: "Purchase order not found" });
+      }
+      if (!(await PurchaseOrderController.canEdit(existing, req))) {
+        return res.status(403).json({ message: "You have view-only access to this purchase order." });
       }
 
       await prisma.purchaseOrderPayment.create({
@@ -658,8 +681,11 @@ export class PurchaseOrderController {
         paymentId as string,
         req.organization!.id,
       );
-      if (!loaded || !PurchaseOrderController.isVisibleTo(loaded.po, req)) {
+      if (!loaded || !(await PurchaseOrderController.isVisibleTo(loaded.po, req))) {
         return res.status(404).json({ message: "Payment not found" });
+      }
+      if (!(await PurchaseOrderController.canEdit(loaded.po, req))) {
+        return res.status(403).json({ message: "You have view-only access to this purchase order." });
       }
 
       await prisma.purchaseOrderPayment.delete({ where: { id: loaded.payment.id } });
@@ -687,7 +713,7 @@ export class PurchaseOrderController {
     if (
       !purchaseOrder ||
       purchaseOrder.organizationId !== req.organization!.id ||
-      !PurchaseOrderController.isVisibleTo(purchaseOrder, req)
+      !(await PurchaseOrderController.isVisibleTo(purchaseOrder, req))
     ) {
       return null;
     }
@@ -791,7 +817,7 @@ export class PurchaseOrderController {
     const { id } = req.params;
     try {
       const existing = await PurchaseOrderController.loadOwnedPurchaseOrder(id as string, req.organization!.id);
-      if (!existing || !PurchaseOrderController.isVisibleTo(existing, req)) {
+      if (!existing || !(await PurchaseOrderController.isVisibleTo(existing, req))) {
         return res.status(404).json({ message: "Purchase order not found" });
       }
 

@@ -10,6 +10,7 @@ import { ProformaInvoiceStatus } from "../types/domain";
 import { buildProformaInvoicePdf, ProformaInvoicePdfData } from "../utils/proformaInvoicePdf";
 import { pdfDataWithBase64Images } from "../utils/pdfDataJson";
 import { downloadFileFromStorageCached } from "../config/supabaseStorage";
+import { accessLevelFor, visibleToWhere, withMyAccess } from "../utils/procurementAccess";
 
 const DETAIL_INCLUDE = {
   purchaseOrder: true,
@@ -88,6 +89,16 @@ async function resolveItemInputs(rawItems: ProformaInvoiceItemInput[] | undefine
 
 /** Proforma Invoice (procurement pipeline v2, step 4): PurchaseOrder -> ProformaInvoice -> Shipment/Insurance/Customs. */
 export class ProformaInvoiceController {
+  /** Plain admins only see PIs they created or that were shared with them (see utils/procurementAccess.ts). */
+  private static async canSee(pi: { id: number; createdById: number | null }, req: AuthRequest) {
+    return (await accessLevelFor("proformaInvoice", pi, req)) !== null;
+  }
+
+  /** Writes need "edit" access — a view-only share can read but not change a PI. */
+  private static async canEdit(pi: { id: number; createdById: number | null }, req: AuthRequest) {
+    return (await accessLevelFor("proformaInvoice", pi, req)) === "edit";
+  }
+
   private static async loadOwnedProformaInvoice(id: string, organizationId: number) {
     const proformaInvoice = await prisma.proformaInvoice.findFirst({
       where: { id: parseInt(id) },
@@ -101,14 +112,14 @@ export class ProformaInvoiceController {
   static getAllProformaInvoices = async (req: AuthRequest, res: Response) => {
     try {
       const proformaInvoices = await prisma.proformaInvoice.findMany({
-        where: { organizationId: req.organization!.id },
+        where: { organizationId: req.organization!.id, ...(await visibleToWhere("proformaInvoice", req)) },
         include: LIST_INCLUDE,
         orderBy: { createdAt: "desc" },
         // Safety cap, not real pagination — this endpoint has no page/pageSize UI, so this just
         // stops unbounded growth from degrading the page further as PI history accumulates.
         take: 500,
       });
-      return res.status(200).json({ proformaInvoices });
+      return res.status(200).json({ proformaInvoices: await withMyAccess("proformaInvoice", proformaInvoices, req) });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
@@ -156,6 +167,9 @@ export class ProformaInvoiceController {
         where: { id: parseInt(id as string), organizationId: req.organization!.id },
       });
       if (!purchaseOrder) return res.status(404).json({ message: "Purchase order not found" });
+      if ((await accessLevelFor("purchaseOrder", purchaseOrder, req)) !== "edit") {
+        return res.status(403).json({ message: "You don't have edit access to this purchase order." });
+      }
 
       let resolvedItems;
       try {
@@ -364,7 +378,12 @@ export class ProformaInvoiceController {
 
     try {
       const existing = await ProformaInvoiceController.loadOwnedProformaInvoice(id as string, req.organization!.id);
-      if (!existing) return res.status(404).json({ message: "Proforma invoice not found" });
+      if (!existing || !(await ProformaInvoiceController.canSee(existing, req))) {
+        return res.status(404).json({ message: "Proforma invoice not found" });
+      }
+      if (!(await ProformaInvoiceController.canEdit(existing, req))) {
+        return res.status(403).json({ message: "You have view-only access to this proforma invoice." });
+      }
 
       const data: any = {};
       if (piNumber !== undefined) data.piNumber = piNumber;
@@ -435,7 +454,12 @@ export class ProformaInvoiceController {
     const { id } = req.params;
     try {
       const existing = await ProformaInvoiceController.loadOwnedProformaInvoice(id as string, req.organization!.id);
-      if (!existing) return res.status(404).json({ message: "Proforma invoice not found" });
+      if (!existing || !(await ProformaInvoiceController.canSee(existing, req))) {
+        return res.status(404).json({ message: "Proforma invoice not found" });
+      }
+      if (!(await ProformaInvoiceController.canEdit(existing, req))) {
+        return res.status(403).json({ message: "You have view-only access to this proforma invoice." });
+      }
 
       await prisma.proformaInvoice.delete({ where: { id: existing.id } });
       return res.status(200).json({ message: "Proforma invoice deleted" });
@@ -452,7 +476,12 @@ export class ProformaInvoiceController {
 
     try {
       const existing = await ProformaInvoiceController.loadOwnedProformaInvoice(id as string, req.organization!.id);
-      if (!existing) return res.status(404).json({ message: "Proforma invoice not found" });
+      if (!existing || !(await ProformaInvoiceController.canSee(existing, req))) {
+        return res.status(404).json({ message: "Proforma invoice not found" });
+      }
+      if (!(await ProformaInvoiceController.canEdit(existing, req))) {
+        return res.status(403).json({ message: "You have view-only access to this proforma invoice." });
+      }
 
       await prisma.proformaInvoice.update({ where: { id: existing.id }, data: { status } });
 
@@ -475,7 +504,12 @@ export class ProformaInvoiceController {
 
     try {
       const existing = await ProformaInvoiceController.loadOwnedProformaInvoice(itemId as string, req.organization!.id);
-      if (!existing) return res.status(404).json({ message: "Proforma invoice not found" });
+      if (!existing || !(await ProformaInvoiceController.canSee(existing, req))) {
+        return res.status(404).json({ message: "Proforma invoice not found" });
+      }
+      if (!(await ProformaInvoiceController.canEdit(existing, req))) {
+        return res.status(403).json({ message: "You have view-only access to this proforma invoice." });
+      }
 
       const proformaInvoice = await prisma.proformaInvoice.update({
         where: { id: existing.id },
@@ -503,6 +537,7 @@ export class ProformaInvoiceController {
       include: PDF_INCLUDE,
     });
     if (!proformaInvoice || proformaInvoice.organizationId !== req.organization!.id) return null;
+    if (!(await ProformaInvoiceController.canSee(proformaInvoice, req))) return null;
 
     const organization = proformaInvoice.purchaseOrder?.organization ?? proformaInvoice.organization;
     const loadOrgImage = async (key: string | null | undefined) => {
