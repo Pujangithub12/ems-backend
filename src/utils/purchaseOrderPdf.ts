@@ -593,7 +593,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
       .fillColor(BLACK)
       .font(FONT_BODY_BOLD)
       .fontSize(9.5)
-      .text("Total", MARGIN_LEFT + labelColsWidth + 8, y + 6, { width: qtyUnitPriceW - 16, align: "right" })
+      .text("Sub Total", MARGIN_LEFT + labelColsWidth + 8, y + 6, { width: qtyUnitPriceW - 16, align: "right" })
       .text(fmtAmount(itemsSubtotal), MARGIN_LEFT + labelColsWidth + qtyUnitPriceW, y + 6, { width: amountW - 10, align: "right" });
     y += vatRowH;
     doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, vatRowH).fill(LIGHT_BG);
