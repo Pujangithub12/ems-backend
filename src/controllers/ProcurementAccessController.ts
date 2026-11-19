@@ -2,7 +2,7 @@ import { Response } from "express";
 import { prisma } from "../config/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { UserRole } from "../types/enums";
-import { AccessKind, canManagePageAccess, PAGE_OF, pageAccessLevel } from "../utils/procurementAccess";
+import { AccessKind, canManagePageAccess, GRANTABLE_ROLES, PAGE_OF, pageAccessLevel } from "../utils/procurementAccess";
 
 type SaveAccessDto = { grants?: { userId?: unknown; level?: unknown }[] };
 
@@ -16,17 +16,16 @@ async function buildPayload(kind: AccessKind, req: AuthRequest) {
     where: { organizationId, page: PAGE_OF[kind] },
     select: { userId: true, level: true },
   });
-  // Only plain admins are restricted (finance / super admin already see everything, and regular users
-  // can't open the procurement pages at all), so they are the only people worth listing.
+  // Admins can all view; these are the people a super admin can give edit access to (finance and super admins always can edit).
   const memberships = await prisma.organizationMembership.findMany({
-    where: { organizationId, role: UserRole.ADMIN },
+    where: { organizationId, role: { in: GRANTABLE_ROLES } },
     select: { role: true, user: { select: { id: true, fullName: true, email: true } } },
     orderBy: { user: { fullName: "asc" } },
   });
   return {
     canManage,
     level,
-    grants: grants.map((g) => ({ userId: g.userId, level: g.level === "edit" ? "edit" : "view" })),
+    grants: grants.filter((g) => g.level === "edit").map((g) => ({ userId: g.userId, level: "edit" as const })),
     members: memberships.map((m) => ({ id: m.user.id, fullName: m.user.fullName, email: m.user.email, role: m.role })),
   };
 }
@@ -56,17 +55,18 @@ export class ProcurementAccessController {
         const userId = Number(g?.userId);
         if (!Number.isInteger(userId)) return res.status(400).json({ message: "Every grant needs a userId" });
         if (g.level !== "view" && g.level !== "edit") return res.status(400).json({ message: 'level must be "view" or "edit"' });
-        wanted.set(userId, g.level);
+        // Viewing is the default for everyone, so only "edit" grants are stored.
+        if (g.level === "edit") wanted.set(userId, "edit");
       }
 
       const organizationId = req.organization!.id;
       const members = await prisma.organizationMembership.findMany({
-        where: { organizationId, userId: { in: [...wanted.keys()] }, role: UserRole.ADMIN },
+        where: { organizationId, userId: { in: [...wanted.keys()] }, role: { in: GRANTABLE_ROLES } },
         select: { userId: true },
       });
       const allowed = new Set(members.map((m) => m.userId));
       for (const userId of wanted.keys()) {
-        if (!allowed.has(userId)) return res.status(400).json({ message: "You can only share with admins of this organization." });
+        if (!allowed.has(userId)) return res.status(400).json({ message: "Edit access can only be given to admins of this organization." });
       }
 
       const page = PAGE_OF[kind];

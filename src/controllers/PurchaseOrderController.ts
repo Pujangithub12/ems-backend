@@ -270,7 +270,9 @@ export class PurchaseOrderController {
   /** A plain admin may only see/act on POs they created themselves or that were shared with them
    * (see utils/procurementAccess.ts) — finance/super_admin see everything. Used everywhere loadOwnedPurchaseOrder gates access to a specific PO. */
   private static async isVisibleTo(purchaseOrder: { id: number; createdById: number | null }, req: AuthRequest) {
-    return (await accessLevelFor("purchaseOrder", purchaseOrder, req)) !== null;
+    void purchaseOrder;
+    void req;
+    return true; // every admin / finance member can view every PO — only editing is permission-gated (see canEdit)
   }
 
   /** Writes need "edit" access: the creator, finance/super_admin, or an admin the PO was shared with at the "edit" level. */
@@ -378,7 +380,7 @@ export class PurchaseOrderController {
       if (customerPanVatNumber !== undefined) data.customerPanVatNumber = customerPanVatNumber;
       if (customerEmail !== undefined) data.customerEmail = customerEmail;
       if (customerPhone !== undefined) data.customerPhone = customerPhone;
-      if (currency !== undefined) data.currency = currency;
+      if (currency !== undefined) data.currency = currency.trim().toUpperCase();
       if (purchaseType !== undefined) data.purchaseType = purchaseType;
       if (status !== undefined) data.status = status;
       if (itemColumns !== undefined) {

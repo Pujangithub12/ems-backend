@@ -91,7 +91,9 @@ async function resolveItemInputs(rawItems: ProformaInvoiceItemInput[] | undefine
 export class ProformaInvoiceController {
   /** Plain admins only see PIs they created or that were shared with them (see utils/procurementAccess.ts). */
   private static async canSee(pi: { id: number; createdById: number | null }, req: AuthRequest) {
-    return (await accessLevelFor("proformaInvoice", pi, req)) !== null;
+    void pi;
+    void req;
+    return true; // every admin / finance member can view every PI — only editing is permission-gated (see canEdit)
   }
 
   /** Writes need "edit" access — a view-only share can read but not change a PI. */
