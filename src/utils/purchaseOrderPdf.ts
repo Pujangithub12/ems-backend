@@ -60,7 +60,7 @@ export interface PurchaseOrderPdfData {
   customerEmail?: string | null;
   /** Overrides organizationContact in the CUSTOMER box's "PHONE" field for just this PO — organizationContact itself still also appears in the letterhead line next to the address/email. */
   customerPhone?: string | null;
-  /** Currency label for the "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "Rupees" when unset. */
+  /** Currency label for the "Amount in Words" line (e.g. "Indian Rupees", "US Dollar") — falls back to "NPR" when unset. */
   currency?: string | null;
   /** "local" | "international" — when international, the VENDOR box's PAN/VAT field is labeled "GSTIN NO." instead, matching the Overview tab's field-label toggle. */
   purchaseType?: string | null;
@@ -384,7 +384,7 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   };
   const commonUnit = commonUnitOf(po.items.map((i) => i.unit));
   const commonWeightUnit = commonUnitOf(po.items.map((i) => i.weightUnit));
-  const rateCurrency = po.currency?.trim() || "Rs";
+  const rateCurrency = po.currency?.trim() || "NPR";
   const colLabels: Record<ColKey, string> = {
     sn: "S.N.",
     hsn: "HSN Code",
@@ -610,9 +610,9 @@ export function buildPurchaseOrderPdf(po: PurchaseOrderPdfData): PDFKit.PDFDocum
   // grand total block takes the width its label and a large, one-line figure ("Rupees 9,107,972.00")
   // need: at least the Unit Price + Amount columns, growing leftwards into the words cell (which
   // always keeps at least 40% of its width). The figure only shrinks if it still doesn't fit. ----
-  const amountWordsText = `Amount in Words: ${amountToWords(grandTotal, po.currency?.trim() || "Rupees")}.`;
+  const amountWordsText = `Amount in Words: ${amountToWords(grandTotal, po.currency?.trim() || "NPR")}.`;
   const grandLabelSize = 9.5;
-  const grandTotalText = `${po.currency?.trim() || "Rupees"} ${fmtAmount(grandTotal)}`;
+  const grandTotalText = `${po.currency?.trim() || "NPR"} ${fmtAmount(grandTotal)}`;
   doc.font(FONT_BODY_BOLD).fontSize(grandLabelSize);
   const grandLabelW = doc.widthOfString("GRAND TOTAL") + 22;
   doc.fontSize(grandLabelSize);

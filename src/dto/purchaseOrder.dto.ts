@@ -100,6 +100,8 @@ export interface UpdatePurchaseOrderDto {
   poNumber?: string;
   /** Assigns the PO to a project of the same organization, or null to detach it (a PO can be created without a project and linked later). */
   projectId?: number | null;
+  /** Changes the PO's vendor to another vendor of the same organization, or null to clear it. */
+  vendorId?: number | null;
   /** ISO date string ("YYYY-MM-DD") — pass null to clear back to unset (Overview tab then falls back to displaying today's date). */
   poDate?: string | null;
   paymentTerms?: string | null;

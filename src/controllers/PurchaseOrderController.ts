@@ -310,6 +310,7 @@ export class PurchaseOrderController {
     const {
       poNumber,
       projectId,
+      vendorId,
       poDate,
       paymentTerms,
       incoterms,
@@ -367,6 +368,15 @@ export class PurchaseOrderController {
           const project = await prisma.project.findFirst({ where: { id: Number(projectId), organizationId: req.organization!.id }, select: { id: true } });
           if (!project) return res.status(404).json({ message: "Project not found" });
           data.projectId = project.id;
+        }
+      }
+      if (vendorId !== undefined) {
+        if (vendorId === null) {
+          data.vendorId = null;
+        } else {
+          const vendor = await prisma.vendor.findFirst({ where: { id: Number(vendorId), organizationId: req.organization!.id }, select: { id: true } });
+          if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+          data.vendorId = vendor.id;
         }
       }
       if (poDate !== undefined) data.poDate = poDate ? new Date(poDate) : null;
