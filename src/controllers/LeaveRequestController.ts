@@ -9,6 +9,7 @@ import {
 } from "../dto/leave-request.dto";
 import { canApprove } from "../utils/hierarchyAuthority";
 import { notifyUsers, getUserIdsByRole } from "../services/notificationService";
+import { markApprovedLeaveOnAttendance } from "../utils/attendanceLeaveSync";
 
 // `user` was an eager relation on LeaveRequest under TypeORM, so it was
 // always populated (and included the password hash) regardless of the
@@ -178,6 +179,22 @@ export class LeaveRequestController {
         where: { id: lr.id },
         data: { status: status as "approved" | "rejected", approvedAt: new Date() },
       });
+
+      // Approved leave shows up on the Attendance page as "On Leave" for each day of the leave. A failure here must
+      // never undo the approval itself.
+      if (status === "approved") {
+        try {
+          await markApprovedLeaveOnAttendance({
+            organizationId: organization.id,
+            requesterName: lr.user?.fullName,
+            startDate: lr.startDate,
+            endDate: lr.endDate,
+            markedById: req.user!.id,
+          });
+        } catch (syncError) {
+          console.error("Failed to mark approved leave on attendance:", syncError);
+        }
+      }
 
       const leaveRequest: any = { ...updated, user: lr.user };
       sanitizeUser(leaveRequest);

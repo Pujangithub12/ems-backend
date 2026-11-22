@@ -37,6 +37,7 @@ import { SubTaskController } from "../controllers/SubTaskController";
 import { TaskCommentController } from "../controllers/TaskCommentController";
 import { LeaveRequestController } from "../controllers/LeaveRequestController";
 import { AttendanceController } from "../controllers/AttendanceController";
+import { requireAttendanceEdit, requireAttendanceManage, requireAttendanceView } from "../utils/attendanceAccess";
 import { SiteVisitRequestController } from "../controllers/SiteVisitRequestController";
 import { ExpenseRequestController } from "../controllers/ExpenseRequestController";
 import { CalendarEventController } from "../controllers/CalendarEventController";
@@ -1138,15 +1139,20 @@ router.put(
   TaskCommentController.addSubTaskFeedback,
 );
 
-// Attendance — admins / super admins keep their own employee list (not tied to the users table) and take attendance for it.
-const attendanceAdmin = [authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN])];
-router.get("/attendance", ...attendanceAdmin, AttendanceController.getDay);
-router.put("/attendance", ...attendanceAdmin, AttendanceController.saveDay);
-router.get("/attendance/summary", ...attendanceAdmin, AttendanceController.getSummary);
-router.post("/attendance/share", ...attendanceAdmin, AttendanceController.share);
-router.post("/attendance/employees", ...attendanceAdmin, AttendanceController.createEmployee);
-router.put("/attendance/employees/:id", ...attendanceAdmin, AttendanceController.updateEmployee);
-router.delete("/attendance/employees/:id", ...attendanceAdmin, AttendanceController.deleteEmployee);
+// Attendance — viewing (admins and anyone assigned), editing (super admins and the people they assign), and the access list
+// itself (super admin only). The leave-request routes further down are separate.
+router.get("/attendance/permissions", authMiddleware, AttendanceController.getPermissions);
+router.get("/attendance/access", authMiddleware, requireAttendanceManage, AttendanceController.getAccess);
+router.put("/attendance/access", authMiddleware, requireAttendanceManage, AttendanceController.saveAccess);
+router.get("/attendance", authMiddleware, requireAttendanceView, AttendanceController.getDay);
+router.get("/attendance/summary", authMiddleware, requireAttendanceView, AttendanceController.getSummary);
+router.get("/attendance/sharing", authMiddleware, requireAttendanceView, AttendanceController.getSharing);
+router.put("/attendance", authMiddleware, requireAttendanceEdit, AttendanceController.saveDay);
+router.post("/attendance/sharing", authMiddleware, requireAttendanceEdit, AttendanceController.addSharing);
+router.delete("/attendance/sharing/:organizationId", authMiddleware, requireAttendanceEdit, AttendanceController.removeSharing);
+router.post("/attendance/employees", authMiddleware, requireAttendanceEdit, AttendanceController.createEmployee);
+router.put("/attendance/employees/:id", authMiddleware, requireAttendanceEdit, AttendanceController.updateEmployee);
+router.delete("/attendance/employees/:id", authMiddleware, requireAttendanceEdit, AttendanceController.deleteEmployee);
 
 // Leave request routes
 router.post(
