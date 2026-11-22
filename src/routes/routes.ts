@@ -1138,11 +1138,15 @@ router.put(
   TaskCommentController.addSubTaskFeedback,
 );
 
-// Attendance — admins / super admins take it; every member can read their own record.
-router.get("/attendance", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), AttendanceController.getDay);
-router.put("/attendance", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), AttendanceController.saveDay);
-router.get("/attendance/summary", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), AttendanceController.getSummary);
-router.get("/attendance/me", authMiddleware, AttendanceController.getMine);
+// Attendance — admins / super admins keep their own employee list (not tied to the users table) and take attendance for it.
+const attendanceAdmin = [authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN])];
+router.get("/attendance", ...attendanceAdmin, AttendanceController.getDay);
+router.put("/attendance", ...attendanceAdmin, AttendanceController.saveDay);
+router.get("/attendance/summary", ...attendanceAdmin, AttendanceController.getSummary);
+router.post("/attendance/share", ...attendanceAdmin, AttendanceController.share);
+router.post("/attendance/employees", ...attendanceAdmin, AttendanceController.createEmployee);
+router.put("/attendance/employees/:id", ...attendanceAdmin, AttendanceController.updateEmployee);
+router.delete("/attendance/employees/:id", ...attendanceAdmin, AttendanceController.deleteEmployee);
 
 // Leave request routes
 router.post(
