@@ -55,6 +55,8 @@ model User {
   shipmentTrackingRecordsCreated    ShipmentTrackingRecord[]
   proformaInvoicesCreated           ProformaInvoice[]
   procurementPageAccessGrants       ProcurementPageAccess[]      @relation("ProcurementPageAccessUser")
+  attendanceRecords                 Attendance[]                 @relation("AttendanceUser")
+  attendanceMarked                  Attendance[]                 @relation("AttendanceMarkedBy")
   procurementPageAccessGiven        ProcurementPageAccess[]      @relation("ProcurementPageAccessGrantedBy")
   quotationsCreated                 Quotation[]
   goodsReceiptsReceived             GoodsReceipt[]
@@ -128,6 +130,7 @@ model Organization {
   siteActivityWorkTypes   SiteActivityWorkType[]
   shipmentTrackingRecords ShipmentTrackingRecord[]
   procurementPageAccess   ProcurementPageAccess[]
+  attendance              Attendance[]
 
   @@map("workspace")
 }
@@ -2168,4 +2171,27 @@ model ProcurementPageAccess {
   @@unique([organizationId, page, userId])
   @@index([userId])
   @@map("procurement_page_access")
+}
+
+/// One employee's attendance for one day in one organization (taken by an admin / super admin on the Attendance
+/// page). `date` is the calendar day (no time). `status` is "present" | "absent" | "on_leave".
+/// A day with no row simply means attendance wasn't taken for that person yet.
+model Attendance {
+  id             Int      @id @default(autoincrement())
+  organizationId Int      @map("workspaceId")
+  userId         Int
+  date           DateTime @db.Date
+  status         String   @db.VarChar
+  note           String?
+  markedById     Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user         User         @relation("AttendanceUser", fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  markedBy     User?        @relation("AttendanceMarkedBy", fields: [markedById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@unique([organizationId, userId, date])
+  @@index([organizationId, date])
+  @@map("attendance")
 }

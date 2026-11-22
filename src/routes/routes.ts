@@ -36,6 +36,7 @@ import { DashboardController } from "../controllers/DashboardController";
 import { SubTaskController } from "../controllers/SubTaskController";
 import { TaskCommentController } from "../controllers/TaskCommentController";
 import { LeaveRequestController } from "../controllers/LeaveRequestController";
+import { AttendanceController } from "../controllers/AttendanceController";
 import { SiteVisitRequestController } from "../controllers/SiteVisitRequestController";
 import { ExpenseRequestController } from "../controllers/ExpenseRequestController";
 import { CalendarEventController } from "../controllers/CalendarEventController";
@@ -1136,6 +1137,12 @@ router.put(
   authMiddleware,
   TaskCommentController.addSubTaskFeedback,
 );
+
+// Attendance — admins / super admins take it; every member can read their own record.
+router.get("/attendance", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), AttendanceController.getDay);
+router.put("/attendance", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), AttendanceController.saveDay);
+router.get("/attendance/summary", authMiddleware, roleMiddleware([UserRole.ADMIN, UserRole.SUPER_ADMIN]), AttendanceController.getSummary);
+router.get("/attendance/me", authMiddleware, AttendanceController.getMine);
 
 // Leave request routes
 router.post(
