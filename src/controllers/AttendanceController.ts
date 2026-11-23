@@ -4,7 +4,7 @@ import { AuthRequest } from "../middlewares/auth";
 import { UserRole } from "../types/enums";
 import { attendancePermissions } from "../utils/attendanceAccess";
 
-export const ATTENDANCE_STATUSES = ["present", "absent", "on_leave"] as const;
+export const ATTENDANCE_STATUSES = ["present", "absent", "on_leave", "site_visit"] as const;
 type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 const isStatus = (v: unknown): v is AttendanceStatus => typeof v === "string" && (ATTENDANCE_STATUSES as readonly string[]).includes(v);
 
@@ -29,7 +29,7 @@ function parseMonth(value: unknown): { start: Date; end: Date } | null {
   return { start, end };
 }
 
-const emptyCounts = () => ({ present: 0, absent: 0, on_leave: 0 });
+const emptyCounts = () => ({ present: 0, absent: 0, on_leave: 0, site_visit: 0 });
 
 const cleanText = (v: unknown, max: number): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 
@@ -43,13 +43,14 @@ async function dataOrganizationId(organizationId: number): Promise<number> {
   return link?.ownerOrganizationId ?? organizationId;
 }
 
-/** The people attendance is taken for, in the order they were added. */
+/** The people attendance is taken for, in alphabetical order by name (case-insensitive). */
 async function organizationEmployees(organizationId: number) {
   const employees = await prisma.attendanceEmployee.findMany({
     where: { organizationId },
     select: { id: true, name: true, position: true, company: true },
     orderBy: { id: "asc" },
   });
+  employees.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }) || a.id - b.id);
   return employees.map((e) => ({ id: e.id, name: e.name, position: e.position ?? null, company: e.company ?? null }));
 }
 
@@ -391,7 +392,7 @@ export class AttendanceController {
         month: String(req.query.month),
         employees: employees.map((e) => {
           const c = counts.get(e.id) ?? emptyCounts();
-          return { ...e, ...c, marked: c.present + c.absent + c.on_leave, days: days.get(e.id) ?? [] };
+          return { ...e, ...c, marked: c.present + c.absent + c.on_leave + c.site_visit, days: days.get(e.id) ?? [] };
         }),
       });
     } catch (error) {
