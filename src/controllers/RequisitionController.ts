@@ -7,6 +7,8 @@ import { UserRole } from "../types/enums";
 const canAccessRequisitions = (role: string) =>
   role === UserRole.ADMIN || role === UserRole.SUPER_ADMIN || role === UserRole.FINANCE;
 
+export const REQUISITION_STATUSES = ["in_process", "approved", "declined"] as const;
+
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
 /** Pulls the columns the History list shows out of the submitted form (`data` itself is stored untouched). */
@@ -31,6 +33,7 @@ const toRow = (r: {
   requestedBy: string | null;
   priority: string | null;
   itemCount: number;
+  status: string;
   data: unknown;
   createdAt: Date;
   updatedAt: Date;
@@ -42,6 +45,7 @@ const toRow = (r: {
   requestedBy: r.requestedBy,
   priority: r.priority,
   itemCount: r.itemCount,
+  status: r.status,
   createdByName: r.createdBy?.fullName ?? null,
   createdAt: r.createdAt,
   updatedAt: r.updatedAt,
@@ -98,6 +102,24 @@ export class RequisitionController {
         include: INCLUDE,
       });
       return res.status(200).json({ message: "Requisition updated", row: toRow(row) });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
+  /** PATCH /workspace/requisitions/:id/status - set In Process / Approved / Declined. Body: { status }. */
+  static setStatus = async (req: AuthRequest, res: Response) => {
+    if (!canAccessRequisitions(req.user!.role)) return res.status(403).json({ message: "Forbidden" });
+    const { status } = req.body as { status?: unknown };
+    if (typeof status !== "string" || !(REQUISITION_STATUSES as readonly string[]).includes(status)) {
+      return res.status(400).json({ message: `status must be one of: ${REQUISITION_STATUSES.join(", ")}` });
+    }
+    try {
+      const existing = await prisma.requisition.findFirst({ where: { id: parseInt(req.params.id as string), organizationId: req.organization!.id } });
+      if (!existing) return res.status(404).json({ message: "Requisition not found" });
+      const row = await prisma.requisition.update({ where: { id: existing.id }, data: { status }, include: INCLUDE });
+      return res.status(200).json({ message: "Status updated", row: toRow(row) });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ message: "Internal server error" });
