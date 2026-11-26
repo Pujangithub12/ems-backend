@@ -605,6 +605,7 @@ router.get("/purchase-orders/:id/pdf-data", authMiddleware, PurchaseOrderControl
 router.get("/workspace/requisitions", authMiddleware, RequisitionController.list);
 router.post("/workspace/requisitions", authMiddleware, RequisitionController.create);
 router.put("/workspace/requisitions/:id", authMiddleware, RequisitionController.update);
+router.patch("/workspace/requisitions/:id/status", authMiddleware, RequisitionController.setStatus);
 router.delete("/workspace/requisitions/:id", authMiddleware, RequisitionController.remove);
 
 // Debtors — receivables (money customers owe us); role-gated inline in DebtorController.

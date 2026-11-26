@@ -1253,6 +1253,8 @@ model Requisition {
   priority        String?   @db.VarChar
   itemCount       Int       @default(0)
   data            Json
+  /// in_process | approved | declined
+  status          String    @default("in_process") @db.VarChar
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   organizationId  Int?
